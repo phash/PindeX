@@ -187,6 +187,8 @@ export interface GetProjectOverviewOutput {
   entryPoints: string[];
   modules: Array<{ path: string; summary: string | null; symbolCount: number }>;
   stats: { totalFiles: number; totalSymbols: number };
+  /** Present when the server is configured with FEDERATION_REPOS */
+  federatedProjects?: Array<{ rootPath: string; stats: { totalFiles: number; totalSymbols: number } }>;
 }
 
 export interface ReindexInput {

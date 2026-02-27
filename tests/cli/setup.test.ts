@@ -36,7 +36,7 @@ describe('registerMcpServer', () => {
     const configPath = join(tempHome, '.claude', 'claude_code_config.json');
     expect(existsSync(configPath)).toBe(true);
     const config = JSON.parse(readFileSync(configPath, 'utf-8'));
-    expect(config.mcpServers).toHaveProperty('codebase-indexer');
+    expect(config.mcpServers).toHaveProperty('pindex');
   });
 
   it('merges into existing claude_code_config.json without losing other settings', async () => {
@@ -51,7 +51,7 @@ describe('registerMcpServer', () => {
     const config = JSON.parse(readFileSync(configPath, 'utf-8'));
     expect(config.theme).toBe('dark');
     expect(config.mcpServers).toHaveProperty('other-server');
-    expect(config.mcpServers).toHaveProperty('codebase-indexer');
+    expect(config.mcpServers).toHaveProperty('pindex');
   });
 });
 
@@ -70,20 +70,20 @@ describe('writeGlobalConfig', () => {
     vi.restoreAllMocks();
   });
 
-  it('creates config.json in ~/.mcp-indexer', async () => {
+  it('creates config.json in ~/.pindex', async () => {
     const { writeGlobalConfig } = await import('../../src/cli/setup.js');
     writeGlobalConfig();
 
-    const configPath = join(tempHome, '.mcp-indexer', 'config.json');
+    const configPath = join(tempHome, '.pindex', 'config.json');
     expect(existsSync(configPath)).toBe(true);
 
     const config = JSON.parse(readFileSync(configPath, 'utf-8'));
     expect(config.version).toBe('1.0.0');
-    expect(config.daemon).toHaveProperty('mcpPort');
+    expect(config.daemon).toHaveProperty('monitoringPort');
   });
 
   it('does not overwrite existing config', async () => {
-    const home = join(tempHome, '.mcp-indexer');
+    const home = join(tempHome, '.pindex');
     mkdirSync(home, { recursive: true });
     writeFileSync(join(home, 'config.json'), JSON.stringify({ version: 'custom' }));
 

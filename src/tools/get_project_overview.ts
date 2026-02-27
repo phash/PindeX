@@ -1,10 +1,12 @@
 import type Database from 'better-sqlite3';
 import type { GetProjectOverviewOutput } from '../types.js';
 import { getAllFiles, getSymbolsByFileId } from '../db/queries.js';
+import type { FederatedDb } from '../server.js';
 
 export function getProjectOverview(
   db: Database.Database,
   projectRoot: string,
+  federatedDbs: FederatedDb[] = [],
 ): GetProjectOverviewOutput {
   const files = getAllFiles(db);
 
@@ -42,11 +44,31 @@ export function getProjectOverview(
     };
   });
 
-  return {
+  const primaryResult: GetProjectOverviewOutput = {
     rootPath: projectRoot,
     language,
     entryPoints,
     modules,
     stats: { totalFiles: files.length, totalSymbols },
   };
+
+  if (federatedDbs.length === 0) return primaryResult;
+
+  // Append per-federated-repo stats
+  const federatedProjects = federatedDbs.map(({ path, db: fedDb }) => {
+    const fedFiles = getAllFiles(fedDb);
+    let fedSymbols = 0;
+    for (const f of fedFiles) {
+      fedSymbols += getSymbolsByFileId(fedDb, f.id).length;
+    }
+    return {
+      rootPath: path,
+      stats: { totalFiles: fedFiles.length, totalSymbols: fedSymbols },
+    };
+  });
+
+  return {
+    ...primaryResult,
+    federatedProjects,
+  } as GetProjectOverviewOutput;
 }

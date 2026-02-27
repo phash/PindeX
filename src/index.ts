@@ -7,6 +7,7 @@ import { FileWatcher } from './indexer/watcher.js';
 import { startMonitoringServer } from './monitoring/server.js';
 import { TokenLogger } from './monitoring/token-logger.js';
 import { createMcpServer } from './server.js';
+import { getProjectIndexPath } from './cli/project-detector.js';
 import { EventEmitter } from 'node:events';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -21,10 +22,28 @@ const MONITORING_AUTO_OPEN = process.env.MONITORING_AUTO_OPEN === 'true';
 const BASELINE_MODE = process.env.BASELINE_MODE === 'true';
 const GENERATE_SUMMARIES = process.env.GENERATE_SUMMARIES === 'true';
 
+// Federated repos: colon- or comma-separated absolute paths
+const FEDERATION_REPOS: string[] = (process.env.FEDERATION_REPOS ?? '')
+  .split(/[:，,]/)
+  .map((p) => p.trim())
+  .filter(Boolean);
+
 async function main(): Promise<void> {
   // 1. Open / create the SQLite database
   const db = openDatabase(INDEX_PATH);
   runMigrations(db);
+
+  // 1b. Open federated repo databases (read-only)
+  const federatedDbs = FEDERATION_REPOS.map((repoPath) => {
+    const dbPath = getProjectIndexPath(repoPath);
+    try {
+      const fedDb = openDatabase(dbPath);
+      return { path: repoPath, db: fedDb };
+    } catch {
+      process.stderr.write(`[pindex] Warning: could not open federated DB for ${repoPath}\n`);
+      return null;
+    }
+  }).filter((x): x is { path: string; db: ReturnType<typeof openDatabase> } => x !== null);
 
   // 2. Set up the indexer
   const indexer = new Indexer({
@@ -61,6 +80,7 @@ async function main(): Promise<void> {
     projectRoot: PROJECT_ROOT,
     monitoringPort: MONITORING_PORT,
     baselineMode: BASELINE_MODE,
+    federatedDbs,
   });
 
   const transport = new StdioServerTransport();
@@ -68,6 +88,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((err) => {
-  console.error('[mcp-codebase-indexer] Fatal error:', err);
+  process.stderr.write(`[pindex] Fatal error: ${String(err)}\n`);
   process.exit(1);
 });

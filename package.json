@@ -5,7 +5,8 @@
   "type": "module",
   "bin": {
     "pindex": "./dist/cli/index.js",
-    "pindex-server": "./dist/index.js"
+    "pindex-server": "./dist/index.js",
+    "pindex-gui": "./dist/gui/index.js"
   },
   "main": "./dist/index.js",
   "scripts": {
