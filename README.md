@@ -12,6 +12,7 @@ PindeX is an [MCP (Model Context Protocol)](https://modelcontextprotocol.io) ser
 - [Requirements](#requirements)
 - [Installation](#installation)
 - [Quick Start](#quick-start)
+- [Multi-Project & Federation](#multi-project--federation)
 - [MCP Tools](#mcp-tools)
 - [Environment Variables](#environment-variables)
 - [Integrations](#integrations)
@@ -33,7 +34,7 @@ Your project files
   tree-sitter AST          MD5 hash → skip unchanged files
        │
        ▼
-  SQLite (FTS5)
+  SQLite (FTS5)  ← stored in ~/.pindex/projects/{hash}/index.db
   ├── files          (path, hash, token estimate)
   ├── symbols        (name, kind, signature, lines)
   ├── dependencies   (import graph)
@@ -63,7 +64,21 @@ Token savings are tracked per session and visible in a live web dashboard.
 
 ## Installation
 
-### Option A — Clone and build (recommended for development / local use)
+### Option A — Install globally from npm
+
+```bash
+npm install -g pindex
+```
+
+This makes three commands available globally:
+
+| Command | Purpose |
+|---|---|
+| `pindex` | CLI — init, federation, status |
+| `pindex-server` | MCP stdio server (Claude Code spawns this automatically) |
+| `pindex-gui` | Aggregated dashboard for all projects |
+
+### Option B — Clone and build (development / local use)
 
 ```bash
 git clone https://github.com/phash/PindeX.git
@@ -72,51 +87,46 @@ npm install
 npm run build
 ```
 
-The compiled server is now at `dist/index.js` and the CLI at `dist/cli/index.js`.
-
-### Option B — Install globally from npm
-
-```bash
-npm install -g pindex
-```
-
-This makes two commands available globally:
-
-| Command | Purpose |
-|---|---|
-| `pindex` | CLI for setup, daemon management, indexing |
-| `pindex-server` | Start the MCP server directly (stdio) |
-
-### Verify the installation
-
-```bash
-node dist/index.js --help   # if cloned
-pindex --help               # if installed globally
-```
+The compiled server is at `dist/index.js`, the CLI at `dist/cli/index.js`, and the GUI at `dist/gui/index.js`.
 
 ---
 
 ## Quick Start
 
-### 1. Index your project
+### 1. Set up a project
+
+Run `pindex` (with no arguments) in any project directory:
 
 ```bash
-# From the PindeX repo (cloned install)
-PROJECT_ROOT=/path/to/your/project \
-INDEX_PATH=/path/to/your/project/.codebase-index/index.db \
-node dist/index.js
+cd /my/project
+pindex
 ```
 
-On first launch PindeX will:
-1. Create the SQLite database and run schema migrations
-2. Discover all `.ts`, `.tsx`, `.js`, `.mjs` files under `PROJECT_ROOT`
-3. Parse each file with tree-sitter and store symbols/imports
-4. Start watching for file changes (`AUTO_REINDEX=true`)
-5. Open the monitoring server on port 7842
+PindeX will:
+1. Walk upward from your current directory to find the project root (`package.json`, `.git`, etc.)
+2. Assign a dedicated monitoring port for this project
+3. Write `.mcp.json` into the project root with absolute paths
+4. Register the project in `~/.pindex/registry.json`
 
-### 2. Connect your AI assistant
+Output:
+```
+  ╔══════════════════════════════════════════╗
+  ║           PindeX – Ready                 ║
+  ╚══════════════════════════════════════════╝
 
-See the [Integrations](#integrations) section below for Claude Code and Goose setup.
+  Project : /my/project
+  Index   : ~/.pindex/projects/a3f8b2c1/index.db
+  Port    : 7856
+  Config  : .mcp.json (written)
+
+  ── Next steps ─────────────────────────────
+  1. Restart Claude Code in this directory
+  2. Open the dashboard:  pindex-gui
+```
+
+### 2. Restart Claude Code
+
+Claude Code auto-discovers `.mcp.json`. On the next startup it will spawn `pindex-server` with the correct `PROJECT_ROOT` — the index is built automatically in the background.
 
 ### 3. Use the tools
 
@@ -130,6 +140,72 @@ find_usages("validateToken")
 get_dependencies("src/api/routes.ts", "both")
 ```
 
+### 4. Open the dashboard
+
+```bash
+pindex-gui
+```
+
+Opens `http://localhost:7842` — an aggregated dashboard showing token savings, symbol counts, and session stats for **all** registered projects.
+
+---
+
+## Multi-Project & Federation
+
+### Multiple independent projects
+
+Each project gets its own `.mcp.json` (pointing to its own `PROJECT_ROOT`) and its own SQLite database at `~/.pindex/projects/{hash}/index.db`. When Claude Code opens Project A, it spawns `pindex-server` with `PROJECT_ROOT=/path/to/project-a` — it never touches Project B's index.
+
+```bash
+cd /project-a && pindex   # registers project-a
+cd /project-b && pindex   # registers project-b, different port + different DB
+```
+
+### Linking repos (federation)
+
+If you work on a monorepo split into separate repositories, or if one project imports types from another, you can link them:
+
+```bash
+cd /project-a
+pindex add /project-b
+```
+
+This updates `/project-a/.mcp.json` with `FEDERATION_REPOS=/project-b`. After restarting Claude Code in Project A, the MCP tools search **both** codebases:
+
+- `search_symbols` returns results from both projects (federated results include a `project` field)
+- `get_project_overview` shows stats for all linked projects
+
+Add more repos at any time:
+
+```bash
+pindex add /project-c   # links a third repo
+```
+
+Remove a link:
+
+```bash
+pindex remove /project-b
+```
+
+### View all projects
+
+```bash
+pindex status
+```
+
+```
+  3 registered project(s):
+
+  [idle]  project-a  + 1 federated repo
+           /home/user/project-a
+           port: 7856  index: ~/.pindex/projects/a3f8b2c1/
+
+  [idle]  project-b
+           /home/user/project-b
+           port: 7901  index: ~/.pindex/projects/f1e2d3c4/
+  ...
+```
+
 ---
 
 ## MCP Tools
@@ -139,11 +215,12 @@ All 10 tools are available over stdio transport.
 ### `search_symbols`
 
 Full-text search across all indexed symbols (names, signatures, summaries) using SQLite FTS5.
+When federation is active, results from linked repos include a `project` field.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
 | `query` | string | ✓ | Search term (supports FTS5 syntax) |
-| `limit` | number | | Max results (default: 20) |
+| `limit` | number | | Max results per project (default: 20) |
 
 **Returns:** List of matching symbols with name, kind, signature, file path, and line number.
 
@@ -216,8 +293,9 @@ Import graph for a file — what it imports, what imports it, or both.
 ### `get_project_overview`
 
 Project-wide statistics — no parameters required.
+When federation is active, also includes stats for each linked repository.
 
-**Returns:** Total file count, dominant language, entry points (`index`, `main`, `app` files), module list with symbol counts, and cumulative token estimates.
+**Returns:** Total file count, dominant language, entry points (`index`, `main`, `app` files), module list with symbol counts, and (if federated) per-repo breakdowns.
 
 ---
 
@@ -260,17 +338,20 @@ Create a labelled A/B testing session to compare indexed vs. baseline token usag
 
 ## Environment Variables
 
+These are set automatically in the generated `.mcp.json` — you rarely need to change them by hand.
+
 | Variable | Default | Description |
 |---|---|---|
-| `INDEX_PATH` | `./.codebase-index/index.db` | Path to the SQLite database |
 | `PROJECT_ROOT` | `.` | Root directory of the project to index |
+| `INDEX_PATH` | `~/.pindex/projects/{hash}/index.db` | Path to the SQLite database |
 | `LANGUAGES` | `typescript,javascript` | Comma-separated list of languages to index |
 | `AUTO_REINDEX` | `true` | Watch for file changes and reindex automatically |
-| `GENERATE_SUMMARIES` | `false` | Generate LLM summaries per symbol (stub — not yet wired to a model) |
-| `MONITORING_PORT` | `7842` | Port for the live dashboard + WebSocket |
+| `MONITORING_PORT` | assigned per-project | Port for the live dashboard + WebSocket |
 | `MONITORING_AUTO_OPEN` | `false` | Open the dashboard in the browser on startup |
 | `BASELINE_MODE` | `false` | Disable the index entirely (for A/B baseline sessions) |
-| `TOKEN_PRICE_PER_MILLION` | `3.00` | USD price per million tokens — used for cost estimates in the dashboard |
+| `GENERATE_SUMMARIES` | `false` | Generate LLM summaries per symbol (stub — not yet wired) |
+| `TOKEN_PRICE_PER_MILLION` | `3.00` | USD price per million tokens — used for cost estimates |
+| `FEDERATION_REPOS` | _(empty)_ | Colon-separated absolute paths to linked repositories |
 
 ---
 
@@ -278,23 +359,29 @@ Create a labelled A/B testing session to compare indexed vs. baseline token usag
 
 ### Claude Code
 
-The project ships with a `.mcp.json` at the repository root. Claude Code auto-discovers it when you open the folder — no manual configuration needed.
+Run `pindex` in each project you want to index. The command writes `.mcp.json` automatically:
 
-If you want to use PindeX with a *different* project (not this repo), add or edit `.mcp.json` in that project's root:
+```bash
+cd /my/project
+pindex
+# → .mcp.json written
+# restart Claude Code → pindex-server starts automatically
+```
+
+The `.mcp.json` format (auto-generated, do not edit by hand):
 
 ```json
 {
   "mcpServers": {
-    "codebase-indexer": {
-      "command": "node",
-      "args": ["/absolute/path/to/PindeX/dist/index.js"],
+    "pindex": {
+      "command": "pindex-server",
+      "args": [],
       "env": {
-        "INDEX_PATH": "./.codebase-index/index.db",
-        "PROJECT_ROOT": ".",
-        "LANGUAGES": "typescript,javascript",
+        "PROJECT_ROOT": "/absolute/path/to/project",
+        "INDEX_PATH": "/home/user/.pindex/projects/a3f8b2c1/index.db",
+        "MONITORING_PORT": "7856",
         "AUTO_REINDEX": "true",
         "GENERATE_SUMMARIES": "false",
-        "MONITORING_PORT": "7842",
         "MONITORING_AUTO_OPEN": "false",
         "BASELINE_MODE": "false",
         "TOKEN_PRICE_PER_MILLION": "3.00"
@@ -304,7 +391,23 @@ If you want to use PindeX with a *different* project (not this repo), add or edi
 }
 ```
 
-Replace `/absolute/path/to/PindeX` with the actual path where you cloned this repo.
+With federation (`pindex add /other/project`):
+
+```json
+{
+  "mcpServers": {
+    "pindex": {
+      "command": "pindex-server",
+      "args": [],
+      "env": {
+        "PROJECT_ROOT": "/absolute/path/to/project",
+        "FEDERATION_REPOS": "/absolute/path/to/other/project",
+        "..."
+      }
+    }
+  }
+}
+```
 
 ---
 
@@ -312,30 +415,34 @@ Replace `/absolute/path/to/PindeX` with the actual path where you cloned this re
 
 [Goose](https://block.github.io/goose/) reads extensions from `~/.config/goose/config.yaml`.
 
-**Step 1 — Build PindeX** (if you haven't already):
+**Step 1 — Install PindeX:**
 
 ```bash
-cd /path/to/PindeX && npm install && npm run build
+npm install -g pindex
 ```
 
-**Step 2 — Edit `~/.config/goose/config.yaml`** and add the block below.
-A ready-to-copy template is also available in [`goose-extension.yaml`](./goose-extension.yaml) in this repo.
+**Step 2 — Run `pindex` in your project** to get the assigned hash and port:
+
+```bash
+cd /my/project && pindex
+```
+
+**Step 3 — Edit `~/.config/goose/config.yaml`:**
 
 ```yaml
 extensions:
-  codebase-indexer:
-    name: Codebase Indexer
+  pindex:
+    name: PindeX
     type: stdio
-    cmd: node
-    args:
-      - /absolute/path/to/PindeX/dist/index.js
+    cmd: pindex-server
+    args: []
     envs:
-      INDEX_PATH: /absolute/path/to/your-project/.codebase-index/index.db
-      PROJECT_ROOT: /absolute/path/to/your-project
+      PROJECT_ROOT: /absolute/path/to/project
+      INDEX_PATH: /home/user/.pindex/projects/{hash}/index.db
       LANGUAGES: typescript,javascript
       AUTO_REINDEX: "true"
       GENERATE_SUMMARIES: "false"
-      MONITORING_PORT: "7842"
+      MONITORING_PORT: "{port}"
       MONITORING_AUTO_OPEN: "false"
       BASELINE_MODE: "false"
       TOKEN_PRICE_PER_MILLION: "3.00"
@@ -343,9 +450,9 @@ extensions:
     timeout: 300
 ```
 
-Replace both occurrences of `/absolute/path/to/...` with your actual paths.
+Replace `{hash}` and `{port}` with the values shown by `pindex`. A ready-to-copy template is available in [`goose-extension.yaml`](./goose-extension.yaml).
 
-**Step 3 — Restart Goose:**
+**Step 4 — Restart Goose:**
 
 ```bash
 goose session start
@@ -355,51 +462,54 @@ goose session start
 
 ## CLI Reference
 
-The `pindex` CLI (or `node dist/cli/index.js` when cloned) provides daemon and project management commands.
-
 ```
-pindex <command> [options]
+pindex [command] [options]
 ```
 
 | Command | Description |
 |---|---|
-| `setup` | One-time setup: register the MCP server and configure autostart |
-| `start` | Start the background daemon |
-| `stop` | Stop the background daemon |
-| `restart` | Restart the daemon |
-| `status` | Show daemon status and list of indexed projects |
-| `index [path]` | Index a directory (defaults to the current directory) |
+| _(no args)_ / `init` | Set up this project: write `.mcp.json`, register globally |
+| `add <path>` | Link another repo for cross-repo search (federation) |
+| `remove [path]` | Remove a federated repo link, or deregister the current project |
+| `setup` | One-time global setup (autostart config) |
+| `status` | Show all registered projects and their status |
+| `list` | List all registered projects (compact) |
+| `index [path]` | Manually index a directory (default: current directory) |
 | `index --force` | Force full reindex, bypassing MD5 hash checks |
-| `monitor` | Open the monitoring dashboard in the default browser |
-| `stats` | Show token statistics for the current session |
-| `uninstall` | Remove all PindeX configuration and stop the daemon |
+| `gui` | Open the aggregated monitoring dashboard in the browser |
+| `stats` | Print a short stats summary |
+| `uninstall` | Stop all daemons (data stays in `~/.pindex`) |
 
 **Examples:**
 
 ```bash
-# First-time setup
-pindex setup
+# Set up a new project
+cd /my/project && pindex
 
-# Index the current project
-pindex index
+# Link project-b for cross-repo search
+pindex add /my/project-b
 
-# Force reindex after a large refactor
-pindex index --force
-
-# Check what's running
+# Check all registered projects
 pindex status
 
-# Open the live dashboard
-pindex monitor
+# Manually force a full reindex
+pindex index --force
+
+# Open the dashboard
+pindex-gui
 ```
 
 ---
 
 ## Monitoring Dashboard
 
-PindeX starts an Express + WebSocket server (default port **7842**) that shows live token savings.
+### Per-project dashboard
 
-Open it manually: [http://localhost:7842](http://localhost:7842)
+Each `pindex-server` instance starts a monitoring server on its assigned port. Open it at:
+
+```
+http://localhost:{MONITORING_PORT}
+```
 
 Or let it open automatically on startup:
 
@@ -407,7 +517,22 @@ Or let it open automatically on startup:
 MONITORING_AUTO_OPEN=true node dist/index.js
 ```
 
-**Dashboard features:**
+### Aggregated dashboard (all projects)
+
+```bash
+pindex-gui
+```
+
+Opens `http://localhost:7842` — reads **all** registered project databases directly and shows:
+
+- Token savings per project (bar chart)
+- Indexed file and symbol counts
+- Session history
+- Average savings % across all projects
+
+The GUI refreshes automatically every 15 seconds and works even when no `pindex-server` is running.
+
+**Dashboard features (both dashboards):**
 - Real-time chart (Chart.js) of tokens used vs. estimated cost without index
 - Per-tool breakdown: which tools are used most and how much they save
 - Session comparison: side-by-side indexed vs. baseline A/B data
@@ -468,8 +593,8 @@ tests/
 
 ```
 src/
-├── index.ts                  # Entry point — MCP stdio server
-├── server.ts                 # Tool registration (10 tools)
+├── index.ts                  # Entry point — MCP stdio server + FEDERATION_REPOS
+├── server.ts                 # Tool registration (10 tools, FederatedDb interface)
 ├── types.ts                  # Shared TypeScript interfaces
 │
 ├── db/
@@ -485,28 +610,33 @@ src/
 │   └── watcher.ts            # chokidar file watcher → auto-reindex
 │
 ├── tools/                    # One file per MCP tool
-│   ├── search_symbols.ts
+│   ├── search_symbols.ts     # FTS5 search — supports federated DBs
 │   ├── get_symbol.ts
 │   ├── get_context.ts
 │   ├── get_file_summary.ts
 │   ├── find_usages.ts
 │   ├── get_dependencies.ts
-│   ├── get_project_overview.ts
+│   ├── get_project_overview.ts  # federation-aware stats
 │   ├── reindex.ts
 │   ├── get_token_stats.ts
 │   └── start_comparison.ts
 │
 ├── monitoring/
-│   ├── server.ts             # Express + WebSocket
+│   ├── server.ts             # Express + WebSocket (per-project instance)
 │   ├── token-logger.ts       # Per-call token logging
 │   ├── estimator.ts          # "without index" heuristic
 │   └── ui/                   # Dashboard HTML / CSS / Chart.js
 │
+├── gui/
+│   ├── index.ts              # pindex-gui entry point
+│   └── server.ts             # Aggregated Express app (reads all project DBs)
+│
 └── cli/
     ├── index.ts              # CLI router
-    ├── setup.ts              # One-time setup
-    ├── daemon.ts             # PID-file daemon management
-    └── project-detector.ts   # Auto-detect project type
+    ├── init.ts               # initProject(), writeMcpJson(), addFederatedRepo()
+    ├── setup.ts              # One-time setup (pindex setup)
+    ├── daemon.ts             # Per-project PID-file daemon management
+    └── project-detector.ts   # getPindexHome(), findProjectRoot(), GlobalRegistry
 ```
 
 ### Key implementation notes
@@ -516,6 +646,9 @@ src/
 - **Incremental reindexing** — MD5 hash per file; unchanged files are skipped on every startup and watch event.
 - **Live context** — `get_context` reads from disk at call time so it always returns the current file state, not a stale cache.
 - **Testability** — `createMonitoringApp()` (returns the Express `app`) and `startMonitoringServer()` (binds the HTTP/WebSocket server) are separate functions so tests can mount the app without binding a port.
+- **Per-project ports** — assigned deterministically as `7842 + (parseInt(hash.slice(0,4), 16) % 2000)` and stored in `registry.json` so they never change.
+- **`pindex-gui` reads DBs directly** — no running server required; works as a standalone dashboard even when Claude Code is not open.
+- **Migration** — `getPindexHome()` automatically renames `~/.mcp-indexer` → `~/.pindex` on first call if the old directory exists.
 
 ---
 

@@ -146,10 +146,16 @@ const TOOL_DEFINITIONS = [
   },
 ];
 
+export interface FederatedDb {
+  path: string;
+  db: Database.Database;
+}
+
 export interface ServerOptions {
   projectRoot: string;
   monitoringPort?: number;
   baselineMode?: boolean;
+  federatedDbs?: FederatedDb[];
 }
 
 export function createMcpServer(
@@ -164,7 +170,7 @@ export function createMcpServer(
     { capabilities: { tools: {} } },
   );
 
-  const { projectRoot, monitoringPort = 7842, baselineMode = false } = options;
+  const { projectRoot, monitoringPort = 7842, baselineMode = false, federatedDbs = [] } = options;
 
   // ─── List Tools ────────────────────────────────────────────────────────────
 
@@ -191,7 +197,7 @@ export function createMcpServer(
       const a = args as Record<string, unknown>;
       switch (name) {
         case 'search_symbols': {
-          const r = searchSymbols(db, a as unknown as Parameters<typeof searchSymbols>[1]);
+          const r = searchSymbols(db, a as unknown as Parameters<typeof searchSymbols>[1], federatedDbs);
           tokensWithoutIndex = estimateResponseTokens(r) * 10;
           result = r;
           break;
@@ -225,7 +231,7 @@ export function createMcpServer(
           break;
         }
         case 'get_project_overview': {
-          result = getProjectOverview(db, projectRoot);
+          result = getProjectOverview(db, projectRoot, federatedDbs);
           tokensWithoutIndex = estimateResponseTokens(result) * 5;
           break;
         }

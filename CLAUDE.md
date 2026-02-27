@@ -25,23 +25,33 @@ npm run build         # compile src/ → dist/
 - **Parser**: `tree-sitter` + `tree-sitter-typescript` — AST-based symbol/import extraction
 - **Indexer**: MD5-hash-based incremental reindexing, glob file discovery
 - **MCP Tools**: 10 tools registered via `@modelcontextprotocol/sdk`
-- **Monitoring**: Express + WebSocket server on port 7842 with live dashboard
-- **CLI**: setup, daemon management, project indexing commands
+- **Monitoring**: per-project Express + WebSocket server, per-project deterministic port
+- **GUI**: `pindex-gui` binary — aggregated Express dashboard reading all project DBs directly
+- **CLI**: `pindex` (init/add/remove/status), per-project daemon management
+- **Global state**: `~/.pindex/registry.json` + `~/.pindex/projects/{hash}/index.db`
 
 ## MCP Tools
 
 | Tool | Purpose |
 |---|---|
-| `search_symbols` | FTS5 full-text search across all indexed symbols |
+| `search_symbols` | FTS5 full-text search across all indexed symbols (+ federated repos) |
 | `get_symbol` | Symbol details: signature, location, file dependencies |
 | `get_context` | Line-range snippet from a file (token-efficient) |
 | `get_file_summary` | File overview: symbols, imports, exports |
 | `find_usages` | All locations where a symbol is used |
 | `get_dependencies` | Import graph for a file (imports / imported_by / both) |
-| `get_project_overview` | Project-level stats, entry points, module list |
+| `get_project_overview` | Project-level stats, entry points, module list (+ federated repos) |
 | `reindex` | Rebuild index for one file or the entire project |
 | `get_token_stats` | Token usage statistics for a session |
 | `start_comparison` | Start A/B session (indexed vs baseline) |
+
+## Binaries
+
+| Binary | Entry point | Purpose |
+|---|---|---|
+| `pindex` | `dist/cli/index.js` | User-facing CLI |
+| `pindex-server` | `dist/index.js` | MCP stdio server (spawned by Claude Code) |
+| `pindex-gui` | `dist/gui/index.js` | Aggregated dashboard (all projects) |
 
 ## Running the MCP Server
 
@@ -50,20 +60,31 @@ npm run build         # compile src/ → dist/
 node dist/index.js
 
 # Environment variables
-INDEX_PATH=./.codebase-index/index.db   # SQLite DB path
-PROJECT_ROOT=.                           # project to index
-LANGUAGES=typescript,javascript          # comma-separated
-AUTO_REINDEX=true                        # watch for file changes
-GENERATE_SUMMARIES=false                 # LLM summaries (stub)
-MONITORING_PORT=7842                     # dashboard port
-MONITORING_AUTO_OPEN=false               # open browser on start
-BASELINE_MODE=false                      # disable index (A/B testing)
-TOKEN_PRICE_PER_MILLION=3.00             # for cost estimates
+INDEX_PATH=~/.pindex/projects/{hash}/index.db  # SQLite DB path (set by pindex init)
+PROJECT_ROOT=.                                  # project to index
+LANGUAGES=typescript,javascript                 # comma-separated
+AUTO_REINDEX=true                               # watch for file changes
+GENERATE_SUMMARIES=false                        # LLM summaries (stub)
+MONITORING_PORT=7843                            # per-project port (assigned by pindex init)
+MONITORING_AUTO_OPEN=false                      # open browser on start
+BASELINE_MODE=false                             # disable index (A/B testing)
+TOKEN_PRICE_PER_MILLION=3.00                    # for cost estimates
+FEDERATION_REPOS=/path/a:/path/b               # colon-separated extra repos (optional)
 ```
 
 ## Claude Code Setup
 
-The `.mcp.json` in the project root is pre-configured. Claude Code picks it up automatically when you open the project.
+Run `pindex` in the project directory — it auto-generates `.mcp.json` with the correct
+absolute paths and registers the project globally:
+
+```bash
+cd /my/project
+pindex
+# → writes .mcp.json, registers in ~/.pindex/registry.json
+# → restart Claude Code to activate
+```
+
+The `.mcp.json` in the PindeX repo itself is pre-configured for working on PindeX.
 
 ## Goose Setup
 
@@ -73,19 +94,18 @@ Add the following block (replace paths):
 
 ```yaml
 extensions:
-  codebase-indexer:
-    name: Codebase Indexer
+  pindex:
+    name: PindeX
     type: stdio
-    cmd: node
-    args:
-      - /absolute/path/to/PindeX/dist/index.js
+    cmd: pindex-server
+    args: []
     envs:
-      INDEX_PATH: /absolute/path/to/project/.codebase-index/index.db
+      INDEX_PATH: /home/user/.pindex/projects/{hash}/index.db
       PROJECT_ROOT: /absolute/path/to/project
       LANGUAGES: typescript,javascript
       AUTO_REINDEX: "true"
       GENERATE_SUMMARIES: "false"
-      MONITORING_PORT: "7842"
+      MONITORING_PORT: "7843"
       MONITORING_AUTO_OPEN: "false"
       BASELINE_MODE: "false"
       TOKEN_PRICE_PER_MILLION: "3.00"
@@ -104,8 +124,8 @@ goose session start
 
 ```
 src/
-├── index.ts              # entry point (MCP stdio server)
-├── server.ts             # MCP tool registration
+├── index.ts              # entry point (MCP stdio server + FEDERATION_REPOS handling)
+├── server.ts             # MCP tool registration (FederatedDb interface)
 ├── types.ts              # shared TypeScript interfaces
 ├── db/
 │   ├── schema.ts         # SQLite schema + FTS5 triggers
@@ -118,15 +138,19 @@ src/
 │   └── watcher.ts        # chokidar file watcher
 ├── tools/                # one file per MCP tool
 ├── monitoring/
-│   ├── server.ts         # Express + WebSocket
+│   ├── server.ts         # Express + WebSocket (per-project)
 │   ├── token-logger.ts   # per-call token logging
 │   ├── estimator.ts      # "without index" heuristic
 │   └── ui/               # dashboard (Chart.js, dark theme)
+├── gui/
+│   ├── index.ts          # pindex-gui entry point
+│   └── server.ts         # aggregated Express app (reads all project DBs)
 └── cli/
-    ├── index.ts          # CLI router
-    ├── setup.ts          # one-time setup
-    ├── daemon.ts         # PID-file daemon management
-    └── project-detector.ts
+    ├── index.ts          # CLI router (default=initProject, add, remove, status…)
+    ├── init.ts           # initProject(), writeMcpJson(), addFederatedRepo()
+    ├── setup.ts          # one-time setup (pindex setup)
+    ├── daemon.ts         # per-project PID-file daemon management
+    └── project-detector.ts  # getPindexHome(), findProjectRoot(), GlobalRegistry
 tests/
 ├── setup.ts              # global mocks (tree-sitter, chokidar, open)
 ├── helpers/              # createTestDb(), fixtures, test server
@@ -145,3 +169,7 @@ tests/
 - FTS5 sync is handled by SQLite triggers (not application code)
 - `get_context` reads files from disk at call time (DB stores only metadata)
 - `createMonitoringApp()` and `startMonitoringServer()` are separate for testability
+- `GlobalRegistry` manages `~/.pindex/registry.json`; port assignment is deterministic
+  (`7842 + (parseInt(hash.slice(0,4), 16) % 2000)`) and stored to stay stable
+- Migration from `~/.mcp-indexer` to `~/.pindex` runs automatically on first call to
+  `getPindexHome()` if the old directory exists
