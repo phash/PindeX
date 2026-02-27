@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MCP Codebase Indexer – Monitoring</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dayjs@1/dayjs.min.js"></script>
+</head>
+<body>
+  <div class="header">
+    <div class="header-title">
+      <span class="dot" id="statusDot">●</span>
+      <h1>MCP Codebase Indexer</h1>
+      <span id="sessionLabel" class="session-label"></span>
+    </div>
+    <div class="header-meta">
+      <span id="sessionTime"></span>
+    </div>
+  </div>
+
+  <div class="grid">
+    <!-- Stats Cards -->
+    <div class="card stats-card">
+      <div class="stat">
+        <div class="stat-value" id="tokensUsed">0</div>
+        <div class="stat-label">Token verwendet</div>
+      </div>
+      <div class="stat">
+        <div class="stat-value savings" id="tokensSaved">0</div>
+        <div class="stat-label">Token gespart</div>
+      </div>
+      <div class="stat">
+        <div class="stat-value" id="savingsPercent">0%</div>
+        <div class="stat-label">Effizienz</div>
+        <div class="progress-bar">
+          <div class="progress-fill" id="savingsBar" style="width: 0%"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Live Chart -->
+    <div class="card chart-card">
+      <h2>Live Token-Verlauf (letzte 20 Aufrufe)</h2>
+      <canvas id="tokenChart"></canvas>
+    </div>
+
+    <!-- Recent Calls -->
+    <div class="card calls-card">
+      <h2>Letzte Aufrufe</h2>
+      <div id="callsFeed"></div>
+    </div>
+
+    <!-- Session History -->
+    <div class="card history-card">
+      <h2>Session History</h2>
+      <table id="historyTable">
+        <thead>
+          <tr>
+            <th>Label</th>
+            <th>Token</th>
+            <th>Gespart</th>
+            <th>%</th>
+          </tr>
+        </thead>
+        <tbody id="historyBody"></tbody>
+        <tfoot>
+          <tr id="historyTotal">
+            <td><strong>Gesamt</strong></td>
+            <td id="histTotalTokens">-</td>
+            <td id="histTotalSaved">-</td>
+            <td id="histTotalPct">-</td>
+          </tr>
+        </tfoot>
+      </table>
+    </div>
+  </div>
+
+  <script src="/dashboard.js"></script>
+</body>
+</html>
