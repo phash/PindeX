@@ -1,0 +1,31 @@
+# PindeX – Goose Extension Configuration
+#
+# Add the `extensions.codebase-indexer` block below to your Goose config:
+#   ~/.config/goose/config.yaml
+#
+# Replace ALL occurrences of:
+#   /absolute/path/to/PindeX  → the directory where you cloned/built this repo
+#   /absolute/path/to/project → the project you want to index
+#
+# Prerequisites:
+#   cd /absolute/path/to/PindeX && npm install && npm run build
+
+extensions:
+  codebase-indexer:
+    name: Codebase Indexer
+    type: stdio
+    cmd: node
+    args:
+      - /absolute/path/to/PindeX/dist/index.js
+    envs:
+      INDEX_PATH: /absolute/path/to/project/.codebase-index/index.db
+      PROJECT_ROOT: /absolute/path/to/project
+      LANGUAGES: typescript,javascript
+      AUTO_REINDEX: "true"
+      GENERATE_SUMMARIES: "false"
+      MONITORING_PORT: "7842"
+      MONITORING_AUTO_OPEN: "false"
+      BASELINE_MODE: "false"
+      TOKEN_PRICE_PER_MILLION: "3.00"
+    enabled: true
+    timeout: 300

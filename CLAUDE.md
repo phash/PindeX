@@ -46,7 +46,7 @@ npm run build         # compile src/ → dist/
 ## Running the MCP Server
 
 ```bash
-# Start directly (stdio transport, for use with Claude Code)
+# Start directly (stdio transport)
 node dist/index.js
 
 # Environment variables
@@ -59,6 +59,45 @@ MONITORING_PORT=7842                     # dashboard port
 MONITORING_AUTO_OPEN=false               # open browser on start
 BASELINE_MODE=false                      # disable index (A/B testing)
 TOKEN_PRICE_PER_MILLION=3.00             # for cost estimates
+```
+
+## Claude Code Setup
+
+The `.mcp.json` in the project root is pre-configured. Claude Code picks it up automatically when you open the project.
+
+## Goose Setup
+
+Config file: `~/.config/goose/config.yaml`
+
+Add the following block (replace paths):
+
+```yaml
+extensions:
+  codebase-indexer:
+    name: Codebase Indexer
+    type: stdio
+    cmd: node
+    args:
+      - /absolute/path/to/PindeX/dist/index.js
+    envs:
+      INDEX_PATH: /absolute/path/to/project/.codebase-index/index.db
+      PROJECT_ROOT: /absolute/path/to/project
+      LANGUAGES: typescript,javascript
+      AUTO_REINDEX: "true"
+      GENERATE_SUMMARIES: "false"
+      MONITORING_PORT: "7842"
+      MONITORING_AUTO_OPEN: "false"
+      BASELINE_MODE: "false"
+      TOKEN_PRICE_PER_MILLION: "3.00"
+    enabled: true
+    timeout: 300
+```
+
+A ready-to-copy snippet is also available in `goose-extension.yaml`.
+
+Then restart your Goose session:
+```bash
+goose session start
 ```
 
 ## Project Structure
