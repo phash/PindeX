@@ -2,7 +2,7 @@
   "mcpServers": {
     "codebase-indexer": {
       "command": "node",
-      "args": ["./node_modules/.bin/mcp-codebase-indexer"],
+      "args": ["./node_modules/.bin/pindex-server"],
       "env": {
         "INDEX_PATH": "./.codebase-index/index.db",
         "PROJECT_ROOT": ".",

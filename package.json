@@ -1,12 +1,11 @@
 {
-  "name": "mcp-codebase-indexer",
+  "name": "pindex",
   "version": "1.0.0",
   "description": "MCP Server that structurally indexes a codebase for 80-90% token reduction",
   "type": "module",
   "bin": {
-    "mcp-codebase-indexer": "./dist/index.js",
-    "mcp-indexer": "./dist/cli/index.js",
-    "mcp-indexer-daemon": "./dist/index.js"
+    "pindex": "./dist/cli/index.js",
+    "pindex-server": "./dist/index.js"
   },
   "main": "./dist/index.js",
   "scripts": {
