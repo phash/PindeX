@@ -1,3 +1,4 @@
+import { sep } from 'node:path';
 import type Database from 'better-sqlite3';
 import type {
   FileRecord,
@@ -38,8 +39,11 @@ export function getFileByPath(
   db: Database.Database,
   path: string,
 ): FileRecord | null {
+  // Normalise to the platform separator so forward-slash and backslash inputs
+  // both match the paths stored by the indexer on Windows (backslash) / Unix (slash).
+  const normalized = path.replace(/[\\/]/g, sep);
   return (
-    (db.prepare('SELECT * FROM files WHERE path = ?').get(path) as FileRecord | undefined) ?? null
+    (db.prepare('SELECT * FROM files WHERE path = ?').get(normalized) as FileRecord | undefined) ?? null
   );
 }
 

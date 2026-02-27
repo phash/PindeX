@@ -90,6 +90,16 @@ async function main(): Promise<void> {
   await server.connect(transport);
 }
 
+// Catch any unhandled exception / rejection and exit so Claude Code auto-restarts the server.
+process.on('uncaughtException', (err) => {
+  process.stderr.write(`[pindex] Uncaught exception – restarting: ${String(err)}\n`);
+  process.exit(1);
+});
+process.on('unhandledRejection', (reason) => {
+  process.stderr.write(`[pindex] Unhandled rejection – restarting: ${String(reason)}\n`);
+  process.exit(1);
+});
+
 main().catch((err) => {
   process.stderr.write(`[pindex] Fatal error: ${String(err)}\n`);
   process.exit(1);
