@@ -25,7 +25,14 @@
     "start": "node dist/index.js",
     "dev": "node --loader ts-node/esm src/index.ts"
   },
-  "keywords": ["mcp", "codebase", "indexer", "typescript", "claude"],
+  "keywords": [
+    "mcp",
+    "codebase-indexer",
+    "claude",
+    "ai",
+    "typescript",
+    "token-reduction"
+  ],
   "license": "MIT",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
@@ -53,5 +60,10 @@
   },
   "engines": {
     "node": ">=18.0.0"
-  }
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/phash/PindeX.git"
+  },
+  "homepage": "https://github.com/phash/PindeX"
 }
