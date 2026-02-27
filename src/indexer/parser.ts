@@ -21,6 +21,13 @@ const EXTENSION_MAP: Record<string, string> = {
   go: 'go',
   rs: 'rust',
   java: 'java',
+  kt: 'kotlin',
+  kts: 'kotlin',
+  vue: 'vue',
+  svelte: 'svelte',
+  php: 'php',
+  rb: 'ruby',
+  cs: 'csharp',
   md: 'markdown',
   markdown: 'markdown',
   yaml: 'yaml',
@@ -230,6 +237,104 @@ export function extractImports(rootNode: AstNode): ParsedImport[] {
   return imports;
 }
 
+// ─── Regex-based Symbol Extraction ───────────────────────────────────────────
+// Used for languages without a tree-sitter grammar. Each extractor returns
+// symbols and imports parsed from the raw source text via regular expressions.
+
+function regexSymbols(
+  content: string,
+  patterns: Array<{ re: RegExp; kind: SymbolKind }>,
+): ParsedSymbol[] {
+  const symbols: ParsedSymbol[] = [];
+  const lines = content.split('\n');
+  for (const { re, kind } of patterns) {
+    let m: RegExpExecArray | null;
+    re.lastIndex = 0;
+    while ((m = re.exec(content)) !== null) {
+      const name = m[1] ?? m[2];
+      if (!name) continue;
+      const lineNum = content.slice(0, m.index).split('\n').length;
+      const rawLine = lines[lineNum - 1] ?? '';
+      const sig = rawLine.trim().replace(/\s+/g, ' ').substring(0, 80);
+      symbols.push({ name, kind, signature: sig, startLine: lineNum, endLine: lineNum, isExported: true });
+    }
+  }
+  return symbols;
+}
+
+function parseJava(content: string): { symbols: ParsedSymbol[]; imports: ParsedImport[] } {
+  const symbols = regexSymbols(content, [
+    { re: /^[ \t]*(?:(?:public|protected|private|static|abstract|final|sealed|non-sealed)\s+)*(?:class|interface|enum|record|@interface)\s+(\w+)/gm, kind: 'class' },
+    { re: /^[ \t]+(?:(?:public|protected|private|static|abstract|final|synchronized|default|native)\s+)*(?:<[^>]+>\s+)?(?:void|boolean|int|long|double|float|String|[\w][\w.<>, \[\]]*?)\s+(\w+)\s*\(/gm, kind: 'method' },
+  ]);
+  const imports: ParsedImport[] = [];
+  const importRe = /^import\s+(?:static\s+)?([^;]+);/gm;
+  let m: RegExpExecArray | null;
+  while ((m = importRe.exec(content)) !== null) {
+    const parts = m[1].trim().split('.');
+    const sym = parts.pop() ?? '';
+    imports.push({ source: parts.join('.'), symbols: sym === '*' ? [] : [sym] });
+  }
+  return { symbols, imports };
+}
+
+function parseKotlin(content: string): { symbols: ParsedSymbol[]; imports: ParsedImport[] } {
+  const symbols = regexSymbols(content, [
+    { re: /^[ \t]*(?:(?:public|private|protected|internal|abstract|open|sealed|data|inner|inline|value|annotation|enum)\s+)*(?:class|interface|object)\s+(\w+)/gm, kind: 'class' },
+    { re: /^[ \t]*(?:(?:public|private|protected|internal|override|abstract|open|suspend|inline|operator|infix|tailrec|external)\s+)*fun\s+(?:<[^>]+>\s+)?(\w+)\s*[(<]/gm, kind: 'function' },
+  ]);
+  const imports: ParsedImport[] = [];
+  const importRe = /^import\s+([\w.]+)(?:\s+as\s+\w+)?/gm;
+  let m: RegExpExecArray | null;
+  while ((m = importRe.exec(content)) !== null) {
+    const parts = m[1].split('.');
+    const sym = parts.pop() ?? '';
+    imports.push({ source: parts.join('.'), symbols: sym === '*' ? [] : [sym] });
+  }
+  return { symbols, imports };
+}
+
+function parsePython(content: string): { symbols: ParsedSymbol[]; imports: ParsedImport[] } {
+  const symbols = regexSymbols(content, [
+    { re: /^class\s+(\w+)/gm, kind: 'class' },
+    { re: /^(?:async\s+)?def\s+(\w+)/gm, kind: 'function' },
+  ]);
+  const imports: ParsedImport[] = [];
+  const fromRe = /^from\s+(\S+)\s+import\s+(.+)/gm;
+  const plainRe = /^import\s+(\S+)/gm;
+  let m: RegExpExecArray | null;
+  while ((m = fromRe.exec(content)) !== null) {
+    const syms = m[2].split(',').map((s) => s.trim().split(/\s+as\s+/)[0].trim()).filter(Boolean);
+    imports.push({ source: m[1], symbols: syms });
+  }
+  while ((m = plainRe.exec(content)) !== null) {
+    imports.push({ source: m[1], symbols: [] });
+  }
+  return { symbols, imports };
+}
+
+function parsePhp(content: string): { symbols: ParsedSymbol[]; imports: ParsedImport[] } {
+  const symbols = regexSymbols(content, [
+    { re: /^(?:(?:abstract|final|readonly)\s+)*(?:class|interface|trait|enum)\s+(\w+)/gm, kind: 'class' },
+    { re: /^[ \t]*(?:(?:public|protected|private|static|abstract|final)\s+)*function\s+(\w+)\s*\(/gm, kind: 'function' },
+  ]);
+  const imports: ParsedImport[] = [];
+  const useRe = /^use\s+([^;]+);/gm;
+  let m: RegExpExecArray | null;
+  while ((m = useRe.exec(content)) !== null) {
+    const parts = m[1].trim().split('\\');
+    const sym = parts.pop() ?? '';
+    imports.push({ source: parts.join('\\'), symbols: [sym] });
+  }
+  return { symbols, imports };
+}
+
+/** Extracts the script block content from a Vue or Svelte SFC. */
+function extractSfcScript(content: string): string {
+  const m = /<script(?:\s[^>]*)?>([^]*?)<\/script>/i.exec(content);
+  return m?.[1] ?? '';
+}
+
 // ─── Main Parse Function ──────────────────────────────────────────────────────
 
 /** Parses a source file using tree-sitter and extracts symbols + imports.
@@ -244,6 +349,37 @@ export function parseFile(filePath: string, content: string): ParsedFile {
     // both createRequire and vi.mock share the same Node module cache.
     const Parser = _require('tree-sitter') as { new(): { setLanguage(l: unknown): void; parse(s: string): { rootNode: AstNode } } };
     const parser = new Parser();
+
+    // Route non-TS languages to regex-based parsers (no tree-sitter needed)
+    if (language === 'java') {
+      const { symbols, imports } = parseJava(content);
+      return { language, symbols, imports, rawTokenEstimate };
+    }
+    if (language === 'kotlin') {
+      const { symbols, imports } = parseKotlin(content);
+      return { language, symbols, imports, rawTokenEstimate };
+    }
+    if (language === 'python') {
+      const { symbols, imports } = parsePython(content);
+      return { language, symbols, imports, rawTokenEstimate };
+    }
+    if (language === 'php') {
+      const { symbols, imports } = parsePhp(content);
+      return { language, symbols, imports, rawTokenEstimate };
+    }
+    if (language === 'vue' || language === 'svelte') {
+      // Parse the <script> block as TypeScript via tree-sitter
+      const scriptContent = extractSfcScript(content);
+      if (!scriptContent.trim()) return { language, symbols: [], imports: [], rawTokenEstimate };
+      const Parser = _require('tree-sitter') as { new(): { setLanguage(l: unknown): void; parse(s: string): { rootNode: AstNode } } };
+      const parser = new Parser();
+      const tsLangs = _require('tree-sitter-typescript') as { typescript: unknown; tsx: unknown };
+      parser.setLanguage(tsLangs.typescript);
+      const tree = parser.parse(scriptContent);
+      const symbols = extractSymbols(tree.rootNode as AstNode, scriptContent);
+      const imports = extractImports(tree.rootNode as AstNode);
+      return { language, symbols, imports, rawTokenEstimate };
+    }
 
     let lang: unknown;
     if (language === 'typescript' || language === 'tsx') {
