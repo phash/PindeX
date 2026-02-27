@@ -77,8 +77,8 @@ async function main(): Promise<void> {
     }
 
     case 'index': {
-      const targetPath = args[0] ?? process.cwd();
       const force = args.includes('--force');
+      const targetPath = args.find(a => !a.startsWith('--')) ?? process.cwd();
       console.log(`Indexing: ${targetPath}`);
 
       const dbPath = getProjectIndexPath(targetPath);
