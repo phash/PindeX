@@ -284,7 +284,12 @@ function buildDashboardHtml(): string {
     body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',monospace}
     header{background:var(--surface);border-bottom:1px solid var(--border);padding:16px 24px;display:flex;align-items:center;gap:12px}
     header h1{font-size:1.2rem;color:var(--accent)}
-    header .upd{color:var(--muted);font-size:.8rem;margin-left:auto}
+    header .meta{display:flex;align-items:center;gap:16px;margin-left:auto}
+    header .upd{color:var(--muted);font-size:.8rem}
+    .refresh-control{display:flex;align-items:center;gap:6px;color:var(--muted);font-size:.75rem;cursor:pointer;user-select:none}
+    .refresh-control input[type=range]{-webkit-appearance:none;appearance:none;width:72px;height:3px;background:var(--border);border-radius:2px;outline:none;cursor:pointer}
+    .refresh-control input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:11px;height:11px;border-radius:50%;background:var(--accent);cursor:pointer}
+    .refresh-control input[type=range]::-moz-range-thumb{width:11px;height:11px;border:none;border-radius:50%;background:var(--accent);cursor:pointer}
     .overview{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:16px;padding:24px}
     .card{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:20px}
     .card .value{font-size:2rem;font-weight:700;color:var(--accent)}
@@ -353,7 +358,13 @@ function buildDashboardHtml(): string {
 <body>
 <header>
   <h1>PindeX</h1>
-  <span class="upd" id="last-updated"></span>
+  <div class="meta">
+    <label class="refresh-control" title="Auto-refresh interval">
+      <span id="refreshLabel">15s</span>
+      <input type="range" id="refreshSlider" min="1" max="60" value="15" step="1">
+    </label>
+    <span class="upd" id="last-updated"></span>
+  </div>
 </header>
 <div class="overview">
   <div class="card"><div class="value" id="ov-projects">&#x2014;</div><div class="label">Projects</div></div>
@@ -753,8 +764,20 @@ function renderSessionPage() {
   panel.appendChild(buildTable(['Session', 'Mode', 'Tokens Used', 'Saved', 'Rate', 'Started'], rows));
 }
 
+let _refreshTimer = null;
+function setRefreshInterval(s) {
+  if (_refreshTimer) clearInterval(_refreshTimer);
+  _refreshTimer = setInterval(() => load().catch(console.error), s * 1000);
+}
 load().catch(console.error);
-setInterval(() => load().catch(console.error), 15000);
+setRefreshInterval(15);
+const _slider = document.getElementById('refreshSlider');
+const _sliderLabel = document.getElementById('refreshLabel');
+_slider.addEventListener('input', () => {
+  const s = Number(_slider.value);
+  _sliderLabel.textContent = s + 's';
+  setRefreshInterval(s);
+});
 <\/script>
 </body>
 </html>`;

@@ -232,3 +232,25 @@ tests/
   (`7842 + (parseInt(hash.slice(0,4), 16) % 2000)`) and stored to stay stable
 - Migration from `~/.mcp-indexer` to `~/.pindex` runs automatically on first call to
   `getPindexHome()` if the old directory exists
+
+## PindeX – Codebase Navigation
+
+Dieses Projekt ist mit PindeX indexiert.
+
+**PFLICHT-WORKFLOW** – bei jeder Codebase-Aufgabe:
+1. **Unbekannte Datei?** → `mcp__pindex__get_file_summary` ZUERST, dann ggf. `get_context`
+2. **Symbol suchen?** → `mcp__pindex__search_symbols` oder `find_symbol`
+3. **Abhängigkeiten?** → `mcp__pindex__get_dependencies`
+4. **Wo wird etwas verwendet?** → `mcp__pindex__find_usages`
+5. **Projekt-Überblick?** → `mcp__pindex__get_project_overview`
+
+**VERBOTEN** (solange PindeX verfügbar):
+- `Read` auf Quellcode-Dateien ohne vorherigen `get_file_summary`-Aufruf
+- `Glob`/`Grep` zur Symbol-Suche statt `search_symbols`
+
+**Kontext auslagern:**
+- Wichtige Entscheidungen / Muster → `mcp__pindex__save_context` speichern
+- Zu Sessionbeginn → `mcp__pindex__search_docs` für gespeicherten Kontext
+
+**Fallback:** Falls ein Tool `null` zurückgibt → `Read`/`Grep` als Fallback.
+<!-- pindex -->
