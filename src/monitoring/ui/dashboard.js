@@ -193,6 +193,15 @@ function updateClock() {
   document.getElementById('sessionTime').textContent = dayjs().format('HH:mm:ss');
 }
 
+// ─── Refresh Rate Control ─────────────────────────────────────────────────────
+
+let historyInterval = null;
+
+function setRefreshInterval(seconds) {
+  if (historyInterval) clearInterval(historyInterval);
+  historyInterval = setInterval(loadSessionHistory, seconds * 1000);
+}
+
 // ─── Initialization ───────────────────────────────────────────────────────────
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -200,6 +209,14 @@ document.addEventListener('DOMContentLoaded', () => {
   connect();
   loadSessionHistory();
   setInterval(updateClock, 1000);
-  setInterval(loadSessionHistory, 30000);
+  setRefreshInterval(30);
   updateClock();
+
+  const slider = document.getElementById('refreshSlider');
+  const label = document.getElementById('refreshLabel');
+  slider.addEventListener('input', () => {
+    const s = Number(slider.value);
+    label.textContent = s + 's';
+    setRefreshInterval(s);
+  });
 });
