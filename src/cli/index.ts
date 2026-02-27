@@ -13,7 +13,7 @@ import {
   hashProjectPath,
   getPindexHome,
 } from './project-detector.js';
-import { initProject, addFederatedRepo, removeFederatedRepo, injectClaudeMdSection, injectClaudeSettings } from './init.js';
+import { initProject, addFederatedRepo, removeFederatedRepo, injectClaudeMdSection, injectClaudeSettings, removeClaudeMdSection, removeClaudeSettings, removeMcpJson } from './init.js';
 
 const [, , command, ...args] = process.argv;
 
@@ -143,11 +143,21 @@ async function main(): Promise<void> {
 
     case 'remove': {
       if (!args[0]) {
-        // Remove the current project from the global registry
+        // Remove the current project: unregister + clean up all PindeX artifacts
         const projectRoot = findProjectRoot(process.cwd());
         const registry = new GlobalRegistry();
+        await stopDaemon(hashProjectPath(projectRoot));
         registry.remove(projectRoot);
-        console.log(`Removed from registry: ${projectRoot}`);
+
+        const mdResult  = removeClaudeMdSection(projectRoot);
+        const hkResult  = removeClaudeSettings(projectRoot);
+        const mcpResult = removeMcpJson(projectRoot);
+
+        console.log(`\n  ✓ Removed from registry: ${projectRoot}`);
+        console.log(`  CLAUDE.md  : ${mdResult === 'removed' ? 'PindeX section removed' : mdResult === 'not_found' ? 'no section found' : 'file not found'}`);
+        console.log(`  Hooks      : ${hkResult === 'removed' ? 'hook removed' : hkResult === 'not_found' ? 'no hook found' : 'file not found'}`);
+        console.log(`  .mcp.json  : ${mcpResult === 'removed' ? 'deleted' : 'not found'}\n`);
+        console.log('  Index data (~/.pindex/projects/…) kept — delete manually if desired.\n');
       } else {
         // Remove a federated repo link
         await removeFederatedRepo(process.cwd(), args[0]);
@@ -196,7 +206,8 @@ async function main(): Promise<void> {
     init            Same as above
 
     add <path>      Link another repo for cross-repo search (federation)
-    remove [path]   Remove a federated repo link (or the whole project)
+    remove          Unregister project, remove .mcp.json, CLAUDE.md section & hook
+    remove <path>   Remove a federated repo link only
     reinit          Re-inject PindeX section into CLAUDE.md
     reinit --force  Replace existing section with current template
 

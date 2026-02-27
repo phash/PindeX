@@ -1,4 +1,4 @@
-import { writeFileSync, existsSync, mkdirSync, readFileSync, appendFileSync } from 'node:fs';
+import { writeFileSync, existsSync, mkdirSync, readFileSync, appendFileSync, unlinkSync } from 'node:fs';
 import { resolve, join, relative } from 'node:path';
 import {
   findProjectRoot,
@@ -217,6 +217,59 @@ export async function initProject(cwd: string): Promise<void> {
     for (const r of entry.federatedRepos) console.log(`    - ${r}`);
   }
   console.log('\n  ══════════════════════════════════════════\n');
+}
+
+// ─── Cleanup helpers ───────────────────────────────────────────────────────
+
+/**
+ * Removes the PindeX section from CLAUDE.md (if present).
+ * Returns 'removed' | 'not_found' | 'skipped' (file didn't exist).
+ */
+export function removeClaudeMdSection(projectRoot: string): 'removed' | 'not_found' | 'skipped' {
+  const claudeMdPath = join(projectRoot, 'CLAUDE.md');
+  if (!existsSync(claudeMdPath)) return 'skipped';
+  const content = readFileSync(claudeMdPath, 'utf-8');
+  if (!content.includes(CLAUDE_MD_MARKER)) return 'not_found';
+  const stripped = content.replace(/\n## PindeX[\s\S]*?<!--\s*pindex\s*-->\n?/, '');
+  writeFileSync(claudeMdPath, stripped, 'utf-8');
+  return 'removed';
+}
+
+/**
+ * Removes the PindeX PreToolUse hook from .claude/settings.json (if present).
+ * Returns 'removed' | 'not_found' | 'skipped' (file didn't exist).
+ */
+export function removeClaudeSettings(projectRoot: string): 'removed' | 'not_found' | 'skipped' {
+  const settingsPath = join(projectRoot, '.claude', 'settings.json');
+  if (!existsSync(settingsPath)) return 'skipped';
+  const raw = readFileSync(settingsPath, 'utf-8');
+  if (!raw.includes(HOOK_MARKER)) return 'not_found';
+  let existing: Record<string, unknown>;
+  try { existing = JSON.parse(raw); } catch { return 'not_found'; }
+  const hooks = existing.hooks as { PreToolUse?: unknown[] } | undefined;
+  const filtered = (hooks?.PreToolUse ?? []).filter(
+    (h) => !JSON.stringify(h).includes(HOOK_MARKER),
+  );
+  const updated = {
+    ...existing,
+    hooks: { ...hooks, PreToolUse: filtered },
+  };
+  // Remove empty PreToolUse array to keep settings.json clean
+  if (filtered.length === 0) delete (updated.hooks as Record<string, unknown>).PreToolUse;
+  if (Object.keys(updated.hooks as object).length === 0) delete (updated as Record<string, unknown>).hooks;
+  writeFileSync(settingsPath, JSON.stringify(updated, null, 2) + '\n', 'utf-8');
+  return 'removed';
+}
+
+/**
+ * Removes .mcp.json from the project root (if present).
+ * Returns 'removed' | 'skipped'.
+ */
+export function removeMcpJson(projectRoot: string): 'removed' | 'skipped' {
+  const mcpJsonPath = join(projectRoot, '.mcp.json');
+  if (!existsSync(mcpJsonPath)) return 'skipped';
+  unlinkSync(mcpJsonPath);
+  return 'removed';
 }
 
 // ─── Add federated repo ────────────────────────────────────────────────────
