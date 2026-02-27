@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import type { AstNode, ParsedFile, ParsedSymbol, ParsedImport, SymbolKind } from '../types.js';
+import type { AstNode, ParsedFile, ParsedSymbol, ParsedImport, SymbolKind, ParsedDocument, DocumentChunk } from '../types.js';
 
 // ─── Language Detection ───────────────────────────────────────────────────────
 
@@ -15,7 +15,17 @@ const EXTENSION_MAP: Record<string, string> = {
   go: 'go',
   rs: 'rust',
   java: 'java',
+  md: 'markdown',
+  markdown: 'markdown',
+  yaml: 'yaml',
+  yml: 'yaml',
+  txt: 'text',
 };
+
+/** Returns true for file types that should be indexed as text documents (not code). */
+export function isDocumentLanguage(language: string): boolean {
+  return language === 'markdown' || language === 'yaml' || language === 'text';
+}
 
 export function detectLanguage(filePath: string): string {
   const ext = filePath.split('.').pop()?.toLowerCase() ?? '';
@@ -247,6 +257,82 @@ export function parseFile(filePath: string, content: string): ParsedFile {
     // tree-sitter not available or failed – return metadata only
     return { language, symbols: [], imports: [], rawTokenEstimate };
   }
+}
+
+// ─── Document Parsing ─────────────────────────────────────────────────────────
+
+const CHUNK_SIZE = 50; // lines per chunk for non-markdown files
+
+/** Splits markdown content into chunks at heading boundaries. */
+function splitMarkdownByHeadings(lines: string[]): DocumentChunk[] {
+  const chunks: DocumentChunk[] = [];
+  let chunkIndex = 0;
+  let chunkStart = 0;
+  let currentHeading: string | null = null;
+  let chunkLines: string[] = [];
+
+  function flush(endLine: number): void {
+    if (chunkLines.length === 0) return;
+    chunks.push({
+      chunkIndex: chunkIndex++,
+      heading: currentHeading,
+      startLine: chunkStart + 1, // 1-indexed
+      endLine: endLine,
+      content: chunkLines.join('\n'),
+    });
+    chunkLines = [];
+  }
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const headingMatch = /^#{1,3}\s+(.+)$/.exec(line);
+    if (headingMatch && i > chunkStart) {
+      flush(i); // end previous chunk before heading
+      chunkStart = i;
+      currentHeading = headingMatch[1].trim();
+    }
+    chunkLines.push(line);
+  }
+  flush(lines.length);
+
+  return chunks;
+}
+
+/** Splits any text into fixed-size line chunks. */
+function splitByLines(lines: string[], chunkSize: number): DocumentChunk[] {
+  const chunks: DocumentChunk[] = [];
+  for (let i = 0; i < lines.length; i += chunkSize) {
+    const slice = lines.slice(i, i + chunkSize);
+    chunks.push({
+      chunkIndex: chunks.length,
+      heading: null,
+      startLine: i + 1, // 1-indexed
+      endLine: Math.min(i + chunkSize, lines.length),
+      content: slice.join('\n'),
+    });
+  }
+  return chunks;
+}
+
+/** Parses a document file into text chunks for indexing. */
+export function parseDocument(filePath: string, content: string): ParsedDocument {
+  const language = detectLanguage(filePath);
+  const rawTokenEstimate = estimateTokens(content);
+  const lines = content.split('\n');
+
+  let chunks: DocumentChunk[];
+  if (language === 'markdown') {
+    chunks = splitMarkdownByHeadings(lines);
+  } else {
+    chunks = splitByLines(lines, CHUNK_SIZE);
+  }
+
+  // Filter empty chunks
+  chunks = chunks.filter((c) => c.content.trim().length > 0);
+  // Re-number after filtering
+  chunks.forEach((c, i) => { c.chunkIndex = i; });
+
+  return { language, chunks, rawTokenEstimate };
 }
 
 /** Computes an MD5 hash of the file content for change detection. */

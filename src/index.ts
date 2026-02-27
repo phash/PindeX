@@ -81,6 +81,7 @@ async function main(): Promise<void> {
     monitoringPort: MONITORING_PORT,
     baselineMode: BASELINE_MODE,
     federatedDbs,
+    sessionId,
   });
 
   const transport = new StdioServerTransport();

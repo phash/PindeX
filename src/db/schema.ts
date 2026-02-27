@@ -72,11 +72,48 @@ export function initSchema(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_token_log_session ON token_log(session_id);
   `);
 
-  // FTS5 virtual table (separate exec – CREATE VIRTUAL TABLE IF NOT EXISTS
+  // ─── Document Tables ───────────────────────────────────────────────────────
+  // Stores text chunks from non-code files (markdown, yaml, txt, etc.)
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS documents (
+      id          INTEGER PRIMARY KEY,
+      file_id     INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+      chunk_index INTEGER NOT NULL,
+      heading     TEXT,
+      start_line  INTEGER NOT NULL,
+      end_line    INTEGER NOT NULL,
+      content     TEXT NOT NULL,
+      summary     TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS context_entries (
+      id          INTEGER PRIMARY KEY,
+      session_id  TEXT NOT NULL,
+      content     TEXT NOT NULL,
+      tags        TEXT,
+      created_at  DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_documents_file_id ON documents(file_id);
+    CREATE INDEX IF NOT EXISTS idx_context_entries_session ON context_entries(session_id);
+  `);
+
+  // FTS5 virtual tables (separate exec – CREATE VIRTUAL TABLE IF NOT EXISTS
   // is supported by SQLite)
   db.exec(`
     CREATE VIRTUAL TABLE IF NOT EXISTS symbols_fts
     USING fts5(name, summary, signature, content=symbols, content_rowid=id);
+  `);
+
+  db.exec(`
+    CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts
+    USING fts5(content, heading, summary, content=documents, content_rowid=id);
+  `);
+
+  db.exec(`
+    CREATE VIRTUAL TABLE IF NOT EXISTS context_entries_fts
+    USING fts5(content, tags, content=context_entries, content_rowid=id);
   `);
 
   // ─── FTS5 Sync Triggers ────────────────────────────────────────────────────
@@ -101,6 +138,52 @@ export function initSchema(db: Database.Database): void {
       VALUES ('delete', old.id, old.name, COALESCE(old.summary, ''), old.signature);
       INSERT INTO symbols_fts(rowid, name, summary, signature)
       VALUES (new.id, new.name, COALESCE(new.summary, ''), new.signature);
+    END;
+  `);
+
+  // ─── documents_fts Sync Triggers ──────────────────────────────────────────
+  db.exec(`
+    CREATE TRIGGER IF NOT EXISTS documents_ai
+    AFTER INSERT ON documents BEGIN
+      INSERT INTO documents_fts(rowid, content, heading, summary)
+      VALUES (new.id, new.content, COALESCE(new.heading, ''), COALESCE(new.summary, ''));
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS documents_ad
+    AFTER DELETE ON documents BEGIN
+      INSERT INTO documents_fts(documents_fts, rowid, content, heading, summary)
+      VALUES ('delete', old.id, old.content, COALESCE(old.heading, ''), COALESCE(old.summary, ''));
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS documents_au
+    AFTER UPDATE ON documents BEGIN
+      INSERT INTO documents_fts(documents_fts, rowid, content, heading, summary)
+      VALUES ('delete', old.id, old.content, COALESCE(old.heading, ''), COALESCE(old.summary, ''));
+      INSERT INTO documents_fts(rowid, content, heading, summary)
+      VALUES (new.id, new.content, COALESCE(new.heading, ''), COALESCE(new.summary, ''));
+    END;
+  `);
+
+  // ─── context_entries_fts Sync Triggers ────────────────────────────────────
+  db.exec(`
+    CREATE TRIGGER IF NOT EXISTS context_entries_ai
+    AFTER INSERT ON context_entries BEGIN
+      INSERT INTO context_entries_fts(rowid, content, tags)
+      VALUES (new.id, new.content, COALESCE(new.tags, ''));
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS context_entries_ad
+    AFTER DELETE ON context_entries BEGIN
+      INSERT INTO context_entries_fts(context_entries_fts, rowid, content, tags)
+      VALUES ('delete', old.id, old.content, COALESCE(old.tags, ''));
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS context_entries_au
+    AFTER UPDATE ON context_entries BEGIN
+      INSERT INTO context_entries_fts(context_entries_fts, rowid, content, tags)
+      VALUES ('delete', old.id, old.content, COALESCE(old.tags, ''));
+      INSERT INTO context_entries_fts(rowid, content, tags)
+      VALUES (new.id, new.content, COALESCE(new.tags, ''));
     END;
   `);
 }

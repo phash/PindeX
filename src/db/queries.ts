@@ -7,6 +7,8 @@ import type {
   TokenLogEntry,
   SessionRecord,
   SymbolKind,
+  DocumentChunkRecord,
+  ContextEntryRecord,
 } from '../types.js';
 
 // ─── File Queries ─────────────────────────────────────────────────────────────
@@ -372,4 +374,123 @@ export function listSessions(db: Database.Database): SessionRecord[] {
   return db
     .prepare('SELECT * FROM sessions ORDER BY started_at DESC')
     .all() as SessionRecord[];
+}
+
+// ─── Document Chunk Queries ───────────────────────────────────────────────────
+
+export interface InsertDocumentChunkInput {
+  fileId: number;
+  chunkIndex: number;
+  heading: string | null;
+  startLine: number;
+  endLine: number;
+  content: string;
+}
+
+export function insertDocumentChunk(
+  db: Database.Database,
+  input: InsertDocumentChunkInput,
+): number {
+  const result = db.prepare(`
+    INSERT INTO documents (file_id, chunk_index, heading, start_line, end_line, content)
+    VALUES (@fileId, @chunkIndex, @heading, @startLine, @endLine, @content)
+  `).run(input);
+  return result.lastInsertRowid as number;
+}
+
+export function deleteDocumentChunksByFileId(
+  db: Database.Database,
+  fileId: number,
+): void {
+  db.prepare('DELETE FROM documents WHERE file_id = ?').run(fileId);
+}
+
+export function getDocumentChunksByFileId(
+  db: Database.Database,
+  fileId: number,
+): DocumentChunkRecord[] {
+  return db
+    .prepare('SELECT * FROM documents WHERE file_id = ? ORDER BY chunk_index')
+    .all(fileId) as DocumentChunkRecord[];
+}
+
+export interface DocFtsResult {
+  id: number;
+  file_id: number;
+  chunk_index: number;
+  heading: string | null;
+  start_line: number;
+  content: string;
+  file_path: string;
+}
+
+export function searchDocumentsFts(
+  db: Database.Database,
+  query: string,
+  limit: number,
+): DocFtsResult[] {
+  try {
+    return db
+      .prepare(
+        `SELECT d.id, d.file_id, d.chunk_index, d.heading, d.start_line, d.content,
+                f.path AS file_path
+         FROM documents_fts fts
+         JOIN documents d ON d.id = fts.rowid
+         JOIN files f ON d.file_id = f.id
+         WHERE documents_fts MATCH ?
+         ORDER BY fts.rank
+         LIMIT ?`,
+      )
+      .all(query, limit) as DocFtsResult[];
+  } catch {
+    return [];
+  }
+}
+
+// ─── Context Entry Queries ────────────────────────────────────────────────────
+
+export interface InsertContextEntryInput {
+  sessionId: string;
+  content: string;
+  tags: string | null;
+}
+
+export function insertContextEntry(
+  db: Database.Database,
+  input: InsertContextEntryInput,
+): number {
+  const result = db.prepare(`
+    INSERT INTO context_entries (session_id, content, tags)
+    VALUES (@sessionId, @content, @tags)
+  `).run(input);
+  return result.lastInsertRowid as number;
+}
+
+export interface ContextFtsResult {
+  id: number;
+  session_id: string;
+  content: string;
+  tags: string | null;
+  created_at: string;
+}
+
+export function searchContextEntriesFts(
+  db: Database.Database,
+  query: string,
+  limit: number,
+): ContextFtsResult[] {
+  try {
+    return db
+      .prepare(
+        `SELECT ce.id, ce.session_id, ce.content, ce.tags, ce.created_at
+         FROM context_entries_fts fts
+         JOIN context_entries ce ON ce.id = fts.rowid
+         WHERE context_entries_fts MATCH ?
+         ORDER BY fts.rank
+         LIMIT ?`,
+      )
+      .all(query, limit) as ContextFtsResult[];
+  } catch {
+    return [];
+  }
 }

@@ -146,4 +146,81 @@ describe('initSchema', () => {
       db.prepare('INSERT INTO sessions (id, mode) VALUES (?, ?)').run('sid', null),
     ).toThrow();
   });
+
+  it('creates the documents table', () => {
+    initSchema(db);
+    const tables = db
+      .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='documents'")
+      .all();
+    expect(tables).toHaveLength(1);
+  });
+
+  it('creates the context_entries table', () => {
+    initSchema(db);
+    const tables = db
+      .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='context_entries'")
+      .all();
+    expect(tables).toHaveLength(1);
+  });
+
+  it('creates the documents_fts virtual table', () => {
+    initSchema(db);
+    const tables = db
+      .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='documents_fts'")
+      .all();
+    expect(tables).toHaveLength(1);
+  });
+
+  it('creates the context_entries_fts virtual table', () => {
+    initSchema(db);
+    const tables = db
+      .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='context_entries_fts'")
+      .all();
+    expect(tables).toHaveLength(1);
+  });
+
+  it('FTS5 triggers sync documents into documents_fts on INSERT', () => {
+    initSchema(db);
+    db.prepare(
+      "INSERT INTO files (path, language, last_indexed, hash, raw_token_estimate) VALUES ('README.md', 'markdown', datetime('now'), 'h1', 200)",
+    ).run();
+    const fileId = (db.prepare('SELECT last_insert_rowid() as id').get() as { id: number }).id;
+    db.prepare(
+      "INSERT INTO documents (file_id, chunk_index, start_line, end_line, content) VALUES (?, 0, 1, 10, 'How to configure authentication using JWT tokens')",
+    ).run(fileId);
+
+    const results = db
+      .prepare("SELECT * FROM documents_fts WHERE documents_fts MATCH 'authentication'")
+      .all();
+    expect(results.length).toBeGreaterThan(0);
+  });
+
+  it('FTS5 triggers sync context_entries into context_entries_fts on INSERT', () => {
+    initSchema(db);
+    db.prepare(
+      "INSERT INTO context_entries (session_id, content) VALUES ('sess-1', 'PostgreSQL is used for persistent storage')",
+    ).run();
+
+    const results = db
+      .prepare("SELECT * FROM context_entries_fts WHERE context_entries_fts MATCH 'PostgreSQL'")
+      .all();
+    expect(results.length).toBeGreaterThan(0);
+  });
+
+  it('documents cascade-delete when the file is deleted', () => {
+    initSchema(db);
+    db.pragma('foreign_keys = ON');
+    db.prepare(
+      "INSERT INTO files (path, language, last_indexed, hash, raw_token_estimate) VALUES ('guide.md', 'markdown', datetime('now'), 'h', 0)",
+    ).run();
+    const fileId = (db.prepare('SELECT last_insert_rowid() as id').get() as { id: number }).id;
+    db.prepare(
+      "INSERT INTO documents (file_id, chunk_index, start_line, end_line, content) VALUES (?, 0, 1, 5, 'Some content')",
+    ).run(fileId);
+
+    db.prepare('DELETE FROM files WHERE id = ?').run(fileId);
+
+    const remaining = db.prepare('SELECT * FROM documents WHERE file_id = ?').all(fileId);
+    expect(remaining).toHaveLength(0);
+  });
 });

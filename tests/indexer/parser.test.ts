@@ -198,7 +198,15 @@ describe('detectLanguage', () => {
   });
 
   it('returns unknown for unrecognized extensions', () => {
-    expect(detectLanguage('README.md')).toBe('unknown');
+    expect(detectLanguage('file.xyz')).toBe('unknown');
+  });
+
+  it('returns markdown for .md files', () => {
+    expect(detectLanguage('README.md')).toBe('markdown');
+  });
+
+  it('returns yaml for .yaml files', () => {
+    expect(detectLanguage('config.yaml')).toBe('yaml');
   });
 });
 
