@@ -18,5 +18,4 @@ jobs:
           registry-url: 'https://registry.npmjs.org'
       - run: npm ci
       - run: npm run build
-      - run: npm config delete //registry.npmjs.org/:_authToken
       - run: npm publish --provenance --access public
