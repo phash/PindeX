@@ -35,7 +35,7 @@ const DEFAULT_IGNORE = [
   '**/*.pyc',
   '**/.venv/**',
   '**/venv/**',
-  // PHP
+  // PHP / Go
   '**/vendor/**',
 ];
 
@@ -51,6 +51,8 @@ const LANGUAGE_PATTERNS: Record<string, string[]> = {
   php:         ['**/*.php'],
   ruby:        ['**/*.rb'],
   csharp:      ['**/*.cs'],
+  go:          ['**/*.go'],
+  rust:        ['**/*.rs'],
 };
 
 const DEFAULT_LANGUAGES = ['typescript', 'javascript'];
