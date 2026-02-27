@@ -13,7 +13,7 @@ import {
   hashProjectPath,
   getPindexHome,
 } from './project-detector.js';
-import { initProject, addFederatedRepo, removeFederatedRepo } from './init.js';
+import { initProject, addFederatedRepo, removeFederatedRepo, injectClaudeMdSection, injectClaudeSettings } from './init.js';
 
 const [, , command, ...args] = process.argv;
 
@@ -28,6 +28,24 @@ async function main(): Promise<void> {
     case 'setup':
       await runSetup();
       break;
+
+    case 'reinit': {
+      const projectRoot = findProjectRoot(process.cwd());
+      const force = args.includes('--force');
+      const mdResult = injectClaudeMdSection(projectRoot, { force });
+      const hkResult = injectClaudeSettings(projectRoot, { force });
+      const mdLabel =
+        mdResult === 'created' ? 'CLAUDE.md created' :
+        mdResult === 'added'   ? 'PindeX section added' :
+        mdResult === 'updated' ? 'PindeX section updated' :
+                                 'CLAUDE.md already present (use --force to update)';
+      const hkLabel =
+        hkResult === 'created' ? 'hooks created' :
+        hkResult === 'added'   ? 'hook added' :
+                                 'hooks already present (use --force to update)';
+      console.log(`\n  ${mdLabel} · ${hkLabel}\n  ${projectRoot}\n`);
+      break;
+    }
 
     case 'start': {
       const projectRoot = findProjectRoot(process.cwd());
@@ -178,6 +196,8 @@ async function main(): Promise<void> {
 
     add <path>      Link another repo for cross-repo search (federation)
     remove [path]   Remove a federated repo link (or the whole project)
+    reinit          Re-inject PindeX section into CLAUDE.md
+    reinit --force  Replace existing section with current template
 
     setup           One-time global setup (autostart config)
     status          Show all registered projects and their status

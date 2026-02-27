@@ -398,7 +398,7 @@ function buildDashboardHtml(): string {
 
 <script>
 const fmt = n => n >= 1e6 ? (n/1e6).toFixed(1)+'M' : n >= 1e3 ? (n/1e3).toFixed(1)+'K' : String(n);
-const fmtDate = s => s ? new Date(s).toLocaleString() : '\u2014';
+const fmtDate = s => s ? new Date(s.includes('Z') || s.includes('+') ? s : s.replace(' ', 'T') + 'Z').toLocaleString() : '\u2014';
 let chart = null, currentProjects = [];
 let _modalSessions = [], _sessPage = 0;
 const SESS_PER_PAGE = 6;
