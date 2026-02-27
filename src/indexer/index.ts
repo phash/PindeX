@@ -3,7 +3,7 @@ import { join, relative, resolve } from 'node:path';
 import { glob } from 'glob';
 import type Database from 'better-sqlite3';
 import type { IndexResult } from '../types.js';
-import { parseFile, hashContent } from './parser.js';
+import { parseFile, parseDocument, hashContent } from './parser.js';
 import {
   upsertFile,
   upsertSymbol,
@@ -12,6 +12,8 @@ import {
   deleteDependenciesByFile,
   deleteUsagesByFile,
   getFileByPath,
+  insertDocumentChunk,
+  deleteDocumentChunksByFileId,
 } from '../db/queries.js';
 
 // ─── Default Configuration ────────────────────────────────────────────────────
@@ -33,6 +35,14 @@ const DEFAULT_PATTERNS = [
   '**/*.mjs',
 ];
 
+const DEFAULT_DOCUMENT_PATTERNS = [
+  '**/*.md',
+  '**/*.markdown',
+  '**/*.yaml',
+  '**/*.yml',
+  '**/*.txt',
+];
+
 // ─── Indexer Class ────────────────────────────────────────────────────────────
 
 export interface IndexerOptions {
@@ -41,6 +51,7 @@ export interface IndexerOptions {
   languages?: string[];
   ignorePatterns?: string[];
   generateSummaries?: boolean;
+  documentPatterns?: string[];
 }
 
 export interface IndexAllOptions {
@@ -58,29 +69,46 @@ export class Indexer {
   readonly projectRoot: string;
   private readonly ignorePatterns: string[];
   private readonly generateSummaries: boolean;
+  private readonly documentPatterns: string[];
 
   constructor(options: IndexerOptions) {
     this.db = options.db;
     this.projectRoot = resolve(options.projectRoot);
     this.ignorePatterns = options.ignorePatterns ?? DEFAULT_IGNORE;
     this.generateSummaries = options.generateSummaries ?? false;
+    this.documentPatterns = options.documentPatterns ?? DEFAULT_DOCUMENT_PATTERNS;
   }
 
-  /** Discovers and indexes all source files in the project root. */
+  /** Discovers and indexes all source files and document files in the project root. */
   async indexAll(options: IndexAllOptions = {}): Promise<IndexResult> {
     const result: IndexResult = { indexed: 0, updated: 0, skipped: 0, errors: [] };
 
-    const filePaths = await glob(DEFAULT_PATTERNS, {
-      cwd: this.projectRoot,
-      ignore: this.ignorePatterns,
-      absolute: false,
-    });
+    const [codePaths, docPaths] = await Promise.all([
+      glob(DEFAULT_PATTERNS, {
+        cwd: this.projectRoot,
+        ignore: this.ignorePatterns,
+        absolute: false,
+      }),
+      glob(this.documentPatterns, {
+        cwd: this.projectRoot,
+        ignore: this.ignorePatterns,
+        absolute: false,
+      }),
+    ]);
 
     // Include any additional paths requested
-    const allPaths = [...filePaths, ...(options.additionalPaths ?? [])];
+    const allCodePaths = [...codePaths, ...(options.additionalPaths ?? [])];
 
-    for (const relativePath of allPaths) {
+    for (const relativePath of allCodePaths) {
       const fileResult = await this.indexFile(relativePath, options.force);
+      if (fileResult.status === 'indexed') result.indexed++;
+      else if (fileResult.status === 'updated') result.updated++;
+      else if (fileResult.status === 'skipped') result.skipped++;
+      result.errors.push(...fileResult.errors);
+    }
+
+    for (const relativePath of docPaths) {
+      const fileResult = await this.indexDocument(relativePath, options.force);
       if (fileResult.status === 'indexed') result.indexed++;
       else if (fileResult.status === 'updated') result.updated++;
       else if (fileResult.status === 'skipped') result.skipped++;
@@ -164,6 +192,63 @@ export class Indexer {
         status: 'error',
         errors: [`Failed to index ${relativePath}: ${String(err)}`],
       };
+    }
+  }
+
+  /** Indexes (or re-indexes) a single document file given its project-relative path. */
+  async indexDocument(relativePath: string, force = false): Promise<IndexFileResult> {
+    const absolutePath = join(this.projectRoot, relativePath);
+
+    if (!existsSync(absolutePath)) {
+      return { status: 'error', errors: [`File not found: ${relativePath}`] };
+    }
+
+    let content: string;
+    try {
+      content = readFileSync(absolutePath, 'utf-8');
+    } catch (err) {
+      return { status: 'error', errors: [`Failed to read ${relativePath}: ${String(err)}`] };
+    }
+
+    const hash = hashContent(content);
+
+    if (!force) {
+      const existing = getFileByPath(this.db, relativePath);
+      if (existing && existing.hash === hash) {
+        return { status: 'skipped', errors: [] };
+      }
+    }
+
+    const isUpdate = getFileByPath(this.db, relativePath) !== null;
+
+    try {
+      const parsed = parseDocument(absolutePath, content);
+
+      upsertFile(this.db, {
+        path: relativePath,
+        language: parsed.language,
+        hash,
+        rawTokenEstimate: parsed.rawTokenEstimate,
+        summary: null,
+      });
+
+      const fileRecord = getFileByPath(this.db, relativePath)!;
+
+      deleteDocumentChunksByFileId(this.db, fileRecord.id);
+      for (const chunk of parsed.chunks) {
+        insertDocumentChunk(this.db, {
+          fileId: fileRecord.id,
+          chunkIndex: chunk.chunkIndex,
+          heading: chunk.heading,
+          startLine: chunk.startLine,
+          endLine: chunk.endLine,
+          content: chunk.content,
+        });
+      }
+
+      return { status: isUpdate ? 'updated' : 'indexed', errors: [] };
+    } catch (err) {
+      return { status: 'error', errors: [`Failed to index document ${relativePath}: ${String(err)}`] };
     }
   }
 

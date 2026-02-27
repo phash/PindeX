@@ -66,6 +66,25 @@ export interface SessionRecord {
   total_savings: number;
 }
 
+export interface DocumentChunkRecord {
+  id: number;
+  file_id: number;
+  chunk_index: number;
+  heading: string | null;
+  start_line: number;
+  end_line: number;
+  content: string;
+  summary: string | null;
+}
+
+export interface ContextEntryRecord {
+  id: number;
+  session_id: string;
+  content: string;
+  tags: string | null;
+  created_at: string;
+}
+
 // ─── Parser Types ─────────────────────────────────────────────────────────────
 
 /** Minimal AST node interface – compatible with tree-sitter SyntaxNode. */
@@ -100,6 +119,20 @@ export interface ParsedFile {
   language: string;
   symbols: ParsedSymbol[];
   imports: ParsedImport[];
+  rawTokenEstimate: number;
+}
+
+export interface DocumentChunk {
+  chunkIndex: number;
+  heading: string | null;
+  startLine: number;
+  endLine: number;
+  content: string;
+}
+
+export interface ParsedDocument {
+  language: string;
+  chunks: DocumentChunk[];
   rawTokenEstimate: number;
 }
 
@@ -229,6 +262,60 @@ export interface StartComparisonInput {
 export interface StartComparisonOutput {
   session_id: string;
   monitoring_url: string;
+}
+
+export interface SearchDocsInput {
+  query: string;
+  limit?: number;
+  type?: 'docs' | 'context' | 'all';
+}
+
+export interface DocSearchResult {
+  type: 'doc' | 'context';
+  id: number;
+  content_preview: string;
+  /** Present for type='doc' */
+  file?: string;
+  /** Present for type='doc' */
+  heading?: string | null;
+  /** Present for type='doc' */
+  start_line?: number;
+  /** Present for type='context' */
+  tags?: string | null;
+  /** Present for type='context' */
+  session_id?: string;
+  /** Present for type='context' */
+  created_at?: string;
+}
+
+export interface GetDocChunkInput {
+  file: string;
+  chunk_index?: number;
+}
+
+export interface DocChunk {
+  index: number;
+  heading: string | null;
+  start_line: number;
+  end_line: number;
+  content: string;
+}
+
+export interface GetDocChunkOutput {
+  file: string;
+  total_chunks: number;
+  chunks: DocChunk[];
+}
+
+export interface SaveContextInput {
+  content: string;
+  tags?: string;
+}
+
+export interface SaveContextOutput {
+  id: number;
+  session_id: string;
+  created_at: string;
 }
 
 // ─── Monitoring / WebSocket Event Types ──────────────────────────────────────

@@ -15,8 +15,13 @@ const migrations: Migration[] = [
       initSchema(db);
     },
   },
-  // Future migrations go here, e.g.:
-  // { version: 2, up: (db) => db.exec('ALTER TABLE files ADD COLUMN ...') },
+  {
+    version: 2,
+    up: (db) => {
+      // Document indexing: text chunks + saved context entries
+      initSchema(db);
+    },
+  },
 ];
 
 /** Returns the current schema version (0 for a fresh, unmigrated database). */

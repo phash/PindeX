@@ -14,6 +14,9 @@ import { getProjectOverview } from './tools/get_project_overview.js';
 import { reindex } from './tools/reindex.js';
 import { getTokenStats } from './tools/get_token_stats.js';
 import { startComparison } from './tools/start_comparison.js';
+import { searchDocs } from './tools/search_docs.js';
+import { getDocChunk } from './tools/get_doc_chunk.js';
+import { saveContext } from './tools/save_context.js';
 
 const TOOL_DEFINITIONS = [
   {
@@ -144,6 +147,50 @@ const TOOL_DEFINITIONS = [
       required: ['label', 'mode'],
     },
   },
+  {
+    name: 'search_docs',
+    description:
+      'Search indexed documents and saved context entries using full-text search. Covers markdown, yaml, txt files and any context snippets saved with save_context.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'Search query' },
+        limit: { type: 'number', description: 'Maximum results to return (default: 20)' },
+        type: {
+          type: 'string',
+          enum: ['docs', 'context', 'all'],
+          description: 'Filter by result type: file-based docs, saved context entries, or all (default: all)',
+        },
+      },
+      required: ['query'],
+    },
+  },
+  {
+    name: 'get_doc_chunk',
+    description:
+      'Retrieve the full content of a specific document chunk or all chunks of a file. More token-efficient than loading the entire file.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        file: { type: 'string', description: 'File path (project-relative)' },
+        chunk_index: { type: 'number', description: 'Specific chunk to retrieve (omit for all chunks)' },
+      },
+      required: ['file'],
+    },
+  },
+  {
+    name: 'save_context',
+    description:
+      'Save an important fact, decision, or snippet to the persistent context store. Retrievable across sessions via search_docs. Use this to offload information from the context window.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        content: { type: 'string', description: 'The content to save' },
+        tags: { type: 'string', description: 'Comma-separated tags for better retrieval (e.g. "auth,jwt,security")' },
+      },
+      required: ['content'],
+    },
+  },
 ];
 
 export interface FederatedDb {
@@ -156,6 +203,7 @@ export interface ServerOptions {
   monitoringPort?: number;
   baselineMode?: boolean;
   federatedDbs?: FederatedDb[];
+  sessionId?: string;
 }
 
 export function createMcpServer(
@@ -170,7 +218,7 @@ export function createMcpServer(
     { capabilities: { tools: {} } },
   );
 
-  const { projectRoot, monitoringPort = 7842, baselineMode = false, federatedDbs = [] } = options;
+  const { projectRoot, monitoringPort = 7842, baselineMode = false, federatedDbs = [], sessionId = 'default' } = options;
 
   // ─── List Tools ────────────────────────────────────────────────────────────
 
@@ -245,6 +293,22 @@ export function createMcpServer(
         }
         case 'start_comparison': {
           result = startComparison(db, a as unknown as Parameters<typeof startComparison>[1], monitoringPort);
+          break;
+        }
+        case 'search_docs': {
+          const r = searchDocs(db, a as unknown as Parameters<typeof searchDocs>[1]);
+          tokensWithoutIndex = estimateResponseTokens(r) * 8;
+          result = r;
+          break;
+        }
+        case 'get_doc_chunk': {
+          const r = getDocChunk(db, a as unknown as Parameters<typeof getDocChunk>[1]);
+          tokensWithoutIndex = r ? estimateResponseTokens(r) * 3 : 0;
+          result = r;
+          break;
+        }
+        case 'save_context': {
+          result = saveContext(db, sessionId, a as unknown as Parameters<typeof saveContext>[2]);
           break;
         }
         default:
