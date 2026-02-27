@@ -1,4 +1,4 @@
-import { writeFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { writeFileSync, existsSync, mkdirSync, readFileSync, appendFileSync } from 'node:fs';
 import { resolve, join, relative } from 'node:path';
 import {
   findProjectRoot,
@@ -44,6 +44,47 @@ export function writeMcpJson(
   writeFileSync(mcpJsonPath, JSON.stringify(config, null, 2) + '\n', 'utf-8');
 }
 
+// ─── CLAUDE.md injection ───────────────────────────────────────────────────
+
+const CLAUDE_MD_MARKER = '<!-- pindex -->';
+
+const CLAUDE_MD_SECTION = `
+## PindeX – Codebase Navigation
+
+Dieses Projekt ist mit PindeX indexiert. **Immer** \`mcp__pindex__*\` Tools für Codebase-Exploration verwenden:
+
+| Tool | Wann nutzen |
+|---|---|
+| \`mcp__pindex__get_file_summary\` | Datei-Überblick (Symbole, Imports, Exports) |
+| \`mcp__pindex__search_symbols\` | Symbole / Funktionen suchen |
+| \`mcp__pindex__get_symbol\` | Symbol-Details holen (Signatur, Ort, Dependencies) |
+| \`mcp__pindex__get_context\` | Gezielten Zeilenbereich lesen (token-effizient) |
+| \`mcp__pindex__find_usages\` | Alle Verwendungsstellen eines Symbols |
+| \`mcp__pindex__get_dependencies\` | Import-Graph einer Datei |
+| \`mcp__pindex__get_project_overview\` | Projektstruktur, Entry Points, Statistiken |
+
+**Fallback:** Falls ein Tool \`null\` zurückgibt → \`Read\`/\`Grep\` als Fallback nutzen.
+${CLAUDE_MD_MARKER}
+`;
+
+/**
+ * Appends the PindeX section to the project's CLAUDE.md (or creates the file).
+ * Idempotent: skips if the marker is already present.
+ */
+function injectClaudeMdSection(projectRoot: string): 'added' | 'skipped' | 'created' {
+  const claudeMdPath = join(projectRoot, 'CLAUDE.md');
+
+  if (existsSync(claudeMdPath)) {
+    const existing = readFileSync(claudeMdPath, 'utf-8');
+    if (existing.includes(CLAUDE_MD_MARKER)) return 'skipped';
+    appendFileSync(claudeMdPath, CLAUDE_MD_SECTION, 'utf-8');
+    return 'added';
+  } else {
+    writeFileSync(claudeMdPath, `# CLAUDE.md\n${CLAUDE_MD_SECTION}`, 'utf-8');
+    return 'created';
+  }
+}
+
 // ─── Init project ──────────────────────────────────────────────────────────
 
 /**
@@ -60,15 +101,21 @@ export async function initProject(cwd: string): Promise<void> {
   if (!existsSync(dbDir)) mkdirSync(dbDir, { recursive: true });
 
   writeMcpJson(projectRoot, entry);
+  const claudeResult = injectClaudeMdSection(projectRoot);
 
   const relPath = '.mcp.json';
+  const claudeStatus =
+    claudeResult === 'created' ? 'created' :
+    claudeResult === 'added'   ? 'section added' :
+                                 'already present';
   console.log('\n  ╔══════════════════════════════════════════╗');
   console.log('  ║           PindeX – Ready                 ║');
   console.log('  ╚══════════════════════════════════════════╝\n');
-  console.log(`  Project : ${projectRoot}`);
-  console.log(`  Index   : ~/.pindex/projects/${entry.hash}/index.db`);
-  console.log(`  Port    : ${entry.monitoringPort}`);
-  console.log(`  Config  : ${relPath} (written)\n`);
+  console.log(`  Project   : ${projectRoot}`);
+  console.log(`  Index     : ~/.pindex/projects/${entry.hash}/index.db`);
+  console.log(`  Port      : ${entry.monitoringPort}`);
+  console.log(`  Config    : ${relPath} (written)`);
+  console.log(`  CLAUDE.md : ${claudeStatus}\n`);
   console.log('  ── Next steps ─────────────────────────────');
   console.log('  1. Restart Claude Code in this directory');
   console.log('     Claude Code will pick up .mcp.json automatically.');
