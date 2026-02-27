@@ -1,5 +1,12 @@
 # PindeX – MCP Codebase Indexer
 
+## Workflow-Regeln für Claude
+
+### Commit & Push
+Wenn der User "commit", "push", "commit und push" o.ä. sagt:
+1. Versuche `Skill` mit `commit-commands:commit-push`
+2. Falls der Skill nicht verfügbar: direkt git-Befehle nutzen — nur relevante Dateien stagen (kein `.mcp.json`, `.claude/`, `dist/` außer explizit gewünscht), aussagekräftige Commit-Message im Stil der letzten Commits, dann `git push`
+
 MCP server that structurally indexes TypeScript/JavaScript codebases and provides targeted tools for 80–90% token reduction in AI-assisted coding sessions.
 
 ## Tech Stack
