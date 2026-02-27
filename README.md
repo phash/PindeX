@@ -72,10 +72,14 @@ Token savings are tracked per session and visible in a live web dashboard.
 
 ## Installation
 
-### Option A — Install globally from npm
+### Install globally from source
 
 ```bash
-npm install -g pindex
+git clone https://github.com/phash/PindeX.git
+cd PindeX
+npm install
+npm run build
+npm install -g .
 ```
 
 This makes three commands available globally:
@@ -86,16 +90,7 @@ This makes three commands available globally:
 | `pindex-server` | MCP stdio server (Claude Code spawns this automatically) |
 | `pindex-gui` | Aggregated dashboard for all projects |
 
-### Option B — Clone and build (development / local use)
-
-```bash
-git clone https://github.com/phash/PindeX.git
-cd PindeX
-npm install
-npm run build
-```
-
-The compiled server is at `dist/index.js`, the CLI at `dist/cli/index.js`, and the GUI at `dist/gui/index.js`.
+> **Note:** PindeX is not yet published on npm. Use `npm install -g .` from the cloned repo to install globally.
 
 ---
 
@@ -525,7 +520,8 @@ With federation (`pindex add /other/project`):
 **Step 1 — Install PindeX:**
 
 ```bash
-npm install -g pindex
+git clone https://github.com/phash/PindeX.git
+cd PindeX && npm install && npm run build && npm install -g .
 ```
 
 **Step 2 — Run `pindex` in your project** to get the assigned hash and port:
