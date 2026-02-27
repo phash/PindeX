@@ -83,9 +83,15 @@ export function startMonitoringServer(
     }
   });
 
-  httpServer.listen(port, () => {
-    // Server is running
+  httpServer.on('error', (err: NodeJS.ErrnoException) => {
+    if (err.code === 'EADDRINUSE') {
+      process.stderr.write(`[pindex] Monitoring port ${port} in use — monitoring disabled\n`);
+    } else {
+      process.stderr.write(`[pindex] Monitoring server error: ${err.message}\n`);
+    }
   });
+
+  httpServer.listen(port);
 
   const broadcast = (event: MonitoringEvent): void => {
     emitter.emit('event', event);

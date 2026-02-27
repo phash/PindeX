@@ -165,7 +165,7 @@ export function createGuiApp(): express.Application {
 
     // Check monitoring ports in parallel to detect running pindex-server instances
     const running = await Promise.all(
-      entries.map((e) => isPortListening(e.monitoringPort))
+      entries.map((e) => isPortListening(e.monitoringPort).catch(() => false))
     );
 
     const stats: ProjectStats[] = baseStats.map((s, i) => ({
@@ -199,27 +199,33 @@ export interface GuiServer {
   close(): Promise<void>;
 }
 
-export function startGuiServer(port: number): GuiServer {
-  const app = createGuiApp();
-  const httpServer = createServer(app);
+export interface GuiServerWithPort extends GuiServer {
+  port: number;
+}
 
-  httpServer.on('error', (err: NodeJS.ErrnoException) => {
-    if (err.code === 'EADDRINUSE') {
-      console.error(`  [pindex-gui] Port ${port} is already in use. Try: GUI_PORT=<other> pindex-gui`);
-    } else {
-      console.error(`  [pindex-gui] Server error: ${err.message}`);
-    }
-    // Don't crash — log and keep running (other connections still work)
+export function startGuiServer(port: number): Promise<GuiServerWithPort> {
+  return new Promise((resolve, reject) => {
+    const app = createGuiApp();
+    const httpServer = createServer(app);
+
+    httpServer.once('listening', () => {
+      resolve({
+        httpServer,
+        port,
+        close: () =>
+          new Promise<void>((res, rej) =>
+            httpServer.close((err) => (err ? rej(err) : res())),
+          ),
+      });
+    });
+
+    httpServer.once('error', (err: NodeJS.ErrnoException) => {
+      httpServer.close();
+      reject(err);
+    });
+
+    httpServer.listen(port);
   });
-
-  httpServer.listen(port);
-  return {
-    httpServer,
-    close: () =>
-      new Promise<void>((resolve, reject) =>
-        httpServer.close((err) => (err ? reject(err) : resolve())),
-      ),
-  };
 }
 
 // ─── Inline Dashboard HTML ─────────────────────────────────────────────────
@@ -234,7 +240,7 @@ function buildDashboardHtml(): string {
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>PindeX Dashboard</title>
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"><\/script>
+  <script async src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"><\/script>
   <style>
     :root{--bg:#0d1117;--surface:#161b22;--border:#30363d;--text:#c9d1d9;--muted:#8b949e;--accent:#58a6ff;--green:#3fb950;--red:#f85149}
     *{box-sizing:border-box;margin:0;padding:0}
@@ -339,31 +345,34 @@ const fmtDate = s => s ? new Date(s).toLocaleString() : '\u2014';
 let chart = null, currentProjects = [];
 
 function updateChart(projects) {
-  const labels = projects.map(p => p.entry.name);
-  const saved  = projects.map(p => p.totalTokensSaved);
-  const used   = projects.map(p => p.totalTokensActual);
-  if (chart) {
-    chart.data.labels = labels;
-    chart.data.datasets[0].data = saved;
-    chart.data.datasets[1].data = used;
-    chart.update('none');
-  } else {
-    chart = new Chart(document.getElementById('chart').getContext('2d'), {
-      type: 'bar',
-      data: { labels, datasets: [
-        { label: 'Tokens Saved', data: saved, backgroundColor: '#3fb95099' },
-        { label: 'Tokens Used',  data: used,  backgroundColor: '#58a6ff99' },
-      ]},
-      options: {
-        responsive: true, animation: false,
-        plugins: { legend: { labels: { color: '#c9d1d9' } } },
-        scales: {
-          x: { ticks: { color: '#8b949e' }, grid: { color: '#30363d' } },
-          y: { ticks: { color: '#8b949e' }, grid: { color: '#30363d' } }
+  if (typeof Chart === 'undefined') return;
+  try {
+    const labels = projects.map(p => p.entry.name);
+    const saved  = projects.map(p => p.totalTokensSaved);
+    const used   = projects.map(p => p.totalTokensActual);
+    if (chart) {
+      chart.data.labels = labels;
+      chart.data.datasets[0].data = saved;
+      chart.data.datasets[1].data = used;
+      chart.update('none');
+    } else {
+      chart = new Chart(document.getElementById('chart').getContext('2d'), {
+        type: 'bar',
+        data: { labels, datasets: [
+          { label: 'Tokens Saved', data: saved, backgroundColor: '#3fb95099' },
+          { label: 'Tokens Used',  data: used,  backgroundColor: '#58a6ff99' },
+        ]},
+        options: {
+          responsive: true, animation: false,
+          plugins: { legend: { labels: { color: '#c9d1d9' } } },
+          scales: {
+            x: { ticks: { color: '#8b949e' }, grid: { color: '#30363d' } },
+            y: { ticks: { color: '#8b949e' }, grid: { color: '#30363d' } }
+          }
         }
-      }
-    });
-  }
+      });
+    }
+  } catch(e) { console.warn('Chart update failed:', e); }
 }
 
 async function load() {
@@ -474,7 +483,7 @@ function renderOv(proj, detail) {
   infoA.appendChild(el('strong', '', 'How savings are calculated'));
   infoA.appendChild(document.createTextNode(' Each MCP tool call estimates how many tokens Claude would have needed without the index \u2014 e.g. reading entire source files to find a function. The actual tokens consumed by targeted PindeX queries are subtracted from this estimate.'));
   const formula = el('div', 'formula');
-  formula.textContent = 'saved = tokens_without_index \u2212 tokens_used\nrate  = saved / tokens_without_index \u00d7 100';
+  formula.textContent = 'saved = tokens_without_index \u2212 tokens_used\\nrate  = saved / tokens_without_index \u00d7 100';
   infoA.appendChild(formula);
   panel.appendChild(infoA);
 

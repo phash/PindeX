@@ -5,11 +5,32 @@
  */
 import { startGuiServer } from './server.js';
 
-const port = parseInt(process.env.GUI_PORT ?? '7842', 10);
+const portArgIdx = process.argv.indexOf('--port');
+const BASE_PORT = portArgIdx !== -1 && process.argv[portArgIdx + 1]
+  ? parseInt(process.argv[portArgIdx + 1], 10)
+  : parseInt(process.env.GUI_PORT ?? '7842', 10);
 
 async function main(): Promise<void> {
-  startGuiServer(port);
+  let server: Awaited<ReturnType<typeof startGuiServer>> | null = null;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const tryPort = BASE_PORT + attempt;
+    try {
+      server = await startGuiServer(tryPort);
+      break;
+    } catch (err: unknown) {
+      if ((err as NodeJS.ErrnoException).code === 'EADDRINUSE') {
+        if (attempt === 4) {
+          console.error(`  [pindex-gui] No free port found (tried ${BASE_PORT}–${BASE_PORT + 4}). Set GUI_PORT=<port> to override.`);
+          process.exit(1);
+        }
+        console.error(`  [pindex-gui] Port ${tryPort} in use, trying ${tryPort + 1}…`);
+        continue;
+      }
+      throw err;
+    }
+  }
 
+  const port = server!.port;
   console.log(`\n  PindeX Dashboard  →  http://localhost:${port}\n`);
 
   try {
