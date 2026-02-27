@@ -26,14 +26,43 @@ const DEFAULT_IGNORE = [
   '**/.next/**',
   '**/*.min.js',
   '**/*.d.ts',
+  // Java / Kotlin build artifacts
+  '**/target/**',
+  '**/.gradle/**',
+  '**/out/**',
+  // Python
+  '**/__pycache__/**',
+  '**/*.pyc',
+  '**/.venv/**',
+  '**/venv/**',
+  // PHP
+  '**/vendor/**',
 ];
 
-const DEFAULT_PATTERNS = [
-  '**/*.ts',
-  '**/*.tsx',
-  '**/*.js',
-  '**/*.mjs',
-];
+/** Glob patterns per language name (as used in EXTENSION_MAP). */
+const LANGUAGE_PATTERNS: Record<string, string[]> = {
+  typescript:  ['**/*.ts', '**/*.tsx'],
+  javascript:  ['**/*.js', '**/*.mjs', '**/*.cjs', '**/*.jsx'],
+  java:        ['**/*.java'],
+  kotlin:      ['**/*.kt', '**/*.kts'],
+  python:      ['**/*.py'],
+  vue:         ['**/*.vue'],
+  svelte:      ['**/*.svelte'],
+  php:         ['**/*.php'],
+  ruby:        ['**/*.rb'],
+  csharp:      ['**/*.cs'],
+};
+
+const DEFAULT_LANGUAGES = ['typescript', 'javascript'];
+
+/** Builds the set of glob patterns for the given language list. */
+function buildCodePatterns(languages: string[]): string[] {
+  const patterns = new Set<string>();
+  for (const lang of languages) {
+    for (const p of LANGUAGE_PATTERNS[lang] ?? []) patterns.add(p);
+  }
+  return [...patterns];
+}
 
 const DEFAULT_DOCUMENT_PATTERNS = [
   '**/*.md',
@@ -67,6 +96,7 @@ export interface IndexFileResult {
 export class Indexer {
   private readonly db: Database.Database;
   readonly projectRoot: string;
+  private readonly languages: string[];
   private readonly ignorePatterns: string[];
   private readonly generateSummaries: boolean;
   private readonly documentPatterns: string[];
@@ -74,6 +104,7 @@ export class Indexer {
   constructor(options: IndexerOptions) {
     this.db = options.db;
     this.projectRoot = resolve(options.projectRoot);
+    this.languages = options.languages ?? DEFAULT_LANGUAGES;
     this.ignorePatterns = options.ignorePatterns ?? DEFAULT_IGNORE;
     this.generateSummaries = options.generateSummaries ?? false;
     this.documentPatterns = options.documentPatterns ?? DEFAULT_DOCUMENT_PATTERNS;
@@ -82,9 +113,10 @@ export class Indexer {
   /** Discovers and indexes all source files and document files in the project root. */
   async indexAll(options: IndexAllOptions = {}): Promise<IndexResult> {
     const result: IndexResult = { indexed: 0, updated: 0, skipped: 0, errors: [] };
+    const codePatterns = buildCodePatterns(this.languages);
 
     const [codePaths, docPaths] = await Promise.all([
-      glob(DEFAULT_PATTERNS, {
+      glob(codePatterns, {
         cwd: this.projectRoot,
         ignore: this.ignorePatterns,
         absolute: false,
