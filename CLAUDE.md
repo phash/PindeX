@@ -7,6 +7,16 @@ Wenn der User "commit", "push", "commit und push" o.ä. sagt:
 1. Versuche `Skill` mit `commit-commands:commit-push`
 2. Falls der Skill nicht verfügbar: direkt git-Befehle nutzen — nur relevante Dateien stagen (kein `.mcp.json`, `.claude/`, `dist/` außer explizit gewünscht), aussagekräftige Commit-Message im Stil der letzten Commits, dann `git push`
 
+### PindeX-Tools nutzen
+- **Immer** `mcp__pindex__*` Tools für Codebase-Exploration verwenden
+- Pfade an die Tools immer mit Forward-Slashes übergeben (z.B. `src/gui/server.ts`)
+- Falls `get_file_summary` / `get_context` null zurückgeben → MCP-Server wurde noch nicht neu gestartet nach einem Build; dann `Read`/`Grep` als Fallback nutzen
+- Nach jedem `npm run build`: Claude Code neu starten damit der neue MCP-Server aktiv wird
+
+### Offene Features / Pending Work
+- `.claude/session-feature.md` — vollständiger Plan für das Session-Feature im GUI-Dashboard
+  (Recent Sessions 2×6 Grid + Sessions-Tab im Modal)
+
 MCP server that structurally indexes TypeScript/JavaScript codebases and provides targeted tools for 80–90% token reduction in AI-assisted coding sessions.
 
 ## Tech Stack
