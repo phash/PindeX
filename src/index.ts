@@ -7,6 +7,7 @@ import { FileWatcher } from './indexer/watcher.js';
 import { startMonitoringServer } from './monitoring/server.js';
 import { TokenLogger } from './monitoring/token-logger.js';
 import { createMcpServer } from './server.js';
+import { createSession } from './db/queries.js';
 import { getProjectIndexPath } from './cli/project-detector.js';
 import { EventEmitter } from 'node:events';
 import { v4 as uuidv4 } from 'uuid';
@@ -67,6 +68,7 @@ async function main(): Promise<void> {
 
   // 5. Set up token logger for the current session
   const sessionId = uuidv4();
+  createSession(db, { id: sessionId, mode: BASELINE_MODE ? 'baseline' : 'indexed', label: null });
   const tokenLogger = new TokenLogger({ db, sessionId, emitter });
 
   // 6. Start file watcher
