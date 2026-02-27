@@ -103,7 +103,8 @@ async function main(): Promise<void> {
       const db = openDatabase(dbPath);
       runMigrations(db);
 
-      const indexer = new Indexer({ db, projectRoot: targetPath });
+      const languages = process.env.LANGUAGES?.split(',').map((l) => l.trim()).filter(Boolean);
+      const indexer = new Indexer({ db, projectRoot: targetPath, languages });
       const result = await indexer.indexAll({ force });
       await indexer.resolveDependencies();
 
