@@ -71,6 +71,7 @@ export function startMonitoringServer(
   const app = createMonitoringApp(db);
   const httpServer = createServer(app);
   const wss = new WebSocketServer({ server: httpServer });
+  wss.on('error', () => { /* suppressed — httpServer error handler covers this */ });
   const emitter = new EventEmitter();
 
   // Forward events from emitter to all WebSocket clients
