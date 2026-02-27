@@ -329,6 +329,78 @@ function parsePhp(content: string): { symbols: ParsedSymbol[]; imports: ParsedIm
   return { symbols, imports };
 }
 
+function parseRuby(content: string): { symbols: ParsedSymbol[]; imports: ParsedImport[] } {
+  const symbols = regexSymbols(content, [
+    { re: /^[ \t]*(?:(?:module|class)\s+(\w+))/gm, kind: 'class' },
+    { re: /^[ \t]*def\s+(?:self\.)?(\w+[?!]?)/gm, kind: 'method' },
+  ]);
+  const imports: ParsedImport[] = [];
+  const requireRe = /^[ \t]*require(?:_relative)?\s+['"]([^'"]+)['"]/gm;
+  let m: RegExpExecArray | null;
+  while ((m = requireRe.exec(content)) !== null) {
+    imports.push({ source: m[1], symbols: [] });
+  }
+  return { symbols, imports };
+}
+
+function parseCsharp(content: string): { symbols: ParsedSymbol[]; imports: ParsedImport[] } {
+  const symbols = regexSymbols(content, [
+    { re: /^[ \t]*(?:(?:public|private|protected|internal|static|abstract|sealed|partial|readonly)\s+)*(?:class|interface|struct|enum|record)\s+(\w+)/gm, kind: 'class' },
+    { re: /^[ \t]*(?:(?:public|private|protected|internal|static|abstract|virtual|override|async|extern|sealed|new)\s+)*(?:<[^>]+>\s+)?[\w\[\]<>?,\s]+\s+(\w+)\s*\(/gm, kind: 'method' },
+  ]);
+  const imports: ParsedImport[] = [];
+  const usingRe = /^using(?:\s+static)?\s+([\w.]+);/gm;
+  let m: RegExpExecArray | null;
+  while ((m = usingRe.exec(content)) !== null) {
+    const parts = m[1].split('.');
+    const sym = parts.pop() ?? '';
+    imports.push({ source: parts.join('.'), symbols: [sym] });
+  }
+  return { symbols, imports };
+}
+
+function parseGo(content: string): { symbols: ParsedSymbol[]; imports: ParsedImport[] } {
+  const symbols = regexSymbols(content, [
+    { re: /^type\s+(\w+)\s+(?:struct|interface)/gm, kind: 'class' },
+    { re: /^func\s+(?:\([^)]+\)\s+)?(\w+)\s*[(<[]/gm, kind: 'function' },
+  ]);
+  const imports: ParsedImport[] = [];
+  // Single import: import "pkg"
+  const singleRe = /^import\s+"([^"]+)"/gm;
+  // Block import: import ( "pkg" )
+  const blockRe = /"([^"]+)"/gm;
+  const blockMatch = /^import\s*\(([^)]+)\)/gm;
+  let m: RegExpExecArray | null;
+  while ((m = singleRe.exec(content)) !== null) {
+    imports.push({ source: m[1], symbols: [] });
+  }
+  let block: RegExpExecArray | null;
+  while ((block = blockMatch.exec(content)) !== null) {
+    const inner = block[1];
+    blockRe.lastIndex = 0;
+    let bm: RegExpExecArray | null;
+    while ((bm = blockRe.exec(inner)) !== null) {
+      imports.push({ source: bm[1], symbols: [] });
+    }
+  }
+  return { symbols, imports };
+}
+
+function parseRust(content: string): { symbols: ParsedSymbol[]; imports: ParsedImport[] } {
+  const symbols = regexSymbols(content, [
+    { re: /^(?:pub(?:\([^)]+\))?\s+)?(?:struct|enum|trait|union)\s+(\w+)/gm, kind: 'class' },
+    { re: /^(?:pub(?:\([^)]+\))?\s+)?(?:async\s+)?fn\s+(\w+)/gm, kind: 'function' },
+    { re: /^(?:pub(?:\([^)]+\))?\s+)?(?:type|const|static)\s+(\w+)/gm, kind: 'variable' },
+  ]);
+  const imports: ParsedImport[] = [];
+  const useRe = /^use\s+([\w:*{}]+(?:::\{[^}]+\})?)\s*;/gm;
+  let m: RegExpExecArray | null;
+  while ((m = useRe.exec(content)) !== null) {
+    imports.push({ source: m[1], symbols: [] });
+  }
+  return { symbols, imports };
+}
+
 /** Extracts the script block content from a Vue or Svelte SFC. */
 function extractSfcScript(content: string): string {
   const m = /<script(?:\s[^>]*)?>([^]*?)<\/script>/i.exec(content);
@@ -365,6 +437,22 @@ export function parseFile(filePath: string, content: string): ParsedFile {
     }
     if (language === 'php') {
       const { symbols, imports } = parsePhp(content);
+      return { language, symbols, imports, rawTokenEstimate };
+    }
+    if (language === 'ruby') {
+      const { symbols, imports } = parseRuby(content);
+      return { language, symbols, imports, rawTokenEstimate };
+    }
+    if (language === 'csharp') {
+      const { symbols, imports } = parseCsharp(content);
+      return { language, symbols, imports, rawTokenEstimate };
+    }
+    if (language === 'go') {
+      const { symbols, imports } = parseGo(content);
+      return { language, symbols, imports, rawTokenEstimate };
+    }
+    if (language === 'rust') {
+      const { symbols, imports } = parseRust(content);
       return { language, symbols, imports, rawTokenEstimate };
     }
     if (language === 'vue' || language === 'svelte') {
