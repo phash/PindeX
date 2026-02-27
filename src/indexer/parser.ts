@@ -286,10 +286,12 @@ function splitMarkdownByHeadings(lines: string[]): DocumentChunk[] {
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     const headingMatch = /^#{1,3}\s+(.+)$/.exec(line);
-    if (headingMatch && i > chunkStart) {
-      flush(i); // end previous chunk before heading
-      chunkStart = i;
-      currentHeading = headingMatch[1].trim();
+    if (headingMatch) {
+      if (i > chunkStart) {
+        flush(i); // end previous chunk before heading
+        chunkStart = i;
+      }
+      currentHeading = headingMatch[1].trim(); // always capture heading, even at line 0
     }
     chunkLines.push(line);
   }

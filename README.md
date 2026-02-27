@@ -2,7 +2,7 @@
 
 **Structural codebase indexing for AI coding assistants — 80–90% fewer tokens per session.**
 
-PindeX is an [MCP (Model Context Protocol)](https://modelcontextprotocol.io) server that parses your TypeScript/JavaScript project with `tree-sitter`, stores symbols, imports, and dependency graphs in a local SQLite database, and exposes 10 targeted tools so AI assistants can answer questions about your code without reading entire files.
+PindeX is an [MCP (Model Context Protocol)](https://modelcontextprotocol.io) server that parses your TypeScript/JavaScript project with `tree-sitter`, stores symbols, imports, and dependency graphs in a local SQLite database, and exposes 13 targeted tools so AI assistants can answer questions about your code — and your documentation — without reading entire files.
 
 ---
 
@@ -14,6 +14,8 @@ PindeX is an [MCP (Model Context Protocol)](https://modelcontextprotocol.io) ser
 - [Quick Start](#quick-start)
 - [Multi-Project & Federation](#multi-project--federation)
 - [MCP Tools](#mcp-tools)
+  - [Code tools](#code-tools)
+  - [Document & context tools](#document--context-tools)
 - [Environment Variables](#environment-variables)
 - [Integrations](#integrations)
   - [Claude Code](#claude-code)
@@ -30,22 +32,28 @@ PindeX is an [MCP (Model Context Protocol)](https://modelcontextprotocol.io) ser
 ```
 Your project files
        │
-       ▼
-  tree-sitter AST          MD5 hash → skip unchanged files
-       │
-       ▼
+       ├── .ts/.js  ──►  tree-sitter AST  ──►  symbols, imports, dependencies
+       │                                              │
+       └── .md/.yaml/.txt  ──►  chunker  ──────────► documents (heading/line chunks)
+                                                      │
+  Claude calls save_context(…)  ──────────────────► context_entries
+                                                      │
+                                                      ▼
   SQLite (FTS5)  ← stored in ~/.pindex/projects/{hash}/index.db
-  ├── files          (path, hash, token estimate)
-  ├── symbols        (name, kind, signature, lines)
-  ├── dependencies   (import graph)
-  ├── usages         (symbol → call sites)
-  └── token_log      (per-session metrics)
+  ├── files            (path, hash, language, token estimate)
+  ├── symbols          (name, kind, signature, lines)       ─► search_symbols
+  ├── dependencies     (import graph)                       ─► get_dependencies
+  ├── usages           (symbol → call sites)                ─► find_usages
+  ├── documents        (text chunks from .md/.yaml/.txt)    ─► search_docs
+  ├── context_entries  (notes saved by Claude mid-session)  ─► search_docs
+  └── token_log        (per-session metrics)
        │
        ▼
-  10 MCP tools  ──── stdio ────► Claude Code / Goose / any MCP client
+  13 MCP tools  ──── stdio ────► Claude Code / Goose / any MCP client
 ```
 
-Instead of sending full file contents to the AI, PindeX lets it call `search_symbols`, `get_context`, or `get_file_summary` — returning only what it actually needs.
+Instead of sending full file contents to the AI, PindeX lets it call `search_symbols`, `search_docs`, `get_context`, or `get_file_summary` — returning only what it actually needs.
+Claude can also persist important facts across sessions with `save_context`, then retrieve them later with `search_docs` instead of re-reading large files.
 Token savings are tracked per session and visible in a live web dashboard.
 
 ---
@@ -138,6 +146,11 @@ get_file_summary("src/auth/service.ts")
 get_context("src/auth/service.ts", 42, 20)
 find_usages("validateToken")
 get_dependencies("src/api/routes.ts", "both")
+
+# Documentation and context memory:
+search_docs("authentication JWT")          # search CLAUDE.md, README.md, …
+get_doc_chunk("CLAUDE.md", 2)             # read one section only
+save_context("Decision: use JWT …", "auth")  # store for future sessions
 ```
 
 ### 4. Open the dashboard
@@ -210,7 +223,9 @@ pindex status
 
 ## MCP Tools
 
-All 10 tools are available over stdio transport.
+All 13 tools are available over stdio transport.
+
+### Code tools
 
 ### `search_symbols`
 
@@ -336,6 +351,97 @@ Create a labelled A/B testing session to compare indexed vs. baseline token usag
 
 ---
 
+### Document & context tools
+
+These three tools extend PindeX beyond code: documentation files are indexed automatically alongside source files, and Claude can persist notes to a persistent knowledge store.
+
+**What gets indexed as documents:**
+
+| File type | Chunking strategy |
+|---|---|
+| `.md` / `.markdown` | Split at `#` / `##` / `###` heading boundaries — each section is one chunk |
+| `.yaml` / `.yml` | Fixed 50-line chunks |
+| `.txt` | Fixed 50-line chunks |
+
+Documents are discovered by `indexAll()` and kept in sync by the same MD5-hash incremental indexer used for code files.
+
+---
+
+### `search_docs`
+
+Full-text search (FTS5) across indexed document chunks **and** saved context entries.
+Use this instead of loading entire documentation files.
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `query` | string | ✓ | Search term |
+| `limit` | number | | Max results (default: 20) |
+| `type` | `"docs"` \| `"context"` \| `"all"` | | Filter by source (default: `"all"`) |
+
+**Returns:** List of matches, each with:
+- `type` — `"doc"` (from a file) or `"context"` (saved by Claude)
+- `content_preview` — first 200 characters of the chunk
+- `file`, `heading`, `start_line` — for `"doc"` results, enables precise navigation
+- `tags`, `session_id`, `created_at` — for `"context"` results
+
+---
+
+### `get_doc_chunk`
+
+Retrieve the full content of one or all chunks of an indexed document.
+More token-efficient than `get_context` for large documentation files because it returns pre-segmented sections.
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `file` | string | ✓ | File path (project-relative) |
+| `chunk_index` | number | | Specific chunk to retrieve — omit for all chunks |
+
+**Returns:** `{ file, total_chunks, chunks: [{ index, heading, start_line, end_line, content }] }`
+
+**Typical workflow:**
+
+```
+search_docs("authentication JWT")
+→ { file: "CLAUDE.md", heading: "Authentication", start_line: 12, chunk_index: 2 }
+
+get_doc_chunk("CLAUDE.md", 2)
+→ full text of the Authentication section only
+```
+
+---
+
+### `save_context`
+
+Persist an important fact, decision, or snippet to the context store.
+Entries are searchable across all future sessions via `search_docs`.
+
+Use this to offload information from the context window — instead of keeping a long summary in the prompt, write it once and retrieve it on demand.
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `content` | string | ✓ | The text to store |
+| `tags` | string | | Comma-separated keywords for better retrieval (e.g. `"auth,jwt,security"`) |
+
+**Returns:** `{ id, session_id, created_at }`
+
+**Example — saving a decision:**
+
+```
+save_context(
+  "JWT expiry: access=1h, refresh=7d. Refresh stored in Redis. See src/auth/tokens.ts.",
+  "auth,jwt,redis"
+)
+```
+
+**Example — retrieving it in a later session:**
+
+```
+search_docs("JWT expiry", type: "context")
+→ { content_preview: "JWT expiry: access=1h, refresh=7d …", tags: "auth,jwt,redis" }
+```
+
+---
+
 ## Environment Variables
 
 These are set automatically in the generated `.mcp.json` — you rarely need to change them by hand.
@@ -352,6 +458,7 @@ These are set automatically in the generated `.mcp.json` — you rarely need to 
 | `GENERATE_SUMMARIES` | `false` | Generate LLM summaries per symbol (stub — not yet wired) |
 | `TOKEN_PRICE_PER_MILLION` | `3.00` | USD price per million tokens — used for cost estimates |
 | `FEDERATION_REPOS` | _(empty)_ | Colon-separated absolute paths to linked repositories |
+| `DOCUMENT_PATTERNS` | `**/*.md,**/*.markdown,**/*.yaml,**/*.yml,**/*.txt` | Glob patterns for document files to index alongside code |
 
 ---
 
@@ -581,10 +688,12 @@ tests/
 ├── helpers/              # createTestDb(), fixtures, test server
 ├── db/                   # schema, migrations, queries
 ├── indexer/              # parser, indexer, watcher
-├── tools/                # one file per MCP tool
+├── tools/                # one file per MCP tool (13 total)
 ├── monitoring/           # estimator, token-logger, Express server
 ├── cli/                  # project-detector, setup, daemon
-└── integration/          # end-to-end MCP server tests
+└── integration/
+    ├── mcp-server.test.ts   # MCP server wiring smoke tests
+    └── doc-indexing.test.ts # full document + context memory workflow
 ```
 
 ---
@@ -594,23 +703,23 @@ tests/
 ```
 src/
 ├── index.ts                  # Entry point — MCP stdio server + FEDERATION_REPOS
-├── server.ts                 # Tool registration (10 tools, FederatedDb interface)
+├── server.ts                 # Tool registration (13 tools, FederatedDb interface)
 ├── types.ts                  # Shared TypeScript interfaces
 │
 ├── db/
-│   ├── schema.ts             # SQLite schema + FTS5 virtual table + triggers
+│   ├── schema.ts             # SQLite schema + FTS5 tables + triggers (v2)
 │   ├── queries.ts            # Typed query helpers
 │   ├── database.ts           # Connection management
 │   └── migrations.ts         # Schema versioning (PRAGMA user_version)
 │
 ├── indexer/
-│   ├── index.ts              # Orchestrator — file discovery, incremental hashing
-│   ├── parser.ts             # tree-sitter AST → symbols + imports
+│   ├── index.ts              # Orchestrator — code + document file discovery
+│   ├── parser.ts             # tree-sitter AST → symbols; text → doc chunks
 │   ├── summarizer.ts         # LLM summary stub (not yet active)
 │   └── watcher.ts            # chokidar file watcher → auto-reindex
 │
 ├── tools/                    # One file per MCP tool
-│   ├── search_symbols.ts     # FTS5 search — supports federated DBs
+│   ├── search_symbols.ts     # FTS5 symbol search — supports federated DBs
 │   ├── get_symbol.ts
 │   ├── get_context.ts
 │   ├── get_file_summary.ts
@@ -619,7 +728,10 @@ src/
 │   ├── get_project_overview.ts  # federation-aware stats
 │   ├── reindex.ts
 │   ├── get_token_stats.ts
-│   └── start_comparison.ts
+│   ├── start_comparison.ts
+│   ├── search_docs.ts        # FTS5 across documents + context entries
+│   ├── get_doc_chunk.ts      # retrieve specific document section(s)
+│   └── save_context.ts       # persist a fact/decision to context store
 │
 ├── monitoring/
 │   ├── server.ts             # Express + WebSocket (per-project instance)
@@ -642,8 +754,10 @@ src/
 ### Key implementation notes
 
 - **ES Modules** — all relative imports use `.js` extensions (TypeScript ESM / NodeNext resolution).
-- **FTS5 sync** — kept in sync by SQLite `AFTER INSERT/UPDATE/DELETE` triggers; no application-level bookkeeping needed.
-- **Incremental reindexing** — MD5 hash per file; unchanged files are skipped on every startup and watch event.
+- **FTS5 sync** — `symbols`, `documents`, and `context_entries` are all kept in sync by SQLite `AFTER INSERT/UPDATE/DELETE` triggers; no application-level bookkeeping needed.
+- **Incremental reindexing** — MD5 hash per file; unchanged files are skipped for both code and document indexing.
+- **Document chunking** — markdown splits at `#`/`##`/`###` heading boundaries; all other text files use fixed 50-line windows. Empty chunks are filtered out before storage.
+- **Context memory** — `save_context` writes to `context_entries` keyed by `session_id`. Entries are never scoped to a single session — `search_docs` always searches the full history, enabling cross-session knowledge retrieval.
 - **Live context** — `get_context` reads from disk at call time so it always returns the current file state, not a stale cache.
 - **Testability** — `createMonitoringApp()` (returns the Express `app`) and `startMonitoringServer()` (binds the HTTP/WebSocket server) are separate functions so tests can mount the app without binding a port.
 - **Per-project ports** — assigned deterministically as `7842 + (parseInt(hash.slice(0,4), 16) % 2000)` and stored in `registry.json` so they never change.
