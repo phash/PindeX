@@ -1,15 +1,14 @@
 {
   "mcpServers": {
-    "codebase-indexer": {
-      "command": "node",
-      "args": ["./node_modules/.bin/pindex-server"],
+    "pindex": {
+      "command": "pindex-server",
+      "args": [],
       "env": {
-        "INDEX_PATH": "./.codebase-index/index.db",
-        "PROJECT_ROOT": ".",
-        "LANGUAGES": "typescript,javascript",
+        "PROJECT_ROOT": "E:\\claude\\PindeX",
+        "INDEX_PATH": "C:\\Users\\manue\\.pindex\\projects\\ac04933d\\index.db",
+        "MONITORING_PORT": "7878",
         "AUTO_REINDEX": "true",
         "GENERATE_SUMMARIES": "false",
-        "MONITORING_PORT": "7842",
         "MONITORING_AUTO_OPEN": "false",
         "BASELINE_MODE": "false",
         "TOKEN_PRICE_PER_MILLION": "3.00"

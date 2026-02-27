@@ -17,8 +17,9 @@ export async function reindex(
     };
   }
 
-  // Re-index everything (force=false to use hash-based skipping)
-  const result = await indexer.indexAll();
+  // Re-index everything (force=true — explicit reindex should always re-parse,
+  // otherwise hash-based skipping would leave previously-failed files untouched)
+  const result = await indexer.indexAll({ force: true });
   await indexer.resolveDependencies();
 
   return {

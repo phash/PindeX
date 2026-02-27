@@ -1,6 +1,12 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import type { AstNode, ParsedFile, ParsedSymbol, ParsedImport, SymbolKind, ParsedDocument, DocumentChunk } from '../types.js';
+
+// CJS require wrapper — needed because tree-sitter ships as CommonJS but this
+// package uses ESM ("type": "module"). createRequire gives us a proper require
+// that also works with vi.mock() in Vitest (same module cache is used).
+const _require = createRequire(import.meta.url);
 
 // ─── Language Detection ───────────────────────────────────────────────────────
 
@@ -233,15 +239,15 @@ export function parseFile(filePath: string, content: string): ParsedFile {
   const rawTokenEstimate = estimateTokens(content);
 
   try {
-    // Dynamic import to allow mocking in tests
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const Parser = require('tree-sitter');
+    // _require is a createRequire-based CJS loader (see top of file).
+    // Using _require keeps vi.mock('tree-sitter') working in Vitest because
+    // both createRequire and vi.mock share the same Node module cache.
+    const Parser = _require('tree-sitter') as { new(): { setLanguage(l: unknown): void; parse(s: string): { rootNode: AstNode } } };
     const parser = new Parser();
 
     let lang: unknown;
     if (language === 'typescript' || language === 'tsx') {
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const tsLangs = require('tree-sitter-typescript');
+      const tsLangs = _require('tree-sitter-typescript') as { typescript: unknown; tsx: unknown };
       lang = language === 'tsx' ? tsLangs.tsx : tsLangs.typescript;
     } else {
       return { language, symbols: [], imports: [], rawTokenEstimate };

@@ -2,6 +2,48 @@
 
 MCP server that structurally indexes TypeScript/JavaScript codebases and provides targeted tools for 80–90% token reduction in AI-assisted coding sessions.
 
+## Tech Stack
+
+### Languages
+- **TypeScript 5.x** — Primärsprache, ES2022 target, NodeNext module resolution, strict mode
+- **JavaScript** — kompilierter Output (`dist/`), auch von PindeX selbst indexiert
+- **SQL** — SQLite FTS5 virtual tables & triggers
+- **HTML/CSS** — Monitoring-Dashboard UI (Chart.js, dark theme)
+
+### Runtime & Platform
+- **Node.js** >= 18.0.0
+- **ESM modules** (`"type": "module"` in package.json)
+
+### Produktions-Dependencies
+| Paket | Version | Zweck |
+|---|---|---|
+| `@modelcontextprotocol/sdk` | ^1.0.0 | MCP-Protokoll (stdio transport) |
+| `better-sqlite3` | ^9.0.0 | SQLite mit nativen Bindings, FTS5 |
+| `chokidar` | ^3.6.0 | Datei-Watcher (auto-reindex) |
+| `express` | ^4.18.0 | HTTP-Server (Monitoring + GUI) |
+| `glob` | ^10.0.0 | Datei-Pattern-Matching |
+| `tree-sitter` | ^0.21.0 | AST-Parser (Basis) |
+| `tree-sitter-typescript` | ^0.21.0 | TypeScript/JavaScript Grammatik |
+| `uuid` | ^9.0.0 | Eindeutige IDs |
+| `ws` | ^8.16.0 | WebSocket-Server |
+| `open` | ^9.1.0 | Browser öffnen |
+
+### Dev-Tools
+| Tool | Zweck |
+|---|---|
+| `typescript` ^5.0.0 | Compiler (`tsc`), kein Bundler |
+| `vitest` ^1.0.0 | Test-Runner (`pool: forks` — nötig für native Bindings) |
+| `@vitest/coverage-v8` | Code Coverage (Schwelle: >80%) |
+| `supertest` ^6.0.0 | HTTP Integration Testing |
+| `tsc --noEmit` | Lint (nur Type-Check) |
+
+### Build-System
+- Nur TypeScript Compiler (`tsc`), **kein Bundler** (kein webpack/esbuild/rollup)
+- Source: `src/` → Output: `dist/`
+- Source Maps + Declaration Files werden generiert
+
+---
+
 ## Local Setup
 
 ```bash
