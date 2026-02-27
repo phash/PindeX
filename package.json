@@ -9,6 +9,11 @@
     "pindex-gui": "./dist/gui/index.js"
   },
   "main": "./dist/index.js",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "build": "tsc",
     "build:watch": "tsc --watch",
@@ -16,6 +21,7 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "lint": "tsc --noEmit",
+    "prepublishOnly": "npm run build && npm test",
     "start": "node dist/index.js",
     "dev": "node --loader ts-node/esm src/index.ts"
   },

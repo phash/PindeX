@@ -1,0 +1,7 @@
+src/
+tests/
+.github/
+*.config.ts
+tsconfig.json
+.mcp.json
+goose-extension.yaml
