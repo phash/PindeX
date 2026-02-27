@@ -1,0 +1,51 @@
+{
+  "name": "pindex",
+  "version": "1.0.0",
+  "description": "MCP Server that structurally indexes a codebase for 80-90% token reduction",
+  "type": "module",
+  "bin": {
+    "pindex": "./dist/cli/index.js",
+    "pindex-server": "./dist/index.js",
+    "pindex-gui": "./dist/gui/index.js"
+  },
+  "main": "./dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "build:watch": "tsc --watch",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "lint": "tsc --noEmit",
+    "start": "node dist/index.js",
+    "dev": "node --loader ts-node/esm src/index.ts"
+  },
+  "keywords": ["mcp", "codebase", "indexer", "typescript", "claude"],
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "better-sqlite3": "^9.0.0",
+    "chokidar": "^3.6.0",
+    "express": "^4.18.0",
+    "glob": "^10.0.0",
+    "open": "^9.1.0",
+    "tree-sitter": "^0.21.0",
+    "tree-sitter-typescript": "^0.21.0",
+    "uuid": "^9.0.0",
+    "ws": "^8.16.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.0",
+    "@types/express": "^4.17.0",
+    "@types/node": "^20.0.0",
+    "@types/supertest": "^6.0.0",
+    "@types/uuid": "^9.0.0",
+    "@types/ws": "^8.5.0",
+    "@vitest/coverage-v8": "^1.0.0",
+    "supertest": "^6.0.0",
+    "typescript": "^5.0.0",
+    "vitest": "^1.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
