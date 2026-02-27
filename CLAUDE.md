@@ -13,11 +13,13 @@ Wenn der User "commit", "push", "commit und push" o.ä. sagt:
 - Falls `get_file_summary` / `get_context` null zurückgeben → MCP-Server wurde noch nicht neu gestartet nach einem Build; dann `Read`/`Grep` als Fallback nutzen
 - Nach jedem `npm run build`: Claude Code neu starten damit der neue MCP-Server aktiv wird
 
-### Offene Features / Pending Work
-- `.claude/session-feature.md` — vollständiger Plan für das Session-Feature im GUI-Dashboard
-  (Recent Sessions 2×6 Grid + Sessions-Tab im Modal)
+### Serena (MCP) für Edits nutzen
+- **PindeX = read-only** (navigieren, erkunden, token-tracking)
+- **Serena = edits** (`replace_symbol_body`, `insert_after_symbol`, `rename_symbol` via LSP)
+- Workflow: PindeX zum Navigieren → Serena zum Editieren
+- Serena-Projekt aktivieren: `mcp__plugin_serena_serena__activate_project` mit `E:\claude\PindeX`
 
-MCP server that structurally indexes TypeScript/JavaScript codebases and provides targeted tools for 80–90% token reduction in AI-assisted coding sessions.
+MCP server that structurally indexes codebases (TypeScript, JavaScript, Java, Kotlin, Python, PHP, Vue, Svelte, Ruby, C#) and provides targeted tools for 80–90% token reduction in AI-assisted coding sessions.
 
 ## Tech Stack
 

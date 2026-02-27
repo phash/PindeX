@@ -2,7 +2,9 @@
 
 **Structural codebase indexing for AI coding assistants — 80–90% fewer tokens per session.**
 
-PindeX is an [MCP (Model Context Protocol)](https://modelcontextprotocol.io) server that parses your TypeScript/JavaScript project with `tree-sitter`, stores symbols, imports, and dependency graphs in a local SQLite database, and exposes 13 targeted tools so AI assistants can answer questions about your code — and your documentation — without reading entire files.
+PindeX is an [MCP (Model Context Protocol)](https://modelcontextprotocol.io) server that parses your project with `tree-sitter` and regex-based extractors, stores symbols, imports, and dependency graphs in a local SQLite database, and exposes 13 targeted tools so AI assistants can answer questions about your code — and your documentation — without reading entire files.
+
+**Supported languages:** TypeScript, JavaScript, Java, Kotlin, Python, PHP, Vue, Svelte, Ruby, C#
 
 ---
 
@@ -72,7 +74,13 @@ Token savings are tracked per session and visible in a live web dashboard.
 
 ## Installation
 
-### Install globally from source
+### Install from npm (recommended)
+
+```bash
+npm install -g pindex
+```
+
+### Install from source
 
 ```bash
 git clone https://github.com/phash/PindeX.git
@@ -89,8 +97,6 @@ This makes three commands available globally:
 | `pindex` | CLI — init, federation, status |
 | `pindex-server` | MCP stdio server (Claude Code spawns this automatically) |
 | `pindex-gui` | Aggregated dashboard for all projects |
-
-> **Note:** PindeX is not yet published on npm. Use `npm install -g .` from the cloned repo to install globally.
 
 ---
 
@@ -110,6 +116,8 @@ PindeX will:
 2. Assign a dedicated monitoring port for this project
 3. Write `.mcp.json` into the project root with absolute paths
 4. Register the project in `~/.pindex/registry.json`
+5. Inject a PindeX workflow section into `CLAUDE.md` (created if missing)
+6. Add a `PreToolUse` hook to `.claude/settings.json` to remind Claude to prefer PindeX tools
 
 Output:
 ```
@@ -117,10 +125,12 @@ Output:
   ║           PindeX – Ready                 ║
   ╚══════════════════════════════════════════╝
 
-  Project : /my/project
-  Index   : ~/.pindex/projects/a3f8b2c1/index.db
-  Port    : 7856
-  Config  : .mcp.json (written)
+  Project   : /my/project
+  Index     : ~/.pindex/projects/a3f8b2c1/index.db
+  Port      : 7856
+  Config    : .mcp.json (written)
+  CLAUDE.md : section added
+  Hooks     : created
 
   ── Next steps ─────────────────────────────
   1. Restart Claude Code in this directory
@@ -445,7 +455,7 @@ These are set automatically in the generated `.mcp.json` — you rarely need to 
 |---|---|---|
 | `PROJECT_ROOT` | `.` | Root directory of the project to index |
 | `INDEX_PATH` | `~/.pindex/projects/{hash}/index.db` | Path to the SQLite database |
-| `LANGUAGES` | `typescript,javascript` | Comma-separated list of languages to index |
+| `LANGUAGES` | `typescript,javascript` | Comma-separated list of languages to index. Supported values: `typescript`, `javascript`, `java`, `kotlin`, `python`, `php`, `vue`, `svelte`, `ruby`, `csharp` |
 | `AUTO_REINDEX` | `true` | Watch for file changes and reindex automatically |
 | `MONITORING_PORT` | assigned per-project | Port for the live dashboard + WebSocket |
 | `MONITORING_AUTO_OPEN` | `false` | Open the dashboard in the browser on startup |
@@ -571,9 +581,12 @@ pindex [command] [options]
 
 | Command | Description |
 |---|---|
-| _(no args)_ / `init` | Set up this project: write `.mcp.json`, register globally |
+| _(no args)_ / `init` | Set up this project: write `.mcp.json`, inject `CLAUDE.md` section + hooks, register globally |
+| `reinit` | Re-inject PindeX section into `CLAUDE.md` and `.claude/settings.json` (e.g. after an update) |
+| `reinit --force` | Replace the existing section with the current template |
 | `add <path>` | Link another repo for cross-repo search (federation) |
-| `remove [path]` | Remove a federated repo link, or deregister the current project |
+| `remove` | Fully unregister project: remove `.mcp.json`, `CLAUDE.md` section, hooks, stop daemon |
+| `remove <path>` | Remove a federated repo link only |
 | `setup` | One-time global setup (autostart config) |
 | `status` | Show all registered projects and their status |
 | `list` | List all registered projects (compact) |
@@ -597,6 +610,15 @@ pindex status
 
 # Manually force a full reindex
 pindex index --force
+
+# Index a Java + Vue project
+LANGUAGES=typescript,javascript,java,vue pindex index --force
+
+# Re-inject CLAUDE.md section (e.g. after updating pindex)
+pindex reinit --force
+
+# Fully remove pindex from a project
+pindex remove
 
 # Open the dashboard
 pindex-gui
@@ -633,7 +655,7 @@ Opens `http://localhost:7842` — reads **all** registered project databases dir
 - Session history
 - Average savings % across all projects
 
-The GUI refreshes automatically every 15 seconds and works even when no `pindex-server` is running.
+The GUI refreshes automatically (default 15 seconds) and works even when no `pindex-server` is running. Use the slider in the header to adjust the refresh interval from 1–60 seconds.
 
 **Dashboard features (both dashboards):**
 - Real-time chart (Chart.js) of tokens used vs. estimated cost without index
