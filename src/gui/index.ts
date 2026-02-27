@@ -26,6 +26,14 @@ async function main(): Promise<void> {
   });
 }
 
+process.on('uncaughtException', (err) => {
+  console.error('[pindex-gui] Uncaught exception (keeping process alive):', err.message);
+});
+
+process.on('unhandledRejection', (reason) => {
+  console.error('[pindex-gui] Unhandled rejection (keeping process alive):', reason);
+});
+
 main().catch((err: unknown) => {
   console.error('pindex-gui error:', err instanceof Error ? err.message : err);
   process.exit(1);

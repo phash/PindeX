@@ -146,6 +146,16 @@ export interface GuiServer {
 export function startGuiServer(port: number): GuiServer {
   const app = createGuiApp();
   const httpServer = createServer(app);
+
+  httpServer.on('error', (err: NodeJS.ErrnoException) => {
+    if (err.code === 'EADDRINUSE') {
+      console.error(`  [pindex-gui] Port ${port} is already in use. Try: GUI_PORT=<other> pindex-gui`);
+    } else {
+      console.error(`  [pindex-gui] Server error: ${err.message}`);
+    }
+    // Don't crash — log and keep running (other connections still work)
+  });
+
   httpServer.listen(port);
   return {
     httpServer,
