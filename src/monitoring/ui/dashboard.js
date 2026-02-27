@@ -67,6 +67,7 @@ function updateStatsCards(event) {
   document.getElementById('tokensSaved').textContent = formatNumber(event.cumulative_savings);
   document.getElementById('savingsPercent').textContent = event.savings_percent.toFixed(1) + '%';
   document.getElementById('savingsBar').style.width = Math.min(100, event.savings_percent) + '%';
+  document.getElementById('barTokenCount').textContent = formatNumber(event.cumulative_actual) + ' Token';
 }
 
 // ─── Chart ────────────────────────────────────────────────────────────────────

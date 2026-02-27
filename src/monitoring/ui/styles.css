@@ -97,6 +97,12 @@ body {
   border-radius: 3px;
   transition: width 0.4s ease;
 }
+.bar-token-count {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 5px;
+  font-variant-numeric: tabular-nums;
+}
 
 /* ─── Chart ───────────────────────────────────────────────────────────────── */
 #tokenChart { width: 100% !important; height: 200px !important; }
