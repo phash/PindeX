@@ -77,21 +77,21 @@ The compiled server is now at `dist/index.js` and the CLI at `dist/cli/index.js`
 ### Option B — Install globally from npm
 
 ```bash
-npm install -g mcp-codebase-indexer
+npm install -g pindex
 ```
 
 This makes two commands available globally:
 
 | Command | Purpose |
 |---|---|
-| `mcp-codebase-indexer` | Start the MCP server (stdio) |
-| `mcp-indexer` | CLI for setup, daemon management, indexing |
+| `pindex` | CLI for setup, daemon management, indexing |
+| `pindex-server` | Start the MCP server directly (stdio) |
 
 ### Verify the installation
 
 ```bash
-node dist/index.js --help          # if cloned
-mcp-codebase-indexer --help        # if installed globally
+node dist/index.js --help   # if cloned
+pindex --help               # if installed globally
 ```
 
 ---
@@ -355,10 +355,10 @@ goose session start
 
 ## CLI Reference
 
-The `mcp-indexer` CLI (or `node dist/cli/index.js` when cloned) provides daemon and project management commands.
+The `pindex` CLI (or `node dist/cli/index.js` when cloned) provides daemon and project management commands.
 
 ```
-mcp-indexer <command> [options]
+pindex <command> [options]
 ```
 
 | Command | Description |
@@ -378,19 +378,19 @@ mcp-indexer <command> [options]
 
 ```bash
 # First-time setup
-mcp-indexer setup
+pindex setup
 
 # Index the current project
-mcp-indexer index
+pindex index
 
 # Force reindex after a large refactor
-mcp-indexer index --force
+pindex index --force
 
 # Check what's running
-mcp-indexer status
+pindex status
 
 # Open the live dashboard
-mcp-indexer monitor
+pindex monitor
 ```
 
 ---
