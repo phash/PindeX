@@ -16,6 +16,32 @@ import {
   hashProjectPath,
 } from './project-detector.js';
 import { initProject, addFederatedRepo, removeFederatedRepo, injectClaudeMdSection, injectClaudeSettings, removeClaudeMdSection, removeClaudeSettings, removeMcpJson, writeMcpJson, injectGitignore } from './init.js';
+import Database from 'better-sqlite3';
+
+const BREAK_EVEN_FILES = 40;
+const BREAK_EVEN_AVG_LINES = 150;
+
+/** Reads the project DB and logs an index-worthwhile recommendation. No-ops if DB is missing or empty. */
+function showRecommendation(dbPath: string): void {
+  if (!existsSync(dbPath)) return;
+  let db: InstanceType<typeof Database> | null = null;
+  try {
+    db = new Database(dbPath, { readonly: true });
+    const files = (db.prepare('SELECT COUNT(*) as cnt FROM files').get() as { cnt: number }).cnt;
+    if (files === 0) return;
+    const tokens = (db.prepare('SELECT COALESCE(SUM(raw_token_estimate), 0) as total FROM files').get() as { total: number }).total;
+    const avgLines = Math.round((tokens / files) * 4 / 50);
+    const worthwhile = files >= BREAK_EVEN_FILES || avgLines >= BREAK_EVEN_AVG_LINES;
+    if (worthwhile) {
+      console.log(`  ✓ Index worthwhile: ${files} files, avg ~${avgLines} lines/file`);
+    } else {
+      console.log(`  ⚠ Small project (${files} files, avg ~${avgLines} lines/file) — index overhead may exceed savings`);
+      console.log(`    Break-even: ${BREAK_EVEN_FILES}+ files or ${BREAK_EVEN_AVG_LINES}+ avg lines/file`);
+    }
+  } catch { /* ignore read errors */ } finally {
+    db?.close();
+  }
+}
 
 const [, , command, ...args] = process.argv;
 
@@ -25,6 +51,7 @@ async function main(): Promise<void> {
     case undefined:
     case 'init':
       await initProject(process.cwd());
+      showRecommendation(getProjectIndexPath(findProjectRoot(process.cwd())));
       break;
 
     case 'setup':
@@ -91,7 +118,9 @@ async function main(): Promise<void> {
           : '';
         console.log(`  [${status}]  ${p.name}${federated}`);
         console.log(`           ${p.path}`);
-        console.log(`           port: ${p.monitoringPort}  index: ${p.path}/.pindex/\n`);
+        console.log(`           port: ${p.monitoringPort}  index: ${p.path}/.pindex/`);
+        showRecommendation(getProjectIndexPath(p.path));
+        console.log();
       }
       break;
     }
