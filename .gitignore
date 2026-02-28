@@ -5,3 +5,6 @@ dist/
 *.db-wal
 .codebase-index/
 coverage/
+
+# PindeX index data
+.pindex/

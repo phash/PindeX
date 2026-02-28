@@ -5,7 +5,7 @@
       "args": [],
       "env": {
         "PROJECT_ROOT": "E:\\claude\\PindeX",
-        "INDEX_PATH": "C:\\Users\\manue\\.pindex\\projects\\ac04933d\\index.db",
+        "INDEX_PATH": "E:\\claude\\PindeX\\.pindex\\index.db",
         "MONITORING_PORT": "7878",
         "AUTO_REINDEX": "true",
         "GENERATE_SUMMARIES": "false",

@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 /** CLI entry point: pindex <command> [options] */
 
+import { existsSync, mkdirSync, copyFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { runSetup } from './setup.js';
 import { isDaemonRunning, stopDaemon, showStatus, getDaemonPid } from './daemon.js';
 import { openDatabase } from '../db/database.js';
@@ -8,11 +10,12 @@ import { runMigrations } from '../db/migrations.js';
 import { Indexer } from '../indexer/index.js';
 import {
   getProjectIndexPath,
+  getProjectsDir,
   GlobalRegistry,
   findProjectRoot,
   hashProjectPath,
 } from './project-detector.js';
-import { initProject, addFederatedRepo, removeFederatedRepo, injectClaudeMdSection, injectClaudeSettings, removeClaudeMdSection, removeClaudeSettings, removeMcpJson } from './init.js';
+import { initProject, addFederatedRepo, removeFederatedRepo, injectClaudeMdSection, injectClaudeSettings, removeClaudeMdSection, removeClaudeSettings, removeMcpJson, writeMcpJson, injectGitignore } from './init.js';
 
 const [, , command, ...args] = process.argv;
 
@@ -184,6 +187,46 @@ async function main(): Promise<void> {
       break;
     }
 
+    case 'migrate': {
+      const registry = new GlobalRegistry();
+      const projects = registry.list();
+      if (projects.length === 0) {
+        console.log('No projects registered.');
+        break;
+      }
+      console.log(`\n  Migrating ${projects.length} project(s) to local .pindex/ storage...\n`);
+      for (const p of projects) {
+        const oldDir = join(getProjectsDir(), p.hash);
+        const oldDb  = join(oldDir, 'index.db');
+        const newDir = join(p.path, '.pindex');
+        const newDb  = join(newDir, 'index.db');
+
+        process.stdout.write(`  ${p.name}\n  ${p.path}\n`);
+
+        if (!existsSync(p.path)) {
+          console.log(`    ⚠ project directory not found — skipped\n`);
+          continue;
+        }
+        if (!existsSync(newDir)) mkdirSync(newDir, { recursive: true });
+
+        if (existsSync(newDb)) {
+          console.log(`    ✓ already at .pindex/index.db — skipped`);
+        } else if (existsSync(oldDb)) {
+          copyFileSync(oldDb, newDb);
+          const oldMeta = join(oldDir, 'meta.json');
+          if (existsSync(oldMeta)) copyFileSync(oldMeta, join(newDir, 'meta.json'));
+          console.log(`    ✓ copied from ~/.pindex/projects/${p.hash}/`);
+        } else {
+          console.log(`    ⚠ no existing index found — will be built on next Claude Code start`);
+        }
+        writeMcpJson(p.path, p);
+        injectGitignore(p.path);
+        console.log(`    ✓ .mcp.json updated, .gitignore patched\n`);
+      }
+      console.log('  Done. Restart Claude Code in each project to activate.\n');
+      break;
+    }
+
     case 'uninstall': {
       console.log('Stopping any running daemons...');
       const registry = new GlobalRegistry();
@@ -220,6 +263,7 @@ async function main(): Promise<void> {
     gui             Open the monitoring dashboard in the browser
     stats           Show token stats overview
 
+    migrate         Move all project indexes from ~/.pindex/projects/ to {project}/.pindex/
     uninstall       Stop all daemons (data kept in ~/.pindex)
 
   Examples:
