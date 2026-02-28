@@ -5,8 +5,9 @@
  */
 import { createServer } from 'node:http';
 import { createConnection } from 'node:net';
-import { existsSync } from 'node:fs';
+import { existsSync, statSync } from 'node:fs';
 import express from 'express';
+import open from 'open';
 import Database from 'better-sqlite3';
 import {
   GlobalRegistry,
@@ -27,6 +28,7 @@ export interface ProjectStats {
   dbExists: boolean;
   lastIndexed: string | null;
   serverRunning: boolean;
+  indexSizeBytes: number;
 }
 
 /** Check whether a TCP port is accepting connections (timeout: 300ms). */
@@ -48,9 +50,11 @@ export function loadProjectStats(entry: RegistryEntry): Omit<ProjectStats, 'serv
       entry, fileCount: 0, symbolCount: 0,
       totalTokensSaved: 0, totalTokensActual: 0,
       savingsPercent: 0, sessionCount: 0,
-      dbExists: false, lastIndexed: null,
+      dbExists: false, lastIndexed: null, indexSizeBytes: 0,
     };
   }
+
+  const indexSizeBytes = statSync(dbPath).size;
 
   let db: InstanceType<typeof Database> | null = null;
   try {
@@ -80,13 +84,14 @@ export function loadProjectStats(entry: RegistryEntry): Omit<ProjectStats, 'serv
       savingsPercent: Math.max(0, pct),
       sessionCount, dbExists: true,
       lastIndexed: lastIndexedRow.ts ?? null,
+      indexSizeBytes,
     };
   } catch {
     return {
       entry, fileCount: 0, symbolCount: 0,
       totalTokensSaved: 0, totalTokensActual: 0,
       savingsPercent: 0, sessionCount: 0,
-      dbExists: false, lastIndexed: null,
+      dbExists: false, lastIndexed: null, indexSizeBytes: 0,
     };
   } finally {
     db?.close();
@@ -224,6 +229,18 @@ export function createGuiApp(): express.Application {
     return res.json(result);
   });
 
+  app.get('/api/projects/:hash/open', async (req, res) => {
+    const registry = new GlobalRegistry();
+    const entry = registry.list().find((p) => p.hash === req.params.hash);
+    if (!entry) return res.status(404).json({ error: 'project not found' });
+    try {
+      await open(entry.path);
+      return res.json({ ok: true });
+    } catch {
+      return res.status(500).json({ error: 'failed to open folder' });
+    }
+  });
+
   app.get('/', (_req, res) => {
     res.send(buildDashboardHtml());
   });
@@ -312,8 +329,10 @@ function buildDashboardHtml(): string {
     .sess-nav button:disabled{opacity:.4;cursor:default}
     .sess-nav button:not(:disabled):hover{background:var(--accent);color:#000}
     .sess-nav .sess-label{color:var(--muted);font-size:.8rem;flex:1;text-align:center}
-    .project-row{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:16px 20px;margin-bottom:10px;display:grid;grid-template-columns:auto 1fr auto auto auto auto;gap:14px;align-items:center;cursor:pointer;transition:border-color .15s}
+    .project-row{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:16px 20px;margin-bottom:10px;display:grid;grid-template-columns:auto 1fr auto auto auto auto auto auto;gap:14px;align-items:center;cursor:pointer;transition:border-color .15s}
     .project-row:hover{border-color:var(--accent)}
+    .open-btn{background:none;border:1px solid var(--border);border-radius:4px;padding:3px 8px;cursor:pointer;font-size:.85rem;color:var(--muted);line-height:1;transition:border-color .15s,color .15s}
+    .open-btn:hover{border-color:var(--accent);color:var(--text)}
     .srv-dot{width:9px;height:9px;border-radius:50%;flex-shrink:0}
     .srv-dot.on{background:var(--green);box-shadow:0 0 6px var(--green)}
     .srv-dot.off{background:var(--border)}
@@ -409,6 +428,7 @@ function buildDashboardHtml(): string {
 
 <script>
 const fmt = n => n >= 1e6 ? (n/1e6).toFixed(1)+'M' : n >= 1e3 ? (n/1e3).toFixed(1)+'K' : String(n);
+const fmtSize = b => b >= 1073741824 ? (b/1073741824).toFixed(1)+' GB' : b >= 1048576 ? (b/1048576).toFixed(1)+' MB' : b >= 1024 ? (b/1024).toFixed(1)+' KB' : b+' B';
 const fmtDate = s => s ? new Date(s.includes('Z') || s.includes('+') ? s : s.replace(' ', 'T') + 'Z').toLocaleString() : '\u2014';
 let chart = null, currentProjects = [];
 let _modalSessions = [], _sessPage = 0;
@@ -486,12 +506,19 @@ async function load() {
     info.appendChild(name);
     info.appendChild(path);
     const mkBadge = (text, cls) => { const b = document.createElement('span'); b.className = 'badge' + (cls ? ' ' + cls : ''); b.textContent = text; return b; };
+    const openBtn = document.createElement('button');
+    openBtn.className = 'open-btn';
+    openBtn.title = 'Open project folder in explorer';
+    openBtn.textContent = '\\u{1F4C2}';
+    openBtn.onclick = (e) => { e.stopPropagation(); fetch('/api/projects/' + p.entry.hash + '/open').catch(() => {}); };
     row.appendChild(dot);
     row.appendChild(info);
     row.appendChild(mkBadge(fmt(p.fileCount) + ' files', 'blue'));
     row.appendChild(mkBadge(fmt(p.symbolCount) + ' symbols', 'blue'));
     row.appendChild(mkBadge(p.savingsPercent + '% saved', p.savingsPercent >= 50 ? 'green' : ''));
     row.appendChild(mkBadge(p.sessionCount + ' sessions', ''));
+    row.appendChild(mkBadge(fmtSize(p.indexSizeBytes ?? 0), ''));
+    row.appendChild(openBtn);
     list.appendChild(row);
   });
 }
@@ -598,12 +625,22 @@ function renderOv(proj, detail) {
   infoB.appendChild(document.createElement('br'));
   infoB.appendChild(document.createTextNode('Last indexed: ' + fmtDate(proj.lastIndexed)));
   infoB.appendChild(document.createElement('br'));
+  infoB.appendChild(document.createTextNode('Index size: ' + fmtSize(proj.indexSizeBytes ?? 0)));
+  infoB.appendChild(document.createElement('br'));
   const hashSpan = el('span', '', 'Index hash: ');
   const hashCode = el('span', '');
   hashCode.style.fontFamily = 'monospace';
   hashCode.textContent = proj.entry.hash;
   hashSpan.appendChild(hashCode);
   infoB.appendChild(hashSpan);
+  infoB.appendChild(document.createElement('br'));
+  const openLink = document.createElement('button');
+  openLink.textContent = '\\u{1F4C2} Open project folder';
+  openLink.style.cssText = 'margin-top:8px;background:none;border:1px solid var(--border);border-radius:4px;padding:4px 10px;color:var(--muted);cursor:pointer;font-size:.8rem;transition:border-color .15s,color .15s';
+  openLink.onmouseover = () => { openLink.style.borderColor = 'var(--accent)'; openLink.style.color = 'var(--text)'; };
+  openLink.onmouseout  = () => { openLink.style.borderColor = 'var(--border)';  openLink.style.color = 'var(--muted)'; };
+  openLink.onclick = () => fetch('/api/projects/' + proj.entry.hash + '/open').catch(() => {});
+  infoB.appendChild(openLink);
   panel.appendChild(infoB);
 }
 
