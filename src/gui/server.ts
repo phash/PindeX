@@ -194,7 +194,7 @@ export function createGuiApp(): express.Application {
 
   app.get('/api/sessions/recent', (_req, res) => {
     const registry = new GlobalRegistry();
-    type SRow = { id: string; started_at: string; mode: string; label: string | null; total_tokens: number; total_savings: number };
+    type SRow = { id: string; started_at: string; mode: string; label: string | null; total_tokens: number; total_savings: number; last_activity_at: string | null };
     const all: Array<SRow & { projectName: string; projectHash: string }> = [];
 
     for (const entry of registry.list()) {
@@ -204,7 +204,9 @@ export function createGuiApp(): express.Application {
       try {
         db = new Database(dbPath, { readonly: true });
         const rows = db
-          .prepare('SELECT id, started_at, mode, label, total_tokens, total_savings FROM sessions ORDER BY started_at DESC LIMIT 12')
+          .prepare(`SELECT id, started_at, mode, label, total_tokens, total_savings,
+            (SELECT MAX(timestamp) FROM token_log WHERE session_id = sessions.id) AS last_activity_at
+            FROM sessions ORDER BY started_at DESC LIMIT 12`)
           .all() as SRow[];
         rows.forEach(r => all.push({ ...r, projectName: entry.name, projectHash: entry.hash }));
       } catch { /* skip */ } finally { db?.close(); }
@@ -224,6 +226,7 @@ export function createGuiApp(): express.Application {
         tokensActual: s.total_tokens,
         tokensSaved: saved,
         savingsPercent: base > 0 ? Math.round(saved / base * 100) : 0,
+        lastActivityAt: s.last_activity_at ?? null,
       };
     });
     return res.json(result);
@@ -315,15 +318,15 @@ function buildDashboardHtml(): string {
     .chart-wrap{max-width:680px;padding:0 24px 24px}
     .section{padding:0 24px 24px}
     .section h2{color:var(--muted);font-size:.85rem;text-transform:uppercase;letter-spacing:.08em;margin-bottom:12px}
-    .sessions-grid{display:grid;grid-template-columns:repeat(6,1fr);gap:10px}
+    .sessions-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px}
     .session-card{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px 14px;cursor:pointer;transition:border-color .15s}
     .session-card:hover{border-color:var(--accent)}
     .session-card .sc-proj{font-size:.68rem;color:var(--muted);margin-bottom:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
     .session-card .sc-saved{font-size:1.4rem;font-weight:700;color:var(--green)}
     .session-card .sc-pct{font-size:.75rem;color:var(--muted);margin-top:2px}
-    .session-card .sc-date{font-size:.68rem;color:var(--muted);margin-top:6px;border-top:1px solid var(--border);padding-top:6px}
-    .session-card.empty{cursor:default;display:flex;align-items:center;justify-content:center;min-height:90px;border-style:dashed}
-    .session-card.empty span{color:var(--border);font-size:1.5rem}
+    .session-card .sc-range{font-size:.68rem;color:var(--muted);margin-top:6px;border-top:1px solid var(--border);padding-top:6px;display:flex;justify-content:space-between;align-items:baseline;gap:6px}
+    .session-card .sc-range .sc-dur{color:var(--accent);font-size:.65rem;white-space:nowrap}
+    .sessions-empty{color:var(--muted);font-size:.85rem;padding:20px 0;text-align:center}
     .sess-nav{display:flex;align-items:center;gap:8px;margin-bottom:12px}
     .sess-nav button{background:var(--border);border:none;color:var(--text);padding:4px 12px;border-radius:4px;cursor:pointer;font-size:.8rem}
     .sess-nav button:disabled{opacity:.4;cursor:default}
@@ -430,6 +433,9 @@ function buildDashboardHtml(): string {
 const fmt = n => n >= 1e6 ? (n/1e6).toFixed(1)+'M' : n >= 1e3 ? (n/1e3).toFixed(1)+'K' : String(n);
 const fmtSize = b => b >= 1073741824 ? (b/1073741824).toFixed(1)+' GB' : b >= 1048576 ? (b/1048576).toFixed(1)+' MB' : b >= 1024 ? (b/1024).toFixed(1)+' KB' : b+' B';
 const fmtDate = s => s ? new Date(s.includes('Z') || s.includes('+') ? s : s.replace(' ', 'T') + 'Z').toLocaleString() : '\u2014';
+const fmtTime = s => s ? new Date(s.includes('Z') || s.includes('+') ? s : s.replace(' ', 'T') + 'Z').toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}) : null;
+const fmtDay  = s => s ? new Date(s.includes('Z') || s.includes('+') ? s : s.replace(' ', 'T') + 'Z').toLocaleDateString([], {month:'short',day:'numeric'}) : '\u2014';
+const fmtDur  = (a, b) => { if (!a || !b) return null; const ms = new Date(b) - new Date(a); if (ms <= 0) return null; const m = Math.round(ms/60000); return m < 1 ? '<1\u202fmin' : m < 60 ? m+'\u202fmin' : (m/60).toFixed(1)+'\u202fh'; };
 let chart = null, currentProjects = [];
 let _modalSessions = [], _sessPage = 0;
 const SESS_PER_PAGE = 6;
@@ -526,22 +532,33 @@ async function load() {
 function renderSessionGrid(sessions) {
   const grid = document.getElementById('sessions-grid');
   grid.textContent = '';
-  for (let i = 0; i < 12; i++) {
-    const card = document.createElement('div');
-    if (i < sessions.length) {
-      const s = sessions[i];
-      card.className = 'session-card';
-      card.onclick = () => openDetail(s.projectHash, s.projectName);
-      card.appendChild(el('div', 'sc-proj', s.projectName));
-      card.appendChild(el('div', 'sc-saved', fmt(s.tokensSaved)));
-      card.appendChild(el('div', 'sc-pct', s.savingsPercent + '% saved \u2022 ' + fmt(s.tokensActual) + ' used'));
-      card.appendChild(el('div', 'sc-date', fmtDate(s.startedAt)));
-    } else {
-      card.className = 'session-card empty';
-      card.appendChild(el('span', '', '\u2014'));
-    }
-    grid.appendChild(card);
+  if (!sessions.length) {
+    const msg = document.createElement('div');
+    msg.className = 'sessions-empty';
+    msg.textContent = 'No sessions recorded yet.';
+    grid.appendChild(msg);
+    return;
   }
+  sessions.forEach(s => {
+    const card = document.createElement('div');
+    card.className = 'session-card';
+    card.onclick = () => openDetail(s.projectHash, s.projectName);
+    card.appendChild(el('div', 'sc-proj', s.projectName));
+    card.appendChild(el('div', 'sc-saved', fmt(s.tokensSaved)));
+    card.appendChild(el('div', 'sc-pct', s.savingsPercent + '% saved \u2022 ' + fmt(s.tokensActual) + ' used'));
+    const rangeDiv = el('div', 'sc-range');
+    const startTime = fmtTime(s.startedAt);
+    const endTime   = fmtTime(s.lastActivityAt);
+    const day       = fmtDay(s.startedAt);
+    const dur       = fmtDur(s.startedAt, s.lastActivityAt);
+    const timeText  = startTime && endTime && startTime !== endTime
+      ? day + '\u2002' + startTime + '\u2013' + endTime
+      : day + (startTime ? '\u2002' + startTime : '');
+    rangeDiv.appendChild(el('span', '', timeText));
+    if (dur) rangeDiv.appendChild(el('span', 'sc-dur', dur));
+    card.appendChild(rangeDiv);
+    grid.appendChild(card);
+  });
 }
 
 function closeModal() { document.getElementById('modal').classList.remove('open'); }
