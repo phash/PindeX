@@ -186,4 +186,47 @@ export function initSchema(db: Database.Database): void {
       VALUES (new.id, new.content, COALESCE(new.tags, ''));
     END;
   `);
+
+  // ─── Session Memory Tables ─────────────────────────────────────────────────
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS ast_snapshots (
+      id             INTEGER PRIMARY KEY,
+      file_path      TEXT NOT NULL,
+      symbol_name    TEXT NOT NULL,
+      kind           TEXT NOT NULL,
+      signature      TEXT NOT NULL,
+      signature_hash TEXT NOT NULL,
+      captured_at    DATETIME DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(file_path, symbol_name)
+    );
+
+    CREATE TABLE IF NOT EXISTS session_observations (
+      id           INTEGER PRIMARY KEY,
+      session_id   TEXT NOT NULL,
+      type         TEXT NOT NULL,
+      file_path    TEXT,
+      symbol_name  TEXT,
+      observation  TEXT NOT NULL,
+      stale        INTEGER DEFAULT 0,
+      stale_reason TEXT,
+      created_at   DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS session_events (
+      id          INTEGER PRIMARY KEY,
+      session_id  TEXT NOT NULL,
+      event_type  TEXT NOT NULL,
+      file_path   TEXT,
+      symbol_name TEXT,
+      extra_json  TEXT,
+      timestamp   DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_ast_snapshots_file ON ast_snapshots(file_path);
+    CREATE INDEX IF NOT EXISTS idx_session_observations_session ON session_observations(session_id);
+    CREATE INDEX IF NOT EXISTS idx_session_observations_file ON session_observations(file_path);
+    CREATE INDEX IF NOT EXISTS idx_session_events_session ON session_events(session_id);
+    CREATE INDEX IF NOT EXISTS idx_session_events_file_time ON session_events(file_path, timestamp);
+  `);
 }

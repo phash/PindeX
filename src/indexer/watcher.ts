@@ -1,11 +1,13 @@
 import { EventEmitter } from 'node:events';
 import type Database from 'better-sqlite3';
 import type { Indexer } from './index.js';
+import type { SessionObserver } from '../memory/observer.js';
 
 export interface WatcherOptions {
   db: Database.Database;
   indexer: Indexer;
   projectRoot: string;
+  observer?: SessionObserver;
 }
 
 export interface FileChangeEvent {
@@ -15,12 +17,14 @@ export interface FileChangeEvent {
 
 export class FileWatcher extends EventEmitter {
   private readonly indexer: Indexer;
+  private readonly observer?: SessionObserver;
   private watcher: unknown = null;
   private started = false;
 
   constructor(private readonly options: WatcherOptions) {
     super();
     this.indexer = options.indexer;
+    this.observer = options.observer;
   }
 
   /** Starts watching the project directory for file changes. */
@@ -59,8 +63,11 @@ export class FileWatcher extends EventEmitter {
 
     if (type === 'add' || type === 'change') {
       try {
-        await this.indexer.indexFile(path, true);
+        const result = await this.indexer.indexFile(path, true);
         this.emit('indexed', path);
+        if (this.observer && result.diff) {
+          this.observer.onFileDiff(result.diff);
+        }
       } catch (err) {
         this.emit('error', err);
       }

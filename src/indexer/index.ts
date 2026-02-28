@@ -15,6 +15,7 @@ import {
   insertDocumentChunk,
   deleteDocumentChunksByFileId,
 } from '../db/queries.js';
+import { computeAstDiff, type AstDiffResult } from '../memory/ast-diff.js';
 
 // ─── Default Configuration ────────────────────────────────────────────────────
 
@@ -93,6 +94,8 @@ export interface IndexAllOptions {
 export interface IndexFileResult {
   status: 'indexed' | 'updated' | 'skipped' | 'error';
   errors: string[];
+  /** AST-level diff vs. the previous snapshot; only present on 'indexed'/'updated'. */
+  diff?: AstDiffResult;
 }
 
 export class Indexer {
@@ -199,6 +202,9 @@ export class Indexer {
 
       const fileRecord = getFileByPath(this.db, relativePath)!;
 
+      // Compute AST diff before replacing symbols (snapshots updated inside)
+      const diff = computeAstDiff(this.db, relativePath, parsed.symbols);
+
       // Replace symbols for this file
       deleteSymbolsByFileId(this.db, fileRecord.id);
       for (const sym of parsed.symbols) {
@@ -220,7 +226,7 @@ export class Indexer {
       // We store the raw import sources first; a second pass resolves them.
       // For now, store as strings using the _resolveAndStoreDependencies helper below.
 
-      return { status: isUpdate ? 'updated' : 'indexed', errors: [] };
+      return { status: isUpdate ? 'updated' : 'indexed', errors: [], diff };
     } catch (err) {
       return {
         status: 'error',

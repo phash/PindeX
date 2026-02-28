@@ -85,6 +85,58 @@ export interface ContextEntryRecord {
   created_at: string;
 }
 
+export type ObservationType =
+  | 'accessed'
+  | 'sig_changed'
+  | 'symbol_added'
+  | 'symbol_removed'
+  | 'anti_pattern'
+  | 'environment';
+
+export type SessionEventType =
+  | 'accessed'
+  | 'symbol_added'
+  | 'symbol_removed'
+  | 'sig_changed'
+  | 'thrash_detected'
+  | 'dead_end'
+  | 'failed_search'
+  | 'tool_error'
+  | 'index_blind_spot'
+  | 'redundant_access';
+
+export interface AstSnapshotRecord {
+  id: number;
+  file_path: string;
+  symbol_name: string;
+  kind: string;
+  signature: string;
+  signature_hash: string;
+  captured_at: string;
+}
+
+export interface SessionObservationRecord {
+  id: number;
+  session_id: string;
+  type: ObservationType;
+  file_path: string | null;
+  symbol_name: string | null;
+  observation: string;
+  stale: 0 | 1;
+  stale_reason: string | null;
+  created_at: string;
+}
+
+export interface SessionEventRecord {
+  id: number;
+  session_id: string;
+  event_type: SessionEventType;
+  file_path: string | null;
+  symbol_name: string | null;
+  extra_json: string | null;
+  timestamp: string;
+}
+
 // ─── Parser Types ─────────────────────────────────────────────────────────────
 
 /** Minimal AST node interface – compatible with tree-sitter SyntaxNode. */
@@ -157,6 +209,12 @@ export interface GetSymbolInput {
   file?: string;
 }
 
+export interface MemoryContext {
+  last_seen_session: string | null;
+  observations: string[];
+  stale: boolean;
+}
+
 export interface GetSymbolOutput {
   name: string;
   kind: SymbolKind;
@@ -167,6 +225,7 @@ export interface GetSymbolOutput {
   endLine: number;
   isExported: boolean;
   dependencies: string[];
+  memory_context?: MemoryContext;
 }
 
 export interface GetContextInput {
@@ -192,6 +251,7 @@ export interface GetFileSummaryOutput {
   symbols: Array<{ name: string; kind: SymbolKind; signature: string }>;
   imports: string[];
   exports: string[];
+  memory_context?: MemoryContext;
 }
 
 export interface FindUsagesInput {
@@ -214,6 +274,13 @@ export interface GetDependenciesOutput {
   importedBy: string[];
 }
 
+export interface SessionMemorySummary {
+  prior_sessions: number;
+  stale_observations: number;
+  active_anti_patterns: string[];
+  hint: string | null;
+}
+
 export interface GetProjectOverviewOutput {
   rootPath: string;
   language: string;
@@ -222,6 +289,7 @@ export interface GetProjectOverviewOutput {
   stats: { totalFiles: number; totalSymbols: number };
   /** Present when the server is configured with FEDERATION_REPOS */
   federatedProjects?: Array<{ rootPath: string; stats: { totalFiles: number; totalSymbols: number } }>;
+  session_memory?: SessionMemorySummary;
 }
 
 export interface ReindexInput {
@@ -316,6 +384,39 @@ export interface SaveContextOutput {
   id: number;
   session_id: string;
   created_at: string;
+}
+
+export interface MemoryObservation {
+  type: ObservationType;
+  file: string | null;
+  symbol: string | null;
+  text: string;
+  stale: boolean;
+  stale_reason: string | null;
+  created_at: string;
+}
+
+export interface MemoryAntiPattern {
+  type: SessionEventType;
+  file: string | null;
+  symbol: string | null;
+  text: string;
+  timestamp: string;
+}
+
+export interface GetSessionMemoryInput {
+  session_id?: string;
+  file?: string;
+  symbol?: string;
+  include_stale?: boolean;
+}
+
+export interface GetSessionMemoryOutput {
+  current_session: { id: string; started_at: string };
+  observations: MemoryObservation[];
+  anti_patterns: MemoryAntiPattern[];
+  stale_count: number;
+  stale_warning: string | null;
 }
 
 // ─── Monitoring / WebSocket Event Types ──────────────────────────────────────

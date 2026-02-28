@@ -7,8 +7,13 @@ import { FileWatcher } from './indexer/watcher.js';
 import { startMonitoringServer } from './monitoring/server.js';
 import { TokenLogger } from './monitoring/token-logger.js';
 import { createMcpServer } from './server.js';
-import { createSession } from './db/queries.js';
+import {
+  createSession,
+  deleteObservationsOlderThan,
+  deleteObservationsExceptSession,
+} from './db/queries.js';
 import { getProjectIndexPath } from './cli/project-detector.js';
+import { SessionObserver } from './memory/observer.js';
 import { EventEmitter } from 'node:events';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -22,6 +27,8 @@ const MONITORING_PORT = parseInt(process.env.MONITORING_PORT ?? '7842', 10);
 const MONITORING_AUTO_OPEN = process.env.MONITORING_AUTO_OPEN === 'true';
 const BASELINE_MODE = process.env.BASELINE_MODE === 'true';
 const GENERATE_SUMMARIES = process.env.GENERATE_SUMMARIES === 'true';
+// 'permanent' | 'session' | '7d' | '30d' | ...
+const OBSERVATION_RETENTION = process.env.OBSERVATION_RETENTION ?? 'permanent';
 
 // Federated repos: colon- or comma-separated absolute paths
 const FEDERATION_REPOS: string[] = (process.env.FEDERATION_REPOS ?? '')
@@ -66,14 +73,18 @@ async function main(): Promise<void> {
     open(`http://localhost:${MONITORING_PORT}`).catch(() => {});
   }
 
-  // 5. Set up token logger for the current session
+  // 5. Set up token logger + session observer for the current session
   const sessionId = uuidv4();
   createSession(db, { id: sessionId, mode: BASELINE_MODE ? 'baseline' : 'indexed', label: null });
   const tokenLogger = new TokenLogger({ db, sessionId, emitter });
+  const observer = new SessionObserver({ db, sessionId, projectRoot: PROJECT_ROOT });
+
+  // 5b. Observation retention cleanup
+  applyObservationRetention(db, sessionId, OBSERVATION_RETENTION);
 
   // 6. Start file watcher
   if (AUTO_REINDEX) {
-    const watcher = new FileWatcher({ db, indexer, projectRoot: PROJECT_ROOT });
+    const watcher = new FileWatcher({ db, indexer, projectRoot: PROJECT_ROOT, observer });
     watcher.start().catch(() => {});
   }
 
@@ -84,6 +95,7 @@ async function main(): Promise<void> {
     baselineMode: BASELINE_MODE,
     federatedDbs,
     sessionId,
+    observer,
   });
 
   const transport = new StdioServerTransport();
@@ -104,3 +116,33 @@ main().catch((err) => {
   process.stderr.write(`[pindex] Fatal error: ${String(err)}\n`);
   process.exit(1);
 });
+
+/**
+ * Applies the OBSERVATION_RETENTION policy on startup.
+ * Supported values: 'permanent' (default), 'session', or '<N>d' (e.g. '30d').
+ */
+function applyObservationRetention(
+  db: import('better-sqlite3').Database,
+  currentSessionId: string,
+  policy: string,
+): void {
+  if (policy === 'permanent') return;
+
+  if (policy === 'session') {
+    deleteObservationsExceptSession(db, currentSessionId);
+    return;
+  }
+
+  const match = /^(\d+)d$/.exec(policy);
+  if (match) {
+    const days = parseInt(match[1], 10);
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - days);
+    deleteObservationsOlderThan(db, cutoff.toISOString());
+    return;
+  }
+
+  process.stderr.write(
+    `[pindex] Unknown OBSERVATION_RETENTION value: "${policy}" — defaulting to permanent\n`,
+  );
+}

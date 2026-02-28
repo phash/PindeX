@@ -17,6 +17,8 @@ import { startComparison } from './tools/start_comparison.js';
 import { searchDocs } from './tools/search_docs.js';
 import { getDocChunk } from './tools/get_doc_chunk.js';
 import { saveContext } from './tools/save_context.js';
+import { getSessionMemory } from './tools/get_session_memory.js';
+import type { SessionObserver } from './memory/observer.js';
 
 const TOOL_DEFINITIONS = [
   {
@@ -191,6 +193,21 @@ const TOOL_DEFINITIONS = [
       required: ['content'],
     },
   },
+  {
+    name: 'get_session_memory',
+    description:
+      'Retrieve session memory: auto-generated observations from previous sessions, staleness warnings, and detected anti-patterns (dead-end exploration, file thrashing, repeated failed searches, etc.). Call this at the start of a session or before working on a file to see what was observed before.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        session_id: { type: 'string', description: 'Session ID to load (omit for current session)' },
+        file: { type: 'string', description: 'Filter observations to a specific file path' },
+        symbol: { type: 'string', description: 'Filter observations to a specific symbol name' },
+        include_stale: { type: 'boolean', description: 'Include observations marked stale due to code changes (default: false)' },
+      },
+      required: [],
+    },
+  },
 ];
 
 export interface FederatedDb {
@@ -204,6 +221,7 @@ export interface ServerOptions {
   baselineMode?: boolean;
   federatedDbs?: FederatedDb[];
   sessionId?: string;
+  observer?: SessionObserver;
 }
 
 export function createMcpServer(
@@ -218,7 +236,7 @@ export function createMcpServer(
     { capabilities: { tools: {} } },
   );
 
-  const { projectRoot, monitoringPort = 7842, baselineMode = false, federatedDbs = [], sessionId = 'default' } = options;
+  const { projectRoot, monitoringPort = 7842, baselineMode = false, federatedDbs = [], sessionId = 'default', observer } = options;
 
   // ─── List Tools ────────────────────────────────────────────────────────────
 
@@ -240,6 +258,7 @@ export function createMcpServer(
 
     let result: unknown;
     let tokensWithoutIndex = 0;
+    let toolIsError = false;
 
     try {
       const a = args as Record<string, unknown>;
@@ -279,7 +298,7 @@ export function createMcpServer(
           break;
         }
         case 'get_project_overview': {
-          result = getProjectOverview(db, projectRoot, federatedDbs);
+          result = getProjectOverview(db, projectRoot, federatedDbs, sessionId);
           tokensWithoutIndex = estimateResponseTokens(result) * 5;
           break;
         }
@@ -311,11 +330,25 @@ export function createMcpServer(
           result = saveContext(db, sessionId, a as unknown as Parameters<typeof saveContext>[2]);
           break;
         }
+        case 'get_session_memory': {
+          result = getSessionMemory(db, sessionId, a as unknown as Parameters<typeof getSessionMemory>[2]);
+          break;
+        }
         default:
           result = { error: `Unknown tool: ${name}` };
       }
     } catch (err) {
       result = { error: `Tool error: ${String(err)}` };
+      toolIsError = true;
+    }
+
+    // Passive observation (fire-and-forget, never throws)
+    if (observer) {
+      try {
+        observer.onToolCall(name, args as Record<string, unknown>, result, toolIsError);
+      } catch {
+        // Observer failures must never affect tool responses
+      }
     }
 
     const text = JSON.stringify(result, null, 2);

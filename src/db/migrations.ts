@@ -22,6 +22,13 @@ const migrations: Migration[] = [
       initSchema(db);
     },
   },
+  {
+    version: 3,
+    up: (db) => {
+      // Session memory: ast_snapshots, session_observations, session_events
+      initSchema(db);
+    },
+  },
 ];
 
 /** Returns the current schema version (0 for a fresh, unmigrated database). */

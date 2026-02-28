@@ -10,6 +10,11 @@ import type {
   SymbolKind,
   DocumentChunkRecord,
   ContextEntryRecord,
+  AstSnapshotRecord,
+  SessionObservationRecord,
+  SessionEventRecord,
+  ObservationType,
+  SessionEventType,
 } from '../types.js';
 
 // ─── File Queries ─────────────────────────────────────────────────────────────
@@ -497,4 +502,231 @@ export function searchContextEntriesFts(
   } catch {
     return [];
   }
+}
+
+// ─── AST Snapshot Queries ──────────────────────────────────────────────────────
+
+export interface UpsertAstSnapshotInput {
+  filePath: string;
+  symbolName: string;
+  kind: string;
+  signature: string;
+  signatureHash: string;
+}
+
+export function upsertAstSnapshot(
+  db: Database.Database,
+  input: UpsertAstSnapshotInput,
+): void {
+  db.prepare(`
+    INSERT INTO ast_snapshots (file_path, symbol_name, kind, signature, signature_hash, captured_at)
+    VALUES (@filePath, @symbolName, @kind, @signature, @signatureHash, CURRENT_TIMESTAMP)
+    ON CONFLICT(file_path, symbol_name) DO UPDATE SET
+      kind = excluded.kind,
+      signature = excluded.signature,
+      signature_hash = excluded.signature_hash,
+      captured_at = CURRENT_TIMESTAMP
+  `).run(input);
+}
+
+export function getSnapshotsByFile(
+  db: Database.Database,
+  filePath: string,
+): AstSnapshotRecord[] {
+  return db
+    .prepare('SELECT * FROM ast_snapshots WHERE file_path = ?')
+    .all(filePath) as AstSnapshotRecord[];
+}
+
+export function deleteSnapshotsByFile(db: Database.Database, filePath: string): void {
+  db.prepare('DELETE FROM ast_snapshots WHERE file_path = ?').run(filePath);
+}
+
+// ─── Session Observation Queries ───────────────────────────────────────────────
+
+export interface InsertObservationInput {
+  sessionId: string;
+  type: ObservationType;
+  filePath?: string;
+  symbolName?: string;
+  observation: string;
+}
+
+export function insertObservation(
+  db: Database.Database,
+  input: InsertObservationInput,
+): number {
+  const result = db.prepare(`
+    INSERT INTO session_observations (session_id, type, file_path, symbol_name, observation)
+    VALUES (@sessionId, @type, @filePath, @symbolName, @observation)
+  `).run({
+    sessionId: input.sessionId,
+    type: input.type,
+    filePath: input.filePath ?? null,
+    symbolName: input.symbolName ?? null,
+    observation: input.observation,
+  });
+  return result.lastInsertRowid as number;
+}
+
+export function getObservationsBySession(
+  db: Database.Database,
+  sessionId: string,
+): SessionObservationRecord[] {
+  return db
+    .prepare('SELECT * FROM session_observations WHERE session_id = ? ORDER BY created_at')
+    .all(sessionId) as SessionObservationRecord[];
+}
+
+export function getObservationsByFile(
+  db: Database.Database,
+  filePath: string,
+  limit = 5,
+): SessionObservationRecord[] {
+  return db
+    .prepare(
+      'SELECT * FROM session_observations WHERE file_path = ? ORDER BY created_at DESC LIMIT ?',
+    )
+    .all(filePath, limit) as SessionObservationRecord[];
+}
+
+export function getObservationsByFileSymbol(
+  db: Database.Database,
+  filePath: string,
+  symbolName: string,
+  limit = 5,
+): SessionObservationRecord[] {
+  return db
+    .prepare(
+      `SELECT * FROM session_observations
+       WHERE file_path = ? AND symbol_name = ?
+       ORDER BY created_at DESC LIMIT ?`,
+    )
+    .all(filePath, symbolName, limit) as SessionObservationRecord[];
+}
+
+export function markObservationsStale(
+  db: Database.Database,
+  filePath: string,
+  symbolName: string,
+  reason: string,
+): void {
+  db.prepare(`
+    UPDATE session_observations
+    SET stale = 1, stale_reason = ?
+    WHERE file_path = ? AND symbol_name = ? AND stale = 0
+  `).run(reason, filePath, symbolName);
+}
+
+export function countStaleObservations(db: Database.Database): number {
+  const row = db
+    .prepare('SELECT COUNT(*) as cnt FROM session_observations WHERE stale = 1')
+    .get() as { cnt: number };
+  return row.cnt;
+}
+
+export function countPriorSessions(
+  db: Database.Database,
+  excludeSessionId: string,
+): number {
+  const row = db
+    .prepare(
+      'SELECT COUNT(DISTINCT session_id) as cnt FROM session_observations WHERE session_id != ?',
+    )
+    .get(excludeSessionId) as { cnt: number };
+  return row.cnt;
+}
+
+export function deleteObservationsOlderThan(
+  db: Database.Database,
+  cutoffIso: string,
+): void {
+  db.prepare('DELETE FROM session_observations WHERE created_at < ?').run(cutoffIso);
+}
+
+export function deleteObservationsExceptSession(
+  db: Database.Database,
+  sessionId: string,
+): void {
+  db.prepare('DELETE FROM session_observations WHERE session_id != ?').run(sessionId);
+  db.prepare('DELETE FROM session_events WHERE session_id != ?').run(sessionId);
+}
+
+// ─── Session Event Queries ─────────────────────────────────────────────────────
+
+export interface InsertSessionEventInput {
+  sessionId: string;
+  eventType: SessionEventType;
+  filePath?: string;
+  symbolName?: string;
+  extraJson?: string;
+}
+
+export function insertSessionEvent(
+  db: Database.Database,
+  input: InsertSessionEventInput,
+): number {
+  const result = db.prepare(`
+    INSERT INTO session_events (session_id, event_type, file_path, symbol_name, extra_json)
+    VALUES (@sessionId, @eventType, @filePath, @symbolName, @extraJson)
+  `).run({
+    sessionId: input.sessionId,
+    eventType: input.eventType,
+    filePath: input.filePath ?? null,
+    symbolName: input.symbolName ?? null,
+    extraJson: input.extraJson ?? null,
+  });
+  return result.lastInsertRowid as number;
+}
+
+export function getSessionEvents(
+  db: Database.Database,
+  sessionId: string,
+  eventTypes?: SessionEventType[],
+): SessionEventRecord[] {
+  if (eventTypes && eventTypes.length > 0) {
+    const placeholders = eventTypes.map(() => '?').join(', ');
+    return db
+      .prepare(
+        `SELECT * FROM session_events
+         WHERE session_id = ? AND event_type IN (${placeholders})
+         ORDER BY timestamp`,
+      )
+      .all(sessionId, ...eventTypes) as SessionEventRecord[];
+  }
+  return db
+    .prepare('SELECT * FROM session_events WHERE session_id = ? ORDER BY timestamp')
+    .all(sessionId) as SessionEventRecord[];
+}
+
+export function getRecentFileChangeEvents(
+  db: Database.Database,
+  filePath: string,
+  sessionId: string,
+  windowMinutes: number,
+): SessionEventRecord[] {
+  return db
+    .prepare(
+      `SELECT * FROM session_events
+       WHERE session_id = ?
+         AND file_path = ?
+         AND event_type IN ('symbol_added', 'symbol_removed', 'sig_changed')
+         AND timestamp >= datetime('now', '-' || ? || ' minutes')
+       ORDER BY timestamp`,
+    )
+    .all(sessionId, filePath, windowMinutes) as SessionEventRecord[];
+}
+
+export function getAntiPatternEvents(
+  db: Database.Database,
+  sessionId: string,
+): SessionEventRecord[] {
+  return db
+    .prepare(
+      `SELECT * FROM session_events
+       WHERE session_id = ?
+         AND event_type IN ('thrash_detected','dead_end','failed_search','tool_error','index_blind_spot','redundant_access')
+       ORDER BY timestamp DESC`,
+    )
+    .all(sessionId) as SessionEventRecord[];
 }
