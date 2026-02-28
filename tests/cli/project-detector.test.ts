@@ -33,10 +33,10 @@ describe('getProjectIndexPath', () => {
     expect(path.endsWith('index.db')).toBe(true);
   });
 
-  it('includes the project hash in the path', () => {
-    const hash = hashProjectPath('/home/user/myproject');
+  it('stores the index inside the project .pindex/ directory', () => {
     const path = getProjectIndexPath('/home/user/myproject');
-    expect(path).toContain(hash);
+    expect(path).toContain('.pindex');
+    expect(path).toContain('myproject');
   });
 });
 

@@ -33,16 +33,14 @@ export function hashProjectPath(projectPath: string): string {
   return createHash('sha256').update(normalized).digest('hex').substring(0, 8);
 }
 
-/** Returns the index DB path for a given project. */
+/** Returns the index DB path for a given project (stored locally in {projectPath}/.pindex/). */
 export function getProjectIndexPath(projectPath: string): string {
-  const hash = hashProjectPath(projectPath);
-  return join(getProjectsDir(), hash, 'index.db');
+  return join(resolve(projectPath), '.pindex', 'index.db');
 }
 
-/** Returns the meta JSON path for a given project. */
+/** Returns the meta JSON path for a given project (stored locally in {projectPath}/.pindex/). */
 export function getProjectMetaPath(projectPath: string): string {
-  const hash = hashProjectPath(projectPath);
-  return join(getProjectsDir(), hash, 'meta.json');
+  return join(resolve(projectPath), '.pindex', 'meta.json');
 }
 
 export interface ProjectMeta {

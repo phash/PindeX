@@ -2,10 +2,8 @@ import { writeFileSync, existsSync, mkdirSync, readFileSync, appendFileSync, unl
 import { resolve, join, relative } from 'node:path';
 import {
   findProjectRoot,
-  hashProjectPath,
   getProjectIndexPath,
   GlobalRegistry,
-  getPindexHome,
   type RegistryEntry,
 } from './project-detector.js';
 
@@ -170,6 +168,30 @@ export function injectClaudeSettings(
   }
 }
 
+// ─── .gitignore injection ──────────────────────────────────────────────────
+
+/**
+ * Adds `.pindex/` to the project's .gitignore (or creates the file).
+ * Idempotent: skips if already present.
+ */
+export function injectGitignore(
+  projectRoot: string,
+): 'added' | 'already_present' | 'created' {
+  const gitignorePath = join(projectRoot, '.gitignore');
+  const entry = '.pindex/';
+  if (existsSync(gitignorePath)) {
+    const content = readFileSync(gitignorePath, 'utf-8');
+    if (content.split('\n').some((l) => l.trim() === entry || l.trim() === '.pindex')) {
+      return 'already_present';
+    }
+    appendFileSync(gitignorePath, `\n# PindeX index data\n${entry}\n`, 'utf-8');
+    return 'added';
+  } else {
+    writeFileSync(gitignorePath, `# PindeX index data\n${entry}\n`, 'utf-8');
+    return 'created';
+  }
+}
+
 // ─── Init project ──────────────────────────────────────────────────────────
 
 /**
@@ -181,13 +203,14 @@ export async function initProject(cwd: string): Promise<void> {
   const registry = new GlobalRegistry();
   const entry = registry.upsert(projectRoot);
 
-  // Ensure the project's DB directory exists
-  const dbDir = join(getPindexHome(), 'projects', entry.hash);
+  // Ensure the project's local .pindex/ directory exists
+  const dbDir = join(projectRoot, '.pindex');
   if (!existsSync(dbDir)) mkdirSync(dbDir, { recursive: true });
 
   writeMcpJson(projectRoot, entry);
   const claudeResult = injectClaudeMdSection(projectRoot);
   const hooksResult = injectClaudeSettings(projectRoot);
+  const gitignoreResult = injectGitignore(projectRoot);
 
   const relPath = '.mcp.json';
   const claudeStatus =
@@ -199,11 +222,16 @@ export async function initProject(cwd: string): Promise<void> {
     hooksResult === 'created' ? 'created' :
     hooksResult === 'added'   ? 'hook added' :
                                 'already present';
+  const gitignoreStatus =
+    gitignoreResult === 'created'        ? 'created' :
+    gitignoreResult === 'added'          ? 'entry added' :
+                                           'already present';
   console.log('\n  ╔══════════════════════════════════════════╗');
   console.log('  ║           PindeX – Ready                 ║');
   console.log('  ╚══════════════════════════════════════════╝\n');
   console.log(`  Project   : ${projectRoot}`);
-  console.log(`  Index     : ~/.pindex/projects/${entry.hash}/index.db`);
+  console.log(`  Index     : ${projectRoot}/.pindex/index.db`);
+  console.log(`  .gitignore: ${gitignoreStatus}`);
   console.log(`  Port      : ${entry.monitoringPort}`);
   console.log(`  Config    : ${relPath} (written)`);
   console.log(`  CLAUDE.md : ${claudeStatus}`);
