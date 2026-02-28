@@ -51,7 +51,7 @@ Your project files
   └── token_log        (per-session metrics)
        │
        ▼
-  13 MCP tools  ──── stdio ────► Claude Code / Goose / any MCP client
+  14 MCP tools  ──── stdio ────► Claude Code / Goose / any MCP client
 ```
 
 Instead of sending full file contents to the AI, PindeX lets it call `search_symbols`, `search_docs`, `get_context`, or `get_file_summary` — returning only what it actually needs.
@@ -228,7 +228,7 @@ pindex status
 
 ## MCP Tools
 
-All 13 tools are available over stdio transport.
+All 14 tools are available over stdio transport.
 
 ### Code tools
 
@@ -356,6 +356,22 @@ Create a labelled A/B testing session to compare indexed vs. baseline token usag
 
 ---
 
+### `get_session_memory`
+
+Query passive session observations — facts and patterns the system recorded automatically by observing tool calls and file changes. No `save_context` calls required.
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `session_id` | string | | Filter by session ID |
+| `file` | string | | Filter by file path |
+| `symbol` | string | | Filter by symbol name |
+
+**Returns:** List of observations with type, content, linked symbol/file, and a `stale` flag (set when the linked symbol changed since the observation was recorded).
+
+Observations are also surfaced automatically inside `get_project_overview`, `get_symbol`, and `get_file_summary` — you rarely need to call this tool directly.
+
+---
+
 ### Document & context tools
 
 These three tools extend PindeX beyond code: documentation files are indexed automatically alongside source files, and Claude can persist notes to a persistent knowledge store.
@@ -464,6 +480,7 @@ These are set automatically in the generated `.mcp.json` — you rarely need to 
 | `TOKEN_PRICE_PER_MILLION` | `3.00` | USD price per million tokens — used for cost estimates |
 | `FEDERATION_REPOS` | _(empty)_ | Colon-separated absolute paths to linked repositories |
 | `DOCUMENT_PATTERNS` | `**/*.md,**/*.markdown,**/*.yaml,**/*.yml,**/*.txt` | Glob patterns for document files to index alongside code |
+| `OBSERVATION_RETENTION` | `permanent` | How long passive session observations are kept: `permanent`, `session`, or `Nd` (e.g. `30d`) |
 
 ---
 
@@ -749,7 +766,13 @@ src/
 │   ├── start_comparison.ts
 │   ├── search_docs.ts        # FTS5 across documents + context entries
 │   ├── get_doc_chunk.ts      # retrieve specific document section(s)
-│   └── save_context.ts       # persist a fact/decision to context store
+│   ├── save_context.ts       # persist a fact/decision to context store
+│   └── get_session_memory.ts # query passive session observations
+│
+├── memory/                   # Passive session memory (v1.1+)
+│   ├── ast-diff.ts           # AST diff engine — detects symbol changes
+│   ├── observer.ts           # SessionObserver — hooks tool calls + FileWatcher
+│   └── anti-patterns.ts      # AntiPatternDetector — dead-ends, thrashing, loops
 │
 ├── monitoring/
 │   ├── server.ts             # Express + WebSocket (per-project instance)
@@ -781,6 +804,7 @@ src/
 - **Per-project ports** — assigned deterministically as `7842 + (parseInt(hash.slice(0,4), 16) % 2000)` and stored in `registry.json` so they never change.
 - **`pindex-gui` reads DBs directly** — no running server required; works as a standalone dashboard even when Claude Code is not open.
 - **Migration** — `getPindexHome()` automatically renames `~/.mcp-indexer` → `~/.pindex` on first call if the old directory exists.
+- **Passive session memory** — `SessionObserver` wires into every MCP tool handler and the `FileWatcher` at startup; no application code in tools needs to know about memory. Observations are linked to symbol names so the staleness engine can cross-reference them with the AST diff output on re-index.
 
 ---
 

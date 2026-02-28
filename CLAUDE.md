@@ -103,15 +103,19 @@ npm run build         # compile src/ → dist/
 | Tool | Purpose |
 |---|---|
 | `search_symbols` | FTS5 full-text search across all indexed symbols (+ federated repos) |
-| `get_symbol` | Symbol details: signature, location, file dependencies |
+| `get_symbol` | Symbol details: signature, location, file dependencies + memory context |
 | `get_context` | Line-range snippet from a file (token-efficient) |
-| `get_file_summary` | File overview: symbols, imports, exports |
+| `get_file_summary` | File overview: symbols, imports, exports + memory context |
 | `find_usages` | All locations where a symbol is used |
 | `get_dependencies` | Import graph for a file (imports / imported_by / both) |
-| `get_project_overview` | Project-level stats, entry points, module list (+ federated repos) |
+| `get_project_overview` | Project-level stats, entry points, module list + session memory summary |
 | `reindex` | Rebuild index for one file or the entire project |
 | `get_token_stats` | Token usage statistics for a session |
 | `start_comparison` | Start A/B session (indexed vs baseline) |
+| `search_docs` | FTS5 search across indexed documents + saved context entries |
+| `get_doc_chunk` | Retrieve specific section(s) of an indexed document |
+| `save_context` | Persist a fact/decision to the cross-session context store |
+| `get_session_memory` | Query passive session observations by session, file, or symbol |
 
 ## Binaries
 
@@ -229,6 +233,18 @@ tests/
 ├── cli/                  # project-detector, setup, daemon tests
 └── integration/          # end-to-end MCP server tests
 ```
+
+## Session Memory (v1.1+)
+
+Passive memory that requires **zero cooperation from Claude** — no `save_context` calls needed.
+
+- **AST diff engine** (`src/memory/ast-diff.ts`): compares symbol signatures on every re-index; detects `added` / `removed` / `sig_changed`
+- **SessionObserver** (`src/memory/observer.ts`): hooks into MCP tool handlers + FileWatcher; auto-generates observations
+- **AntiPatternDetector** (`src/memory/anti-patterns.ts`): detects dead-end exploration, file thrashing, repeated failed searches, tool error loops
+- **Staleness engine**: marks observations stale when linked symbols change → surfaced as warnings next session
+- **Passive surfacing**: `get_project_overview`, `get_symbol`, `get_file_summary` include memory context automatically
+- New DB tables: `ast_snapshots`, `session_observations`, `session_events` (schema v3)
+- Env var: `OBSERVATION_RETENTION` = `permanent` (default) | `session` | `Nd` (e.g. `30d`)
 
 ## Key Implementation Notes
 
