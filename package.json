@@ -1,6 +1,6 @@
 {
   "name": "pindex",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "description": "MCP Server that structurally indexes a codebase for 80-90% token reduction",
   "type": "module",
   "bin": {
