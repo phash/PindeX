@@ -4,7 +4,7 @@
 
 PindeX is an [MCP (Model Context Protocol)](https://modelcontextprotocol.io) server that parses your project with `tree-sitter` and regex-based extractors, stores symbols, imports, and dependency graphs in a local SQLite database, and exposes 13 targeted tools so AI assistants can answer questions about your code — and your documentation — without reading entire files.
 
-**Supported languages:** TypeScript, JavaScript, Java, Kotlin, Python, PHP, Vue, Svelte, Ruby, C#
+**Supported languages:** TypeScript, JavaScript, Java, Kotlin, Python, PHP, Vue, Svelte, Ruby, C#, Go, Rust
 
 ---
 
@@ -455,7 +455,7 @@ These are set automatically in the generated `.mcp.json` — you rarely need to 
 |---|---|---|
 | `PROJECT_ROOT` | `.` | Root directory of the project to index |
 | `INDEX_PATH` | `~/.pindex/projects/{hash}/index.db` | Path to the SQLite database |
-| `LANGUAGES` | `typescript,javascript` | Comma-separated list of languages to index. Supported values: `typescript`, `javascript`, `java`, `kotlin`, `python`, `php`, `vue`, `svelte`, `ruby`, `csharp` |
+| `LANGUAGES` | `typescript,javascript` | Comma-separated list of languages to index. Supported values: `typescript`, `javascript`, `java`, `kotlin`, `python`, `php`, `vue`, `svelte`, `ruby`, `csharp`, `go`, `rust` |
 | `AUTO_REINDEX` | `true` | Watch for file changes and reindex automatically |
 | `MONITORING_PORT` | assigned per-project | Port for the live dashboard + WebSocket |
 | `MONITORING_AUTO_OPEN` | `false` | Open the dashboard in the browser on startup |

@@ -7,6 +7,13 @@ Wenn der User "commit", "push", "commit und push" o.ä. sagt:
 1. Versuche `Skill` mit `commit-commands:commit-push`
 2. Falls der Skill nicht verfügbar: direkt git-Befehle nutzen — nur relevante Dateien stagen (kein `.mcp.json`, `.claude/`, `dist/` außer explizit gewünscht), aussagekräftige Commit-Message im Stil der letzten Commits, dann `git push`
 
+### npm publish
+Wenn der User "publish", "npm publish", "release" o.ä. sagt:
+1. Versuche `Skill` mit `npm-publish`
+2. Manuell: `npm version patch` → `gh release create vX.Y.Z --title "vX.Y.Z" --target main --notes "..."` → Workflow via `gh run watch` beobachten
+- Voraussetzung: GitHub Secret `NPM_TOKEN` (Granular Access Token mit bypass-2fa) muss gesetzt sein
+- Workflow-Datei: `.github/workflows/publish.yml` (triggt bei Release + `workflow_dispatch`)
+
 ### PindeX-Tools nutzen
 - **Immer** `mcp__pindex__*` Tools für Codebase-Exploration verwenden
 - Pfade an die Tools immer mit Forward-Slashes übergeben (z.B. `src/gui/server.ts`)
@@ -19,7 +26,7 @@ Wenn der User "commit", "push", "commit und push" o.ä. sagt:
 - Workflow: PindeX zum Navigieren → Serena zum Editieren
 - Serena-Projekt aktivieren: `mcp__plugin_serena_serena__activate_project` mit `E:\claude\PindeX`
 
-MCP server that structurally indexes codebases (TypeScript, JavaScript, Java, Kotlin, Python, PHP, Vue, Svelte, Ruby, C#) and provides targeted tools for 80–90% token reduction in AI-assisted coding sessions.
+MCP server that structurally indexes codebases (TypeScript, JavaScript, Java, Kotlin, Python, PHP, Vue, Svelte, Ruby, C#, Go, Rust) and provides targeted tools for 80–90% token reduction in AI-assisted coding sessions.
 
 ## Tech Stack
 
@@ -85,7 +92,7 @@ npm run build         # compile src/ → dist/
 - **DB**: SQLite via `better-sqlite3` — FTS5 virtual table with triggers for symbol search
 - **Parser**: `tree-sitter` + `tree-sitter-typescript` — AST-based symbol/import extraction
 - **Indexer**: MD5-hash-based incremental reindexing, glob file discovery
-- **MCP Tools**: 10 tools registered via `@modelcontextprotocol/sdk`
+- **MCP Tools**: 13 tools registered via `@modelcontextprotocol/sdk`
 - **Monitoring**: per-project Express + WebSocket server, per-project deterministic port
 - **GUI**: `pindex-gui` binary — aggregated Express dashboard reading all project DBs directly
 - **CLI**: `pindex` (init/add/remove/status), per-project daemon management
