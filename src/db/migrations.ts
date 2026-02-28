@@ -29,6 +29,16 @@ const migrations: Migration[] = [
       initSchema(db);
     },
   },
+  {
+    version: 4,
+    up: (db) => {
+      // AST flags: is_async, has_try_catch on symbols table
+      db.exec(`
+        ALTER TABLE symbols ADD COLUMN is_async      INTEGER DEFAULT 0;
+        ALTER TABLE symbols ADD COLUMN has_try_catch INTEGER DEFAULT 0;
+      `);
+    },
+  },
 ];
 
 /** Returns the current schema version (0 for a fresh, unmigrated database). */

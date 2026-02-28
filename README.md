@@ -1,6 +1,6 @@
 # PindeX – MCP Codebase Indexer
 
-**Structural codebase indexing for AI coding assistants — 70–80% fewer tokens for code exploration queries.**
+**Structural codebase indexing for AI coding assistants — significantly fewer tokens for code exploration in medium-to-large projects.**
 
 PindeX is an [MCP (Model Context Protocol)](https://modelcontextprotocol.io) server that parses your project with `tree-sitter` and regex-based extractors, stores symbols, imports, and dependency graphs in a local SQLite database, and exposes 13 targeted tools so AI assistants can answer questions about your code — and your documentation — without reading entire files.
 
@@ -11,6 +11,7 @@ PindeX is an [MCP (Model Context Protocol)](https://modelcontextprotocol.io) ser
 ## Contents
 
 - [How It Works](#how-it-works)
+- [When Is PindeX Worth Using?](#when-is-pindex-worth-using)
 - [Requirements](#requirements)
 - [Installation](#installation)
 - [Quick Start](#quick-start)
@@ -58,9 +59,44 @@ Instead of sending full file contents to the AI, PindeX lets it call `search_sym
 Claude can also persist important facts across sessions with `save_context`, then retrieve them later with `search_docs` instead of re-reading large files.
 Token savings are tracked per session and visible in a live web dashboard.
 
-> **A note on the savings numbers:** PindeX can only measure tokens that flow through its own tools (`search_symbols`, `get_context`, `get_file_summary`, etc.). It has no visibility into tokens used by `Write`, `Read`, `Bash`, `Edit`, or other non-PindeX operations — those are handled directly by the AI client and never pass through PindeX.
->
-> The "70–80% savings" refers specifically to those code-exploration queries: instead of reading an entire file, PindeX returns a targeted snippet — and that targeted snippet is typically 70–80% smaller than the raw file content. **The actual reduction in your total session token budget depends on how much of the session is spent navigating and understanding code** versus writing or running commands. In sessions focused on exploring an unfamiliar codebase, savings are most pronounced. In sessions that are mostly editing, PindeX reduces only the exploration portion of the bill.
+---
+
+## When Is PindeX Worth Using?
+
+PindeX adds a fixed overhead per API turn (tool definitions are sent with every request). This overhead pays off only when the project is large enough that the savings from avoiding full-file reads exceed that cost.
+
+**Benchmark results** (5 identical tasks, synthetic TypeScript API codebase, Claude Sonnet 4.6):
+
+| Config | Total input tokens | vs. baseline |
+|---|---|---|
+| baseline (read_file / glob) | 167 K | — |
+| PindeX (8 core tools, manifest injection) | 246 K | **+47 %** |
+
+The test project had only **25 files at ~76 lines/file on average** — too small for PindeX to break even. The tool-definition overhead (~800 tokens/turn) outweighed the savings from narrower reads.
+
+**Rule of thumb — PindeX is beneficial when:**
+
+| Condition | Threshold |
+|---|---|
+| Number of files | ≥ 40 |
+| Average file length | ≥ 150 lines/file |
+
+For projects above these thresholds (e.g. the PindeX codebase itself with 80+ files), targeted symbol lookups consistently return far less than a full-file read, and the fixed overhead amortises over many turns.
+
+**Built-in recommendation:** `get_project_overview` always returns an `index_recommendation` field:
+
+```json
+{
+  "index_recommendation": {
+    "worthwhile": false,
+    "reason": "Small project (25 files, avg ~76 lines/file) — direct reads may be more efficient than index overhead",
+    "avgFileLinesEstimate": 76,
+    "breakEvenFiles": 40
+  }
+}
+```
+
+> **A note on the savings numbers:** PindeX can only measure tokens that flow through its own tools. It has no visibility into tokens used by `Write`, `Read`, `Bash`, or other non-PindeX operations. In sessions focused on exploring an unfamiliar codebase the savings are most pronounced; in sessions that are mostly editing, PindeX reduces only the exploration portion.
 
 ---
 
@@ -319,7 +355,7 @@ Import graph for a file — what it imports, what imports it, or both.
 Project-wide statistics — no parameters required.
 When federation is active, also includes stats for each linked repository.
 
-**Returns:** Total file count, dominant language, entry points (`index`, `main`, `app` files), module list with symbol counts, and (if federated) per-repo breakdowns.
+**Returns:** Total file count, dominant language, entry points (`index`, `main`, `app` files), module list with symbol counts, an `index_recommendation` field (see [When Is PindeX Worth Using?](#when-is-pindex-worth-using)), and (if federated) per-repo breakdowns.
 
 ---
 

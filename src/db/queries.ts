@@ -71,6 +71,8 @@ export interface UpsertSymbolInput {
   startLine: number;
   endLine: number;
   isExported: boolean;
+  isAsync: boolean;
+  hasTryCatch: boolean;
 }
 
 export function upsertSymbol(
@@ -78,9 +80,14 @@ export function upsertSymbol(
   input: UpsertSymbolInput,
 ): number {
   const result = db.prepare(`
-    INSERT INTO symbols (file_id, name, kind, signature, summary, start_line, end_line, is_exported)
-    VALUES (@fileId, @name, @kind, @signature, @summary, @startLine, @endLine, @isExported)
-  `).run({ ...input, isExported: input.isExported ? 1 : 0 });
+    INSERT INTO symbols (file_id, name, kind, signature, summary, start_line, end_line, is_exported, is_async, has_try_catch)
+    VALUES (@fileId, @name, @kind, @signature, @summary, @startLine, @endLine, @isExported, @isAsync, @hasTryCatch)
+  `).run({
+    ...input,
+    isExported: input.isExported ? 1 : 0,
+    isAsync: input.isAsync ? 1 : 0,
+    hasTryCatch: input.hasTryCatch ? 1 : 0,
+  });
   return result.lastInsertRowid as number;
 }
 
@@ -137,26 +144,38 @@ export interface FtsSearchResult {
   summary: string | null;
   start_line: number;
   file_path: string;
+  is_async: number;
+  has_try_catch: number;
 }
 
 export function searchSymbolsFts(
   db: Database.Database,
   query: string,
   limit: number,
+  filters?: { isAsync?: boolean; hasTryCatch?: boolean },
 ): FtsSearchResult[] {
   try {
-    return db
-      .prepare(
-        `SELECT s.id, s.name, s.kind, s.signature, s.summary, s.start_line,
-                f.path AS file_path
-         FROM symbols_fts fts
-         JOIN symbols s ON s.id = fts.rowid
-         JOIN files f ON s.file_id = f.id
-         WHERE symbols_fts MATCH ?
-         ORDER BY fts.rank
-         LIMIT ?`,
-      )
-      .all(query, limit) as FtsSearchResult[];
+    let sql = `SELECT s.id, s.name, s.kind, s.signature, s.summary, s.start_line,
+                      s.is_async, s.has_try_catch, f.path AS file_path
+               FROM symbols_fts fts
+               JOIN symbols s ON s.id = fts.rowid
+               JOIN files f ON s.file_id = f.id
+               WHERE symbols_fts MATCH ?`;
+    const params: unknown[] = [query];
+
+    if (filters?.isAsync !== undefined) {
+      sql += ` AND s.is_async = ?`;
+      params.push(filters.isAsync ? 1 : 0);
+    }
+    if (filters?.hasTryCatch !== undefined) {
+      sql += ` AND s.has_try_catch = ?`;
+      params.push(filters.hasTryCatch ? 1 : 0);
+    }
+
+    sql += ` ORDER BY fts.rank LIMIT ?`;
+    params.push(limit);
+
+    return db.prepare(sql).all(...params) as FtsSearchResult[];
   } catch {
     // FTS query syntax errors – return empty rather than throw
     return [];

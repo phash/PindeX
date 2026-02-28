@@ -101,6 +101,14 @@ const DECLARATION_TYPES: Array<{ nodeType: string; kind: SymbolKind }> = [
   { nodeType: 'enum_declaration', kind: 'enum' },
 ];
 
+function nodeIsAsync(node: AstNode): boolean {
+  return node.children.some((c) => c.type === 'async');
+}
+
+function nodeHasTryCatch(node: AstNode): boolean {
+  return node.descendantsOfType('try_statement').length > 0;
+}
+
 function extractFromDeclarationNode(
   node: AstNode,
   kind: SymbolKind,
@@ -116,6 +124,8 @@ function extractFromDeclarationNode(
     startLine: node.startPosition.row + 1, // convert 0-indexed to 1-indexed
     endLine: node.endPosition.row + 1,
     isExported,
+    isAsync: nodeIsAsync(node),
+    hasTryCatch: nodeHasTryCatch(node),
   };
 }
 
@@ -136,6 +146,8 @@ function extractMethodsFromClass(classNode: AstNode): ParsedSymbol[] {
       startLine: methodNode.startPosition.row + 1,
       endLine: methodNode.endPosition.row + 1,
       isExported: false,
+      isAsync: nodeIsAsync(methodNode),
+      hasTryCatch: nodeHasTryCatch(methodNode),
     });
   }
   return methods;
@@ -168,6 +180,8 @@ function extractFromExportStatement(node: AstNode): ParsedSymbol[] {
     for (const decl of declarators) {
       const nameNode = decl.childForFieldName('name');
       if (!nameNode) continue;
+      // Check if the value is an async function
+      const valueNode = decl.childForFieldName('value');
       symbols.push({
         name: nameNode.text,
         kind: 'const',
@@ -175,10 +189,55 @@ function extractFromExportStatement(node: AstNode): ParsedSymbol[] {
         startLine: declaration.startPosition.row + 1,
         endLine: declaration.endPosition.row + 1,
         isExported: true,
+        isAsync: valueNode ? nodeIsAsync(valueNode) : false,
+        hasTryCatch: valueNode ? nodeHasTryCatch(valueNode) : false,
       });
     }
   }
   return symbols;
+}
+
+/** Extracts all symbols from a parsed AST root node. */
+const HTTP_METHODS = new Set(['get', 'post', 'put', 'patch', 'delete', 'head', 'options', 'use']);
+
+/** Tries to extract an Express-style route registration from an expression statement. */
+function extractRouteFromExpression(node: AstNode): ParsedSymbol | null {
+  // Look for a call_expression child
+  const callNode = node.namedChildren.find((c) => c.type === 'call_expression');
+  if (!callNode) return null;
+
+  const fnNode = callNode.childForFieldName('function');
+  if (!fnNode || fnNode.type !== 'member_expression') return null;
+
+  const propNode = fnNode.childForFieldName('property');
+  if (!propNode) return null;
+  const method = propNode.text.toLowerCase();
+  if (!HTTP_METHODS.has(method) || method === 'use') return null;
+
+  // First argument should be the path string
+  const argsNode = callNode.childForFieldName('arguments');
+  if (!argsNode) return null;
+  const firstArg = argsNode.namedChildren[0];
+  if (!firstArg) return null;
+
+  // Extract path — strip quotes
+  let routePath = firstArg.text.replace(/^['"`]|['"`]$/g, '');
+  if (!routePath.startsWith('/')) return null;
+
+  const name = `${method.toUpperCase()} ${routePath}`;
+  const handlerNode = argsNode.namedChildren[argsNode.namedChildren.length - 1];
+  const hasTryCatch = handlerNode ? nodeHasTryCatch(handlerNode) : false;
+
+  return {
+    name,
+    kind: 'route',
+    signature: `${method.toUpperCase()} ${routePath}`,
+    startLine: node.startPosition.row + 1,
+    endLine: node.endPosition.row + 1,
+    isExported: false,
+    isAsync: true, // Express route handlers are typically async
+    hasTryCatch,
+  };
 }
 
 /** Extracts all symbols from a parsed AST root node. */
@@ -190,6 +249,15 @@ export function extractSymbols(rootNode: AstNode, _content: string): ParsedSymbo
     if (child.type === 'export_statement') {
       symbols.push(...extractFromExportStatement(child));
       continue;
+    }
+
+    // Detect Express route registrations
+    if (child.type === 'expression_statement') {
+      const route = extractRouteFromExpression(child);
+      if (route) {
+        symbols.push(route);
+        continue;
+      }
     }
 
     // Handle direct declarations
@@ -256,7 +324,7 @@ function regexSymbols(
       const lineNum = content.slice(0, m.index).split('\n').length;
       const rawLine = lines[lineNum - 1] ?? '';
       const sig = rawLine.trim().replace(/\s+/g, ' ').substring(0, 80);
-      symbols.push({ name, kind, signature: sig, startLine: lineNum, endLine: lineNum, isExported: true });
+      symbols.push({ name, kind, signature: sig, startLine: lineNum, endLine: lineNum, isExported: true, isAsync: false, hasTryCatch: false });
     }
   }
   return symbols;

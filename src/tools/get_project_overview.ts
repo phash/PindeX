@@ -1,5 +1,5 @@
 import type Database from 'better-sqlite3';
-import type { GetProjectOverviewOutput, SessionMemorySummary } from '../types.js';
+import type { GetProjectOverviewInput, GetProjectOverviewOutput, IndexRecommendation, SessionMemorySummary } from '../types.js';
 import {
   getAllFiles,
   getSymbolsByFileId,
@@ -14,7 +14,9 @@ export function getProjectOverview(
   projectRoot: string,
   federatedDbs: FederatedDb[] = [],
   sessionId?: string,
+  input?: GetProjectOverviewInput,
 ): GetProjectOverviewOutput {
+  const mode = input?.mode ?? 'full';
   const files = getAllFiles(db);
 
   if (files.length === 0) {
@@ -44,13 +46,22 @@ export function getProjectOverview(
         /^(index|main|app)\.(ts|tsx|js)$/.test(p),
     );
 
-  // Build module summaries
   let totalSymbols = 0;
-  const modules = files.map((f) => {
-    const symbols = getSymbolsByFileId(db, f.id);
-    totalSymbols += symbols.length;
-    return { path: f.path, summary: f.summary, symbolCount: symbols.length };
-  });
+  let modules: Array<{ path: string; summary: string | null; symbolCount: number }>;
+
+  if (mode === 'brief') {
+    // Brief mode: count all symbols in one query, skip per-file lookups
+    const row = db.prepare('SELECT COUNT(*) as cnt FROM symbols').get() as { cnt: number };
+    totalSymbols = row.cnt;
+    modules = files.map((f) => ({ path: f.path, summary: null, symbolCount: 0 }));
+  } else {
+    // Full mode: per-file symbol counts
+    modules = files.map((f) => {
+      const symbols = getSymbolsByFileId(db, f.id);
+      totalSymbols += symbols.length;
+      return { path: f.path, summary: f.summary, symbolCount: symbols.length };
+    });
+  }
 
   const primaryResult: GetProjectOverviewOutput = {
     rootPath: projectRoot,
@@ -78,6 +89,31 @@ export function getProjectOverview(
     };
     primaryResult.session_memory = session_memory;
   }
+
+  // ── Index recommendation ──────────────────────────────────────────────────
+  // Estimate whether using PindeX tools saves tokens vs direct file reads.
+  // Break-even: tool-def overhead (~800 tokens/turn × ~6 turns = ~5K) vs
+  // savings from avoiding full-file reads (avgFileTokens × avoidsPerSession).
+  // Heuristic thresholds tuned against benchmark data.
+  const BREAK_EVEN_FILES = 40;
+  const BREAK_EVEN_AVG_LINES = 150;
+  const tokenRow = db.prepare(
+    'SELECT COALESCE(SUM(raw_token_estimate), 0) as total FROM files'
+  ).get() as { total: number };
+  const avgFileTokens = files.length > 0 ? (tokenRow.total as number) / files.length : 0;
+  // 1 token ≈ 4 chars ≈ 1/50 line (assuming ~200 chars/line avg)
+  const avgFileLinesEstimate = Math.round(avgFileTokens * 4 / 50);
+  const worthwhile = files.length >= BREAK_EVEN_FILES || avgFileLinesEstimate >= BREAK_EVEN_AVG_LINES;
+
+  const recommendation: IndexRecommendation = {
+    worthwhile,
+    reason: worthwhile
+      ? `${files.length} files, avg ~${avgFileLinesEstimate} lines/file — index tools save tokens`
+      : `Small project (${files.length} files, avg ~${avgFileLinesEstimate} lines/file) — direct reads may be more efficient than index overhead`,
+    avgFileLinesEstimate,
+    breakEvenFiles: BREAK_EVEN_FILES,
+  };
+  primaryResult.index_recommendation = recommendation;
 
   if (federatedDbs.length === 0) return primaryResult;
 

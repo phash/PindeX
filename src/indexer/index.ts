@@ -217,6 +217,8 @@ export class Indexer {
           startLine: sym.startLine,
           endLine: sym.endLine,
           isExported: sym.isExported,
+          isAsync: sym.isAsync,
+          hasTryCatch: sym.hasTryCatch,
         });
       }
 

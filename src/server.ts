@@ -18,6 +18,7 @@ import { searchDocs } from './tools/search_docs.js';
 import { getDocChunk } from './tools/get_doc_chunk.js';
 import { saveContext } from './tools/save_context.js';
 import { getSessionMemory } from './tools/get_session_memory.js';
+import { getApiEndpoints } from './tools/get_api_endpoints.js';
 import type { SessionObserver } from './memory/observer.js';
 
 /**
@@ -28,48 +29,47 @@ import type { SessionObserver } from './memory/observer.js';
 const TOOL_DEFINITIONS = [
   {
     name: 'search_symbols',
-    description:
-      'Search for symbols (functions, classes, types) in the indexed codebase using full-text search. Returns matching symbols without loading full file contents.',
+    description: 'FTS search for symbols (functions, classes, types) across the indexed codebase.',
     inputSchema: {
       type: 'object',
       properties: {
-        query: { type: 'string', description: 'Search query (symbol name, partial name, or keyword)' },
-        limit: { type: 'number', description: 'Maximum results to return (default: 20)' },
+        query: { type: 'string', description: 'Symbol name or keyword' },
+        limit: { type: 'number', description: 'Max results (default: 20)' },
+        isAsync: { type: 'boolean', description: 'Filter async functions' },
+        hasTryCatch: { type: 'boolean', description: 'Filter by try/catch presence' },
+        snippet: { type: 'boolean', description: 'Include first 5 lines of body' },
       },
       required: ['query'],
     },
   },
   {
     name: 'get_symbol',
-    description:
-      'Get details of a specific symbol: signature, location, summary, and its file dependencies.',
+    description: 'Symbol details: signature, location, file dependencies.',
     inputSchema: {
       type: 'object',
       properties: {
         name: { type: 'string', description: 'Symbol name' },
-        file: { type: 'string', description: 'Optional: file path to disambiguate' },
+        file: { type: 'string', description: 'File path (to disambiguate)' },
       },
       required: ['name'],
     },
   },
   {
     name: 'get_context',
-    description:
-      'Load a specific line range from a file. More token-efficient than reading entire files.',
+    description: 'Read a line range from a file (token-efficient).',
     inputSchema: {
       type: 'object',
       properties: {
         file: { type: 'string', description: 'File path (project-relative)' },
-        line: { type: 'number', description: 'Target line number (1-indexed)' },
-        range: { type: 'number', description: 'Number of lines to load (default: 30)' },
+        line: { type: 'number', description: 'Target line (1-indexed)' },
+        range: { type: 'number', description: 'Lines to read (default: 30)' },
       },
       required: ['file', 'line'],
     },
   },
   {
     name: 'get_file_summary',
-    description:
-      'Get an overview of a file: summary, symbols, imports, and exports – without loading the full content.',
+    description: 'File overview: symbols, imports, exports, size. No full read.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -80,35 +80,41 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'find_usages',
-    description: 'Find all locations where a symbol is used across the codebase.',
+    description: 'All call sites of a symbol across the codebase.',
     inputSchema: {
       type: 'object',
       properties: {
-        symbol: { type: 'string', description: 'Symbol name to find usages of' },
+        symbol: { type: 'string', description: 'Symbol name' },
       },
       required: ['symbol'],
     },
   },
   {
     name: 'get_dependencies',
-    description: 'Get the import graph for a file: what it imports and what imports it.',
+    description: 'Import graph for a file (imports / imported_by / both).',
     inputSchema: {
       type: 'object',
       properties: {
         target: { type: 'string', description: 'File path (project-relative)' },
-        direction: {
-          type: 'string',
-          enum: ['imports', 'imported_by', 'both'],
-          description: 'Which direction to traverse (default: both)',
-        },
+        direction: { type: 'string', enum: ['imports', 'imported_by', 'both'], description: 'Traversal direction (default: both)' },
       },
       required: ['target'],
     },
   },
   {
     name: 'get_project_overview',
-    description:
-      'Get a high-level overview of the project: entry points, modules, and statistics.',
+    description: 'Project stats, entry points, module list. mode=brief for counts only.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        mode: { type: 'string', enum: ['brief', 'full'], description: 'brief=counts only; full=per-file symbols (default)' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'get_api_endpoints',
+    description: 'All HTTP endpoints (Express routes): method, path, file, line.',
     inputSchema: {
       type: 'object',
       properties: {},
@@ -117,103 +123,96 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'reindex',
-    description: 'Rebuild the index for a specific file or the entire project.',
+    description: 'Rebuild the symbol index (one file or entire project).',
     inputSchema: {
       type: 'object',
       properties: {
-        target: { type: 'string', description: 'File path to reindex, or omit to reindex all' },
+        target: { type: 'string', description: 'File path, or omit for full reindex' },
       },
       required: [],
     },
   },
   {
     name: 'get_token_stats',
-    description: 'Get token usage statistics for the current or a specific session.',
+    description: 'Token usage stats for this session.',
     inputSchema: {
       type: 'object',
       properties: {
-        session_id: { type: 'string', description: 'Session ID (omit for current session)' },
+        session_id: { type: 'string', description: 'Session ID (omit for current)' },
       },
       required: [],
     },
   },
   {
     name: 'start_comparison',
-    description:
-      'Start a named session for A/B comparison between indexed and baseline token usage.',
+    description: 'Start A/B session: indexed vs baseline token usage.',
     inputSchema: {
       type: 'object',
       properties: {
-        label: { type: 'string', description: 'Human-readable label for this session' },
-        mode: {
-          type: 'string',
-          enum: ['indexed', 'baseline'],
-          description: 'Whether to use the index (indexed) or simulate without (baseline)',
-        },
+        label: { type: 'string', description: 'Session label' },
+        mode: { type: 'string', enum: ['indexed', 'baseline'], description: 'indexed or baseline' },
       },
       required: ['label', 'mode'],
     },
   },
   {
     name: 'search_docs',
-    description:
-      'Search indexed documents and saved context entries using full-text search. Covers markdown, yaml, txt files and any context snippets saved with save_context.',
+    description: 'FTS search across docs and saved context.',
     inputSchema: {
       type: 'object',
       properties: {
         query: { type: 'string', description: 'Search query' },
-        limit: { type: 'number', description: 'Maximum results to return (default: 20)' },
-        type: {
-          type: 'string',
-          enum: ['docs', 'context', 'all'],
-          description: 'Filter by result type: file-based docs, saved context entries, or all (default: all)',
-        },
+        limit: { type: 'number', description: 'Max results (default: 20)' },
+        type: { type: 'string', enum: ['docs', 'context', 'all'], description: 'Result type filter (default: all)' },
       },
       required: ['query'],
     },
   },
   {
     name: 'get_doc_chunk',
-    description:
-      'Retrieve the full content of a specific document chunk or all chunks of a file. More token-efficient than loading the entire file.',
+    description: 'Retrieve a document section by file and optional chunk index.',
     inputSchema: {
       type: 'object',
       properties: {
         file: { type: 'string', description: 'File path (project-relative)' },
-        chunk_index: { type: 'number', description: 'Specific chunk to retrieve (omit for all chunks)' },
+        chunk_index: { type: 'number', description: 'Chunk index (omit for all)' },
       },
       required: ['file'],
     },
   },
   {
     name: 'save_context',
-    description:
-      'Save an important fact, decision, or snippet to the persistent context store. Retrievable across sessions via search_docs. Use this to offload information from the context window.',
+    description: 'Persist a fact or snippet to the cross-session context store.',
     inputSchema: {
       type: 'object',
       properties: {
-        content: { type: 'string', description: 'The content to save' },
-        tags: { type: 'string', description: 'Comma-separated tags for better retrieval (e.g. "auth,jwt,security")' },
+        content: { type: 'string', description: 'Content to save' },
+        tags: { type: 'string', description: 'Comma-separated tags' },
       },
       required: ['content'],
     },
   },
   {
     name: 'get_session_memory',
-    description:
-      'Retrieve session memory: auto-generated observations from previous sessions, staleness warnings, and detected anti-patterns (dead-end exploration, file thrashing, repeated failed searches, etc.). Call this at the start of a session or before working on a file to see what was observed before.',
+    description: 'Prior session observations, staleness warnings, anti-patterns.',
     inputSchema: {
       type: 'object',
       properties: {
-        session_id: { type: 'string', description: 'Session ID to load (omit for current session)' },
-        file: { type: 'string', description: 'Filter observations to a specific file path' },
-        symbol: { type: 'string', description: 'Filter observations to a specific symbol name' },
-        include_stale: { type: 'boolean', description: 'Include observations marked stale due to code changes (default: false)' },
+        session_id: { type: 'string', description: 'Session ID (omit for current)' },
+        file: { type: 'string', description: 'Filter to file path' },
+        symbol: { type: 'string', description: 'Filter to symbol name' },
+        include_stale: { type: 'boolean', description: 'Include stale observations (default: false)' },
       },
       required: [],
     },
   },
 ];
+
+/** Core tools exposed when EXPOSE_CORE_TOOLS_ONLY=true (omits analytics/memory/doc tools). */
+const CORE_TOOL_NAMES = new Set([
+  'search_symbols', 'get_symbol', 'get_context', 'get_file_summary',
+  'find_usages', 'get_dependencies', 'get_project_overview', 'get_api_endpoints',
+]);
 
 /** A secondary project whose index is searched alongside the primary DB (federation). */
 export interface FederatedDb {
@@ -274,7 +273,9 @@ export function createMcpServer(
   // ─── List Tools ────────────────────────────────────────────────────────────
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: TOOL_DEFINITIONS,
+    tools: process.env.EXPOSE_CORE_TOOLS_ONLY === 'true'
+      ? TOOL_DEFINITIONS.filter(t => CORE_TOOL_NAMES.has(t.name))
+      : TOOL_DEFINITIONS,
   }));
 
   // ─── Handle Tool Calls ─────────────────────────────────────────────────────
@@ -299,7 +300,7 @@ export function createMcpServer(
       const a = args as Record<string, unknown>;
       switch (name) {
         case 'search_symbols': {
-          const r = searchSymbols(db, a as unknown as Parameters<typeof searchSymbols>[1], federatedDbs);
+          const r = searchSymbols(db, a as unknown as Parameters<typeof searchSymbols>[1], federatedDbs, projectRoot);
           tokensWithoutIndex = estimateResponseTokens(r) * 10;
           result = r;
           break;
@@ -333,8 +334,13 @@ export function createMcpServer(
           break;
         }
         case 'get_project_overview': {
-          result = getProjectOverview(db, projectRoot, federatedDbs, sessionId);
+          result = getProjectOverview(db, projectRoot, federatedDbs, sessionId, a as unknown as Parameters<typeof getProjectOverview>[4]);
           tokensWithoutIndex = estimateResponseTokens(result) * 5;
+          break;
+        }
+        case 'get_api_endpoints': {
+          result = getApiEndpoints(db);
+          tokensWithoutIndex = estimateResponseTokens(result) * 8;
           break;
         }
         case 'reindex': {

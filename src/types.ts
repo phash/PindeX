@@ -18,7 +18,8 @@ export type SymbolKind =
   | 'type'
   | 'interface'
   | 'enum'
-  | 'variable';
+  | 'variable'
+  | 'route';
 
 export interface SymbolRecord {
   id: number;
@@ -30,6 +31,8 @@ export interface SymbolRecord {
   start_line: number;
   end_line: number;
   is_exported: 0 | 1;
+  is_async: 0 | 1;
+  has_try_catch: 0 | 1;
 }
 
 export interface DependencyRecord {
@@ -158,6 +161,8 @@ export interface ParsedSymbol {
   startLine: number;
   endLine: number;
   isExported: boolean;
+  isAsync: boolean;
+  hasTryCatch: boolean;
 }
 
 export interface ParsedImport {
@@ -193,6 +198,9 @@ export interface ParsedDocument {
 export interface SearchSymbolsInput {
   query: string;
   limit?: number;
+  isAsync?: boolean;
+  hasTryCatch?: boolean;
+  snippet?: boolean;
 }
 
 export interface SymbolSearchResult {
@@ -202,6 +210,9 @@ export interface SymbolSearchResult {
   summary: string | null;
   file: string;
   line: number;
+  isAsync?: boolean;
+  hasTryCatch?: boolean;
+  snippet?: string;
 }
 
 export interface GetSymbolInput {
@@ -251,6 +262,8 @@ export interface GetFileSummaryOutput {
   symbols: Array<{ name: string; kind: SymbolKind; signature: string }>;
   imports: string[];
   exports: string[];
+  lineCount?: number;
+  tokenEstimate?: number;
   memory_context?: MemoryContext;
 }
 
@@ -281,6 +294,31 @@ export interface SessionMemorySummary {
   hint: string | null;
 }
 
+export interface GetProjectOverviewInput {
+  mode?: 'brief' | 'full';
+}
+
+export interface GetApiEndpointsOutput {
+  endpoints: Array<{
+    method: string;
+    path: string;
+    handler: string;
+    file: string;
+    line: number;
+  }>;
+}
+
+export interface IndexRecommendation {
+  /** Whether using PindeX tools is expected to save tokens vs direct file reads. */
+  worthwhile: boolean;
+  /** Human-readable explanation with key metrics. */
+  reason: string;
+  /** Estimated average lines per file (derived from token estimates). */
+  avgFileLinesEstimate: number;
+  /** Minimum file count at which the index typically breaks even. */
+  breakEvenFiles: number;
+}
+
 export interface GetProjectOverviewOutput {
   rootPath: string;
   language: string;
@@ -290,6 +328,8 @@ export interface GetProjectOverviewOutput {
   /** Present when the server is configured with FEDERATION_REPOS */
   federatedProjects?: Array<{ rootPath: string; stats: { totalFiles: number; totalSymbols: number } }>;
   session_memory?: SessionMemorySummary;
+  /** Cost-benefit analysis: should Claude use index tools or fall back to direct reads? */
+  index_recommendation?: IndexRecommendation;
 }
 
 export interface ReindexInput {

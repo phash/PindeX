@@ -26,7 +26,9 @@ Wenn der User "publish", "npm publish", "release" o.ä. sagt:
 - Workflow: PindeX zum Navigieren → Serena zum Editieren
 - Serena-Projekt aktivieren: `mcp__plugin_serena_serena__activate_project` mit `E:\claude\PindeX`
 
-MCP server that structurally indexes codebases (TypeScript, JavaScript, Java, Kotlin, Python, PHP, Vue, Svelte, Ruby, C#, Go, Rust) and provides targeted tools for 80–90% token reduction in AI-assisted coding sessions.
+MCP server that structurally indexes codebases (TypeScript, JavaScript, Java, Kotlin, Python, PHP, Vue, Svelte, Ruby, C#, Go, Rust) and provides targeted tools for significant token reduction in AI-assisted coding sessions.
+
+**Wann lohnt sich PindeX?** Benchmarks zeigen den Break-Even bei ca. **40+ Dateien** oder **⌀ ≥150 Zeilen/Datei**. Bei kleineren Projekten überwiegt der Tool-Definition-Overhead (~800 Tokens/Turn × Anzahl Turns) die Einsparungen durch vermiedene File-Reads. `get_project_overview` liefert automatisch ein `index_recommendation`-Feld mit Einschätzung für das jeweilige Projekt.
 
 ## Tech Stack
 
