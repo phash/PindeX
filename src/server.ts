@@ -20,6 +20,11 @@ import { saveContext } from './tools/save_context.js';
 import { getSessionMemory } from './tools/get_session_memory.js';
 import type { SessionObserver } from './memory/observer.js';
 
+/**
+ * MCP tool schemas exposed to the client (name, description, JSON input schema).
+ * Returned verbatim by the ListTools handler and drive input validation on the
+ * client side — keep in sync with the actual tool implementations in src/tools/.
+ */
 const TOOL_DEFINITIONS = [
   {
     name: 'search_symbols',
@@ -210,20 +215,48 @@ const TOOL_DEFINITIONS = [
   },
 ];
 
+/** A secondary project whose index is searched alongside the primary DB (federation). */
 export interface FederatedDb {
+  /** Absolute path to the federated project root (used for result attribution). */
   path: string;
+  /** Open SQLite connection to the federated project's index.db. */
   db: Database.Database;
 }
 
+/** Configuration passed to {@link createMcpServer} at startup. */
 export interface ServerOptions {
+  /** Absolute path to the project being indexed; used by get_context and get_project_overview. */
   projectRoot: string;
+  /** HTTP port of the per-project monitoring server (default: 7842). */
   monitoringPort?: number;
+  /**
+   * When true, all query tools return an error instead of real data.
+   * Used to measure baseline token usage without the index.
+   */
   baselineMode?: boolean;
+  /** Additional project indexes searched during federated queries. */
   federatedDbs?: FederatedDb[];
+  /** Identifies the current Claude session for token-stat grouping (default: 'default'). */
   sessionId?: string;
+  /** Passive observer that records tool calls for session memory generation. */
   observer?: SessionObserver;
 }
 
+/**
+ * Creates and configures the MCP stdio server with all registered tools.
+ *
+ * Responsibilities:
+ * - Registers ListTools and CallTools request handlers
+ * - Routes each tool call to its implementation in src/tools/
+ * - Tracks token usage and broadcasts live stats to the monitoring UI
+ * - Notifies the session observer for passive memory generation
+ *
+ * @param db                     Primary project SQLite database
+ * @param indexer                Indexer instance used by the reindex tool
+ * @param tokenLogger            Logs per-call token estimates (null = disabled)
+ * @param monitoringServerInstance  WebSocket server for live dashboard updates (null = disabled)
+ * @param options                Runtime configuration (see {@link ServerOptions})
+ */
 export function createMcpServer(
   db: Database.Database,
   indexer: Indexer,
@@ -257,6 +290,8 @@ export function createMcpServer(
     }
 
     let result: unknown;
+    // Estimated token cost if the AI had to read raw source instead of using the index.
+    // Each tool uses a heuristic multiplier: search results save ~10×, full-file reads ~5×, etc.
     let tokensWithoutIndex = 0;
     let toolIsError = false;
 
@@ -354,7 +389,7 @@ export function createMcpServer(
     const text = JSON.stringify(result, null, 2);
     const tokensUsed = estimateTextTokens(text);
 
-    // Log token usage
+    // Record token usage for this call; reindex is write-only so excluded from stats.
     if (tokenLogger && name !== 'reindex') {
       tokenLogger.log({
         toolName: name,
@@ -372,7 +407,7 @@ export function createMcpServer(
         tokens_actual: tokensUsed,
         tokens_estimated: Math.max(tokensWithoutIndex, tokensUsed),
         savings: Math.max(tokensWithoutIndex - tokensUsed, 0),
-        savings_percent: 0, // simplified
+        savings_percent: 0, // computed client-side in the dashboard from cumulative totals
         cumulative_actual: tokensUsed,
         cumulative_savings: Math.max(tokensWithoutIndex - tokensUsed, 0),
       });
@@ -384,10 +419,12 @@ export function createMcpServer(
   return server;
 }
 
+/** Rough token estimate for a string: ~4 characters per token (GPT-style heuristic). */
 function estimateTextTokens(text: string): number {
   return Math.ceil(text.length / 4);
 }
 
+/** Serialises `value` to JSON and delegates to {@link estimateTextTokens}. */
 function estimateResponseTokens(value: unknown): number {
   return estimateTextTokens(JSON.stringify(value));
 }
