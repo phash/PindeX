@@ -730,3 +730,28 @@ export function getAntiPatternEvents(
     )
     .all(sessionId) as SessionEventRecord[];
 }
+
+/** Returns anti-pattern events across ALL sessions, newest first. Used by the monitoring dashboard. */
+export function getAllAntiPatternEvents(
+  db: Database.Database,
+  limit = 100,
+): SessionEventRecord[] {
+  return db
+    .prepare(
+      `SELECT * FROM session_events
+       WHERE event_type IN ('thrash_detected','dead_end','failed_search','tool_error','index_blind_spot','redundant_access')
+       ORDER BY timestamp DESC
+       LIMIT ?`,
+    )
+    .all(limit) as SessionEventRecord[];
+}
+
+/** Returns observations across ALL sessions, newest first. Used by the monitoring dashboard. */
+export function getAllObservations(
+  db: Database.Database,
+  limit = 50,
+): SessionObservationRecord[] {
+  return db
+    .prepare('SELECT * FROM session_observations ORDER BY created_at DESC LIMIT ?')
+    .all(limit) as SessionObservationRecord[];
+}

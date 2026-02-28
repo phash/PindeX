@@ -199,7 +199,105 @@ let historyInterval = null;
 
 function setRefreshInterval(seconds) {
   if (historyInterval) clearInterval(historyInterval);
-  historyInterval = setInterval(loadSessionHistory, seconds * 1000);
+  historyInterval = setInterval(() => {
+    loadSessionHistory();
+    loadSessionMemory();
+  }, seconds * 1000);
+}
+
+// ─── Session Memory (Anti-Patterns & Observations) ───────────────────────────
+
+const AP_LABELS = {
+  thrash_detected:  'Thrashing',
+  dead_end:         'Sackgasse',
+  failed_search:    'Fehlsuche',
+  tool_error:       'Tool-Fehler',
+  index_blind_spot: 'Index-Blindspot',
+  redundant_access: 'Redundanter Zugriff',
+};
+
+function escHtml(str) {
+  return String(str ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function renderAntiPatterns(items) {
+  const feed = document.getElementById('antiPatternsFeed');
+  const countEl = document.getElementById('apCount');
+  countEl.textContent = items.length ? `(${items.length})` : '';
+
+  if (!items.length) {
+    feed.innerHTML = '<div class="memory-empty">Keine Anti-Patterns erkannt</div>';
+    return;
+  }
+
+  feed.innerHTML = items.map((item) => {
+    let description = item.event_type;
+    try {
+      const extra = JSON.parse(item.extra_json || '{}');
+      if (extra.description) description = extra.description;
+    } catch { /* ignore */ }
+
+    const label   = AP_LABELS[item.event_type] || item.event_type;
+    const cssType = item.event_type.replace(/_/g, '-');
+    const time    = dayjs(item.timestamp).format('DD.MM HH:mm');
+    const meta    = [item.file_path, item.symbol_name].filter(Boolean).join(' › ');
+
+    return `
+      <div class="memory-item ap-${escHtml(cssType)}">
+        <div class="memory-item-header">
+          <span class="memory-badge">${escHtml(label)}</span>
+          <span class="memory-session">${escHtml((item.session_id || '').substring(0, 8))}</span>
+          <span class="memory-time">${time}</span>
+        </div>
+        <div class="memory-text">${escHtml(description)}</div>
+        ${meta ? `<div class="memory-meta">${escHtml(meta)}</div>` : ''}
+      </div>`;
+  }).join('');
+}
+
+function renderObservations(items) {
+  const feed = document.getElementById('observationsFeed');
+  const countEl = document.getElementById('obsCount');
+  countEl.textContent = items.length ? `(${items.length})` : '';
+
+  if (!items.length) {
+    feed.innerHTML = '<div class="memory-empty">Keine Beobachtungen vorhanden</div>';
+    return;
+  }
+
+  feed.innerHTML = items.map((item) => {
+    const time  = dayjs(item.created_at).format('DD.MM HH:mm');
+    const meta  = [item.file_path, item.symbol_name].filter(Boolean).join(' › ');
+    const stale = item.stale === 1;
+
+    return `
+      <div class="memory-item obs-item${stale ? ' stale' : ''}">
+        <div class="memory-item-header">
+          <span class="memory-badge obs-badge">${escHtml(item.type)}</span>
+          <span class="memory-session">${escHtml((item.session_id || '').substring(0, 8))}</span>
+          <span class="memory-time">${time}</span>
+          ${stale ? '<span class="stale-badge">veraltet</span>' : ''}
+        </div>
+        <div class="memory-text">${escHtml(item.observation)}</div>
+        ${meta ? `<div class="memory-meta">${escHtml(meta)}</div>` : ''}
+      </div>`;
+  }).join('');
+}
+
+async function loadSessionMemory() {
+  try {
+    const res = await fetch('/api/session-memory');
+    if (!res.ok) return;
+    const { anti_patterns, observations } = await res.json();
+    renderAntiPatterns(anti_patterns);
+    renderObservations(observations);
+  } catch (e) {
+    console.error('Failed to load session memory:', e);
+  }
 }
 
 // ─── Initialization ───────────────────────────────────────────────────────────
@@ -208,6 +306,7 @@ document.addEventListener('DOMContentLoaded', () => {
   initChart();
   connect();
   loadSessionHistory();
+  loadSessionMemory();
   setInterval(updateClock, 1000);
   setRefreshInterval(30);
   updateClock();

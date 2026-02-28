@@ -6,7 +6,7 @@ import express from 'express';
 import { WebSocketServer } from 'ws';
 import type Database from 'better-sqlite3';
 import type { MonitoringEvent } from '../types.js';
-import { listSessions, getSessionStats } from '../db/queries.js';
+import { listSessions, getSessionStats, getAllAntiPatternEvents, getAllObservations } from '../db/queries.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const UI_DIR = join(__dirname, 'ui');
@@ -58,6 +58,13 @@ export function createMonitoringApp(db: Database.Database): express.Application 
     }
     const stats = getSessionStats(db, req.params.id);
     res.json(stats);
+  });
+
+  // Returns anti-pattern events and observations across all sessions for the dashboard.
+  app.get('/api/session-memory', (_req, res) => {
+    const anti_patterns = getAllAntiPatternEvents(db, 100);
+    const observations = getAllObservations(db, 50);
+    res.json({ anti_patterns, observations });
   });
 
   return app;
