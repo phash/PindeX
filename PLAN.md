@@ -259,3 +259,30 @@ Phase 4 ist ein separates Feature und kann danach kommen.
 - `mcp-indexer`/`mcp-indexer-daemon`-Binaries entfallen (ersetzt durch `pindex`/`pindex-server`)
 - Bestehende `.mcp.json`-Dateien in Projekten müssen neu generiert werden
   (`pindex` im jeweiligen Projektverzeichnis ausführen)
+
+---
+
+## Feature-Ideen (Backlog)
+
+### Gesamt-Session-Token-Tracking
+
+**Idee:** PindeX soll nicht nur die Tokens seiner eigenen Tool-Calls messen, sondern den
+gesamten Token-Verbrauch einer Session — also auch `Write`, `Read`, `Bash`, `Edit` etc.
+
+**Warum das aktuell nicht geht:**
+Das MCP-Protokoll liefert dem Server nur Requests für seine eigenen registrierten Tools.
+Was Claude Code mit anderen Tools macht (Read, Write, Bash …) ist für den MCP-Server
+unsichtbar — es gibt keinen Session-Broadcast. Die Token-Zahlen der Anthropic-API
+sind nur dem API-Caller (Claude Code) selbst bekannt.
+
+**Mögliche Ansätze:**
+- **Claude Code Hooks (`PreToolUse`):** Hooks sehen den Tool-Namen, aber keine Token-Counts.
+  Damit könnte man zumindest die Anzahl der Nicht-PindeX-Calls zählen, nicht jedoch
+  wie viele Tokens sie verbraucht haben.
+- **Lokaler API-Proxy** (zwischen Claude Code und `api.anthropic.com`): Würde alle
+  Anfragen inkl. Token-Usage sehen, erfordert aber TLS-Interception und ist erheblich
+  aufwändiger als ein MCP-Server.
+- **MCP-Protokoll-Erweiterung:** Wenn Claude Code in Zukunft Session-Metriken per MCP
+  exposed (z.B. via `_meta`-Feld in Tool-Requests), könnte PindeX diese auslesen.
+
+**Status:** Wartet auf Protokoll-/Client-seitige Unterstützung. Kein akuter Handlungsbedarf.

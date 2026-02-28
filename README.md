@@ -1,6 +1,6 @@
 # PindeX – MCP Codebase Indexer
 
-**Structural codebase indexing for AI coding assistants — 80–90% fewer tokens per session.**
+**Structural codebase indexing for AI coding assistants — 70–80% fewer tokens for code exploration queries.**
 
 PindeX is an [MCP (Model Context Protocol)](https://modelcontextprotocol.io) server that parses your project with `tree-sitter` and regex-based extractors, stores symbols, imports, and dependency graphs in a local SQLite database, and exposes 13 targeted tools so AI assistants can answer questions about your code — and your documentation — without reading entire files.
 
@@ -57,6 +57,10 @@ Your project files
 Instead of sending full file contents to the AI, PindeX lets it call `search_symbols`, `search_docs`, `get_context`, or `get_file_summary` — returning only what it actually needs.
 Claude can also persist important facts across sessions with `save_context`, then retrieve them later with `search_docs` instead of re-reading large files.
 Token savings are tracked per session and visible in a live web dashboard.
+
+> **A note on the savings numbers:** PindeX can only measure tokens that flow through its own tools (`search_symbols`, `get_context`, `get_file_summary`, etc.). It has no visibility into tokens used by `Write`, `Read`, `Bash`, `Edit`, or other non-PindeX operations — those are handled directly by the AI client and never pass through PindeX.
+>
+> The "70–80% savings" refers specifically to those code-exploration queries: instead of reading an entire file, PindeX returns a targeted snippet — and that targeted snippet is typically 70–80% smaller than the raw file content. **The actual reduction in your total session token budget depends on how much of the session is spent navigating and understanding code** versus writing or running commands. In sessions focused on exploring an unfamiliar codebase, savings are most pronounced. In sessions that are mostly editing, PindeX reduces only the exploration portion of the bill.
 
 ---
 
@@ -164,7 +168,7 @@ save_context("Decision: use JWT …", "auth")  # store for future sessions
 pindex-gui
 ```
 
-Opens `http://localhost:7842` — an aggregated dashboard showing token savings, symbol counts, and session stats for **all** registered projects.
+Opens `http://localhost:7842` — an aggregated dashboard showing token savings, symbol counts, and session stats for **all** registered projects. The savings figures reflect tokens saved on PindeX tool calls; see the note in [How It Works](#how-it-works) for context.
 
 ---
 
