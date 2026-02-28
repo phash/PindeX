@@ -11,7 +11,6 @@ import {
   GlobalRegistry,
   findProjectRoot,
   hashProjectPath,
-  getPindexHome,
 } from './project-detector.js';
 import { initProject, addFederatedRepo, removeFederatedRepo, injectClaudeMdSection, injectClaudeSettings, removeClaudeMdSection, removeClaudeSettings, removeMcpJson } from './init.js';
 
@@ -89,7 +88,7 @@ async function main(): Promise<void> {
           : '';
         console.log(`  [${status}]  ${p.name}${federated}`);
         console.log(`           ${p.path}`);
-        console.log(`           port: ${p.monitoringPort}  index: ~/.pindex/projects/${p.hash}/\n`);
+        console.log(`           port: ${p.monitoringPort}  index: ${p.path}/.pindex/\n`);
       }
       break;
     }
@@ -157,7 +156,7 @@ async function main(): Promise<void> {
         console.log(`  CLAUDE.md  : ${mdResult === 'removed' ? 'PindeX section removed' : mdResult === 'not_found' ? 'no section found' : 'file not found'}`);
         console.log(`  Hooks      : ${hkResult === 'removed' ? 'hook removed' : hkResult === 'not_found' ? 'no hook found' : 'file not found'}`);
         console.log(`  .mcp.json  : ${mcpResult === 'removed' ? 'deleted' : 'not found'}\n`);
-        console.log('  Index data (~/.pindex/projects/…) kept — delete manually if desired.\n');
+        console.log('  Index data (.pindex/ in project folder) kept — delete manually if desired.\n');
       } else {
         // Remove a federated repo link
         await removeFederatedRepo(process.cwd(), args[0]);
@@ -191,7 +190,7 @@ async function main(): Promise<void> {
       for (const p of registry.list()) {
         await stopDaemon(p.hash);
       }
-      console.log(`Done. You can remove ~/.pindex manually to wipe all indexes.`);
+      console.log(`Done. You can remove ~/.pindex (registry) and each project's .pindex/ folder manually to wipe all data.`);
       break;
     }
 
