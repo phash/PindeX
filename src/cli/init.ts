@@ -29,7 +29,7 @@ export function writeMcpJson(
           MONITORING_PORT: String(entry.monitoringPort),
           AUTO_REINDEX: 'true',
           GENERATE_SUMMARIES: 'false',
-          MONITORING_AUTO_OPEN: 'false',
+          MONITORING_AUTO_OPEN: 'true',
           BASELINE_MODE: 'false',
           TOKEN_PRICE_PER_MILLION: '3.00',
           ...federationEnv,
@@ -119,11 +119,22 @@ const PINDEX_HOOKS = {
         ],
       },
     ],
+    SessionStart: [
+      {
+        hooks: [
+          {
+            type: 'command',
+            // Auto-start pindex-gui dashboard if not already running
+            command: 'pindex gui',
+          },
+        ],
+      },
+    ],
   },
 };
 
 /**
- * Writes/merges the PindeX PreToolUse hook into .claude/settings.json.
+ * Writes/merges PindeX hooks (PreToolUse + SessionStart) into .claude/settings.json.
  * Idempotent: skips if the hook marker is already present.
  */
 export function injectClaudeSettings(
@@ -143,15 +154,21 @@ export function injectClaudeSettings(
     try { existing = JSON.parse(raw); } catch { existing = {}; }
 
     // Deep-merge hooks
+    const existingHooks = existing.hooks as Record<string, unknown[]> | undefined;
     const merged = {
       ...existing,
       hooks: {
-        ...(existing.hooks as object | undefined),
+        ...existingHooks,
         PreToolUse: [
           // Remove old pindex hook entries, then re-add
-          ...((existing.hooks as { PreToolUse?: unknown[] } | undefined)?.PreToolUse ?? [])
+          ...(existingHooks?.PreToolUse ?? [])
             .filter((h) => !JSON.stringify(h).includes(HOOK_MARKER)),
           { ...PINDEX_HOOKS.hooks.PreToolUse[0], _pindex: HOOK_MARKER },
+        ],
+        SessionStart: [
+          ...(existingHooks?.SessionStart ?? [])
+            .filter((h) => !JSON.stringify(h).includes(HOOK_MARKER)),
+          { ...PINDEX_HOOKS.hooks.SessionStart[0], _pindex: HOOK_MARKER },
         ],
       },
     };
@@ -161,6 +178,7 @@ export function injectClaudeSettings(
     const config = {
       hooks: {
         PreToolUse: [{ ...PINDEX_HOOKS.hooks.PreToolUse[0], _pindex: HOOK_MARKER }],
+        SessionStart: [{ ...PINDEX_HOOKS.hooks.SessionStart[0], _pindex: HOOK_MARKER }],
       },
     };
     writeFileSync(settingsPath, JSON.stringify(config, null, 2) + '\n', 'utf-8');
@@ -264,7 +282,7 @@ export function removeClaudeMdSection(projectRoot: string): 'removed' | 'not_fou
 }
 
 /**
- * Removes the PindeX PreToolUse hook from .claude/settings.json (if present).
+ * Removes PindeX hooks (PreToolUse + SessionStart) from .claude/settings.json (if present).
  * Returns 'removed' | 'not_found' | 'skipped' (file didn't exist).
  */
 export function removeClaudeSettings(projectRoot: string): 'removed' | 'not_found' | 'skipped' {
@@ -274,17 +292,22 @@ export function removeClaudeSettings(projectRoot: string): 'removed' | 'not_foun
   if (!raw.includes(HOOK_MARKER)) return 'not_found';
   let existing: Record<string, unknown>;
   try { existing = JSON.parse(raw); } catch { return 'not_found'; }
-  const hooks = existing.hooks as { PreToolUse?: unknown[] } | undefined;
-  const filtered = (hooks?.PreToolUse ?? []).filter(
+  const hooks = existing.hooks as Record<string, unknown[]> | undefined;
+  const filteredPre = (hooks?.PreToolUse ?? []).filter(
+    (h) => !JSON.stringify(h).includes(HOOK_MARKER),
+  );
+  const filteredSession = (hooks?.SessionStart ?? []).filter(
     (h) => !JSON.stringify(h).includes(HOOK_MARKER),
   );
   const updated = {
     ...existing,
-    hooks: { ...hooks, PreToolUse: filtered },
+    hooks: { ...hooks, PreToolUse: filteredPre, SessionStart: filteredSession },
   };
-  // Remove empty PreToolUse array to keep settings.json clean
-  if (filtered.length === 0) delete (updated.hooks as Record<string, unknown>).PreToolUse;
-  if (Object.keys(updated.hooks as object).length === 0) delete (updated as Record<string, unknown>).hooks;
+  const hooksObj = updated.hooks as Record<string, unknown[]>;
+  // Remove empty arrays to keep settings.json clean
+  if (filteredPre.length === 0) delete hooksObj.PreToolUse;
+  if (filteredSession.length === 0) delete hooksObj.SessionStart;
+  if (Object.keys(hooksObj).length === 0) delete (updated as Record<string, unknown>).hooks;
   writeFileSync(settingsPath, JSON.stringify(updated, null, 2) + '\n', 'utf-8');
   return 'removed';
 }

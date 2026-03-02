@@ -198,16 +198,45 @@ async function main(): Promise<void> {
 
     case 'gui':
     case 'monitor': {
-      const { default: open } = await import('open');
-      const registry = new GlobalRegistry();
-      const projects = registry.list();
-      // pindex-gui runs on 7842 by default
-      const port = process.env.GUI_PORT ?? '7842';
-      if (projects.length === 0) {
-        console.log('No projects registered. Run `pindex` in a project first.');
+      const net = await import('node:net');
+      const port = parseInt(process.env.GUI_PORT ?? '7842', 10);
+
+      // Check if pindex-gui is already running
+      const isRunning = await new Promise<boolean>((resolve) => {
+        const s = net.createConnection(port, 'localhost');
+        s.on('connect', () => { s.destroy(); resolve(true); });
+        s.on('error', () => resolve(false));
+      });
+
+      if (!isRunning) {
+        const registry = new GlobalRegistry();
+        if (registry.list().length === 0) {
+          console.log('No projects registered. Run `pindex` in a project first.');
+          break;
+        }
+        const { spawn } = await import('node:child_process');
+        spawn('pindex-gui', ['--port', String(port)], {
+          detached: true,
+          stdio: 'ignore',
+          shell: true,
+        }).unref();
+
+        // Wait for server to be ready (max 3s)
+        for (let i = 0; i < 15; i++) {
+          await new Promise((r) => setTimeout(r, 200));
+          const up = await new Promise<boolean>((resolve) => {
+            const s = net.createConnection(port, 'localhost');
+            s.on('connect', () => { s.destroy(); resolve(true); });
+            s.on('error', () => resolve(false));
+          });
+          if (up) break;
+        }
+        console.log(`  [pindex] Started GUI dashboard on port ${port}`);
       }
+
+      const { default: open } = await import('open');
       await open(`http://localhost:${port}`);
-      console.log(`Opening dashboard: http://localhost:${port}`);
+      console.log(`  [pindex] Dashboard: http://localhost:${port}`);
       break;
     }
 

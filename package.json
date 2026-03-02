@@ -15,7 +15,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && node -e \"require('fs').cpSync('src/monitoring/ui','dist/monitoring/ui',{recursive:true})\"",
     "build:watch": "tsc --watch",
     "test": "vitest run",
     "test:watch": "vitest",
