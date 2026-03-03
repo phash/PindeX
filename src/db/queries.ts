@@ -1,4 +1,3 @@
-import { sep } from 'node:path';
 import type Database from 'better-sqlite3';
 import type {
   FileRecord,
@@ -17,6 +16,11 @@ import type {
   SessionEventType,
 } from '../types.js';
 
+/** Normalize any path to forward slashes (POSIX convention). */
+function toForwardSlash(p: string): string {
+  return p.replace(/\\/g, '/');
+}
+
 // ─── File Queries ─────────────────────────────────────────────────────────────
 
 export interface UpsertFileInput {
@@ -28,6 +32,7 @@ export interface UpsertFileInput {
 }
 
 export function upsertFile(db: Database.Database, input: UpsertFileInput): void {
+  input = { ...input, path: toForwardSlash(input.path) };
   db.prepare(`
     INSERT INTO files (path, language, hash, raw_token_estimate, summary, last_indexed)
     VALUES (@path, @language, @hash, @rawTokenEstimate, @summary, datetime('now'))
@@ -44,9 +49,7 @@ export function getFileByPath(
   db: Database.Database,
   path: string,
 ): FileRecord | null {
-  // Normalise to the platform separator so forward-slash and backslash inputs
-  // both match the paths stored by the indexer on Windows (backslash) / Unix (slash).
-  const normalized = path.replace(/[\\/]/g, sep);
+  const normalized = toForwardSlash(path);
   return (
     (db.prepare('SELECT * FROM files WHERE path = ?').get(normalized) as FileRecord | undefined) ?? null
   );
@@ -57,7 +60,7 @@ export function getAllFiles(db: Database.Database): FileRecord[] {
 }
 
 export function deleteFile(db: Database.Database, path: string): void {
-  db.prepare('DELETE FROM files WHERE path = ?').run(path);
+  db.prepare('DELETE FROM files WHERE path = ?').run(toForwardSlash(path));
 }
 
 // ─── Symbol Queries ───────────────────────────────────────────────────────────
@@ -556,11 +559,11 @@ export function getSnapshotsByFile(
 ): AstSnapshotRecord[] {
   return db
     .prepare('SELECT * FROM ast_snapshots WHERE file_path = ?')
-    .all(filePath) as AstSnapshotRecord[];
+    .all(toForwardSlash(filePath)) as AstSnapshotRecord[];
 }
 
 export function deleteSnapshotsByFile(db: Database.Database, filePath: string): void {
-  db.prepare('DELETE FROM ast_snapshots WHERE file_path = ?').run(filePath);
+  db.prepare('DELETE FROM ast_snapshots WHERE file_path = ?').run(toForwardSlash(filePath));
 }
 
 // ─── Session Observation Queries ───────────────────────────────────────────────
@@ -611,7 +614,7 @@ export function getObservationsByFile(
     .prepare(
       'SELECT * FROM session_observations WHERE file_path = ? ORDER BY created_at DESC LIMIT ?',
     )
-    .all(filePath, limit) as SessionObservationRecord[];
+    .all(toForwardSlash(filePath), limit) as SessionObservationRecord[];
 }
 
 export function getObservationsByFileSymbol(
@@ -626,7 +629,7 @@ export function getObservationsByFileSymbol(
        WHERE file_path = ? AND symbol_name = ?
        ORDER BY created_at DESC LIMIT ?`,
     )
-    .all(filePath, symbolName, limit) as SessionObservationRecord[];
+    .all(toForwardSlash(filePath), symbolName, limit) as SessionObservationRecord[];
 }
 
 export function markObservationsStale(
@@ -639,7 +642,7 @@ export function markObservationsStale(
     UPDATE session_observations
     SET stale = 1, stale_reason = ?
     WHERE file_path = ? AND symbol_name = ? AND stale = 0
-  `).run(reason, filePath, symbolName);
+  `).run(reason, toForwardSlash(filePath), symbolName);
 }
 
 export function countStaleObservations(db: Database.Database): number {
@@ -742,7 +745,7 @@ export function getRecentFileChangeEvents(
          AND timestamp >= ?
        ORDER BY timestamp`,
     )
-    .all(sessionId, filePath, cutoff) as SessionEventRecord[];
+    .all(sessionId, toForwardSlash(filePath), cutoff) as SessionEventRecord[];
 }
 
 /**
@@ -760,7 +763,7 @@ export function hasMatchingSessionEvent(
   const params: unknown[] = [sessionId, eventType];
   if (filePath) {
     sql += ' AND file_path = ?';
-    params.push(filePath);
+    params.push(toForwardSlash(filePath));
   }
   if (symbolName) {
     sql += ' AND symbol_name = ?';
@@ -783,7 +786,7 @@ export function getLatestSessionEvent(
     `SELECT * FROM session_events
      WHERE session_id = ? AND event_type = ? AND file_path = ?
      ORDER BY timestamp DESC LIMIT 1`,
-  ).get(sessionId, eventType, filePath) as SessionEventRecord | undefined;
+  ).get(sessionId, eventType, toForwardSlash(filePath)) as SessionEventRecord | undefined;
 }
 
 export function getAntiPatternEvents(

@@ -90,6 +90,8 @@ export class FileWatcher extends EventEmitter {
   }
 
   private async handleChange(type: 'add' | 'change' | 'unlink', path: string): Promise<void> {
+    // Normalize to forward slashes (chokidar may emit backslashes on Windows)
+    path = path.replace(/\\/g, '/');
     const event: FileChangeEvent = { type, path };
     this.emit('change', event);
 
