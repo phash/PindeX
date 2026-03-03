@@ -86,7 +86,8 @@ export function loadProjectStats(entry: RegistryEntry): Omit<ProjectStats, 'serv
       lastIndexed: lastIndexedRow.ts ?? null,
       indexSizeBytes,
     };
-  } catch {
+  } catch (err) {
+    process.stderr.write(`[pindex] Failed to load stats for project "${entry.name}": ${err}\n`);
     return {
       entry, fileCount: 0, symbolCount: 0,
       totalTokensSaved: 0, totalTokensActual: 0,
@@ -146,7 +147,8 @@ export function createGuiApp(): express.Application {
          FROM token_log ORDER BY timestamp DESC LIMIT 200`
       ).all();
       return res.json({ files, symbols, tokenLog });
-    } catch {
+    } catch (err) {
+      process.stderr.write(`[pindex] DB query failed for project detail ${req.params.hash}: ${err}\n`);
       return res.json({ files: [], symbols: [], tokenLog: [] });
     } finally {
       db?.close();
@@ -168,7 +170,8 @@ export function createGuiApp(): express.Application {
         .prepare('SELECT * FROM sessions ORDER BY started_at DESC LIMIT 50')
         .all();
       return res.json(sessions);
-    } catch {
+    } catch (err) {
+      process.stderr.write(`[pindex] DB query failed for sessions ${req.params.hash}: ${err}\n`);
       return res.json([]);
     } finally {
       db?.close();
@@ -221,7 +224,7 @@ export function createGuiApp(): express.Application {
             FROM sessions ORDER BY started_at DESC LIMIT 12`)
           .all() as SRow[];
         rows.forEach(r => all.push({ ...r, projectName: entry.name, projectHash: entry.hash }));
-      } catch { /* skip */ } finally { db?.close(); }
+      } catch (err) { process.stderr.write(`[pindex] Failed to read sessions for "${entry.name}": ${err}\n`); } finally { db?.close(); }
     }
 
     all.sort((a, b) => b.started_at.localeCompare(a.started_at));

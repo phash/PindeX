@@ -549,8 +549,8 @@ export function parseFile(filePath: string, content: string): ParsedFile {
     const imports = extractImports(tree.rootNode as AstNode);
 
     return { language, symbols, imports, rawTokenEstimate };
-  } catch {
-    // tree-sitter not available or failed – return metadata only
+  } catch (err) {
+    process.stderr.write(`[pindex] Parse error for ${filePath}: ${err}\n`);
     return { language, symbols: [], imports: [], rawTokenEstimate };
   }
 }

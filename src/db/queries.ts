@@ -179,8 +179,8 @@ export function searchSymbolsFts(
     params.push(limit);
 
     return db.prepare(sql).all(...params) as FtsSearchResult[];
-  } catch {
-    // FTS query syntax errors – return empty rather than throw
+  } catch (err) {
+    process.stderr.write(`[pindex] FTS symbol search error: ${err}\n`);
     return [];
   }
 }
@@ -475,7 +475,8 @@ export function searchDocumentsFts(
          LIMIT ?`,
       )
       .all(query, limit) as DocFtsResult[];
-  } catch {
+  } catch (err) {
+    process.stderr.write(`[pindex] FTS document search error: ${err}\n`);
     return [];
   }
 }
@@ -523,7 +524,8 @@ export function searchContextEntriesFts(
          LIMIT ?`,
       )
       .all(query, limit) as ContextFtsResult[];
-  } catch {
+  } catch (err) {
+    process.stderr.write(`[pindex] FTS context search error: ${err}\n`);
     return [];
   }
 }

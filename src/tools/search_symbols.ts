@@ -59,7 +59,8 @@ export function searchSymbols(
         ...mapRow(row),
         project: basename(path),
       }));
-    } catch {
+    } catch (err) {
+      process.stderr.write(`[pindex] Federated search failed for ${path}: ${err}\n`);
       return [];
     }
   });
