@@ -16,6 +16,7 @@ import {
   deleteDocumentChunksByFileId,
 } from '../db/queries.js';
 import { computeAstDiff, type AstDiffResult } from '../memory/ast-diff.js';
+import { Summarizer, type SummarizerOptions } from './summarizer.js';
 
 // ─── Default Configuration ────────────────────────────────────────────────────
 
@@ -86,6 +87,7 @@ export interface IndexerOptions {
   languages?: string[];
   ignorePatterns?: string[];
   generateSummaries?: boolean;
+  summarizerOptions?: SummarizerOptions;
   documentPatterns?: string[];
 }
 
@@ -107,6 +109,7 @@ export class Indexer {
   private readonly languages: string[];
   private readonly ignorePatterns: string[];
   private readonly generateSummaries: boolean;
+  private readonly summarizer: Summarizer;
   private readonly documentPatterns: string[];
 
   constructor(options: IndexerOptions) {
@@ -115,6 +118,7 @@ export class Indexer {
     this.languages = options.languages ?? DEFAULT_LANGUAGES;
     this.ignorePatterns = options.ignorePatterns ?? DEFAULT_IGNORE;
     this.generateSummaries = options.generateSummaries ?? false;
+    this.summarizer = new Summarizer(options.summarizerOptions ?? { enabled: false });
     this.documentPatterns = options.documentPatterns ?? DEFAULT_DOCUMENT_PATTERNS;
   }
 
@@ -199,6 +203,24 @@ export class Indexer {
     try {
       const parsed = parseFile(absolutePath, content);
 
+      // Summarization happens OUTSIDE the transaction (async HTTP calls
+      // can't be inside synchronous SQLite transactions)
+      let fileSummary: string | null = null;
+      const symbolSummaries = new Map<string, string | null>();
+
+      if (this.generateSummaries) {
+        fileSummary = await this.summarizer.summarizeFile(relativePath, content);
+        // Summarize each symbol in parallel (bounded by the semaphore inside Summarizer)
+        const symbolEntries = parsed.symbols.map(async (sym) => {
+          const snippet = content.split('\n').slice(sym.startLine - 1, sym.endLine).join('\n');
+          const summary = await this.summarizer.summarizeSymbol(sym.signature, snippet);
+          return [sym.name, summary] as const;
+        });
+        for (const [name, summary] of await Promise.all(symbolEntries)) {
+          symbolSummaries.set(name, summary);
+        }
+      }
+
       // Wrap all DB mutations in a single transaction for atomicity + performance
       const runInTransaction = this.db.transaction(() => {
         upsertFile(this.db, {
@@ -206,7 +228,7 @@ export class Indexer {
           language: parsed.language,
           hash,
           rawTokenEstimate: parsed.rawTokenEstimate,
-          summary: null,
+          summary: fileSummary,
         });
 
         // Re-fetch after upsert to get the ID (needed for FK references)
@@ -223,7 +245,7 @@ export class Indexer {
             name: sym.name,
             kind: sym.kind,
             signature: sym.signature,
-            summary: null,
+            summary: symbolSummaries.get(sym.name) ?? null,
             startLine: sym.startLine,
             endLine: sym.endLine,
             isExported: sym.isExported,

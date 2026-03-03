@@ -29,6 +29,11 @@ const GENERATE_SUMMARIES = process.env.GENERATE_SUMMARIES === 'true';
 // 'permanent' | 'session' | '7d' | '30d' | ...
 const OBSERVATION_RETENTION = process.env.OBSERVATION_RETENTION ?? 'permanent';
 
+// Summarizer configuration
+const SUMMARIZER_API_KEY = process.env.SUMMARIZER_API_KEY ?? '';
+const SUMMARIZER_BASE_URL = process.env.SUMMARIZER_BASE_URL ?? 'https://api.openai.com/v1';
+const SUMMARIZER_MODEL = process.env.SUMMARIZER_MODEL ?? 'gpt-4o-mini';
+
 // Federated repos: colon- or comma-separated absolute paths
 const FEDERATION_REPOS: string[] = (process.env.FEDERATION_REPOS ?? '')
   .split(/[:，,]/)
@@ -53,11 +58,21 @@ async function main(): Promise<void> {
   }).filter((x): x is { path: string; db: ReturnType<typeof openDatabase> } => x !== null);
 
   // 2. Set up the indexer
+  if (GENERATE_SUMMARIES && !SUMMARIZER_API_KEY) {
+    process.stderr.write('[pindex] Warning: GENERATE_SUMMARIES=true but no SUMMARIZER_API_KEY set\n');
+  }
+
   const indexer = new Indexer({
     db,
     projectRoot: PROJECT_ROOT,
     languages: LANGUAGES,
     generateSummaries: GENERATE_SUMMARIES,
+    summarizerOptions: {
+      enabled: GENERATE_SUMMARIES,
+      apiKey: SUMMARIZER_API_KEY,
+      baseUrl: SUMMARIZER_BASE_URL,
+      model: SUMMARIZER_MODEL,
+    },
   });
 
   // 3. Initial indexing (non-blocking) — log errors instead of swallowing
