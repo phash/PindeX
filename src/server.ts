@@ -23,6 +23,23 @@ import { saveContext } from './tools/save_context.js';
 import { getSessionMemory } from './tools/get_session_memory.js';
 import { getApiEndpoints } from './tools/get_api_endpoints.js';
 import type { SessionObserver } from './memory/observer.js';
+import { TOOL_SCHEMAS } from './tools/schemas.js';
+import type {
+  SearchSymbolsInput,
+  GetSymbolInput,
+  GetContextInput,
+  GetFileSummaryInput,
+  FindUsagesInput,
+  GetDependenciesInput,
+  GetProjectOverviewInput,
+  ReindexInput,
+  GetTokenStatsInput,
+  StartComparisonInput,
+  SearchDocsInput,
+  GetDocChunkInput,
+  SaveContextInput,
+  GetSessionMemoryInput,
+} from './types.js';
 
 /**
  * MCP tool schemas exposed to the client (name, description, JSON input schema).
@@ -292,13 +309,30 @@ export function createMcpServer(
   // ─── Handle Tool Calls ─────────────────────────────────────────────────────
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
-    const { name, arguments: args = {} } = request.params;
+    const { name, arguments: rawArgs = {} } = request.params;
 
     // Baseline mode: all query tools return an error message
     if (baselineMode && name !== 'get_token_stats' && name !== 'start_comparison') {
       return {
         content: [{ type: 'text', text: JSON.stringify({ error: 'Index disabled for baseline measurement' }) }],
       };
+    }
+
+    // ─── Zod validation ────────────────────────────────────────────────
+    let args: unknown = rawArgs;
+    const schema = TOOL_SCHEMAS[name];
+    if (schema) {
+      const parsed = schema.safeParse(rawArgs);
+      if (!parsed.success) {
+        return {
+          content: [{ type: 'text', text: JSON.stringify({
+            error: 'Invalid arguments',
+            details: parsed.error.issues.map(i => `${i.path.join('.')}: ${i.message}`),
+          }) }],
+          isError: true,
+        };
+      }
+      args = parsed.data;
     }
 
     let result: unknown;
@@ -309,40 +343,39 @@ export function createMcpServer(
     let toolIsError = false;
 
     try {
-      const a = args as Record<string, unknown>;
       switch (name) {
         case 'search_symbols': {
-          result = searchSymbols(db, a as unknown as Parameters<typeof searchSymbols>[1], federatedDbs, projectRoot);
+          result = searchSymbols(db, args as SearchSymbolsInput, federatedDbs, projectRoot);
           heuristicMultiplier = 10;
           break;
         }
         case 'get_symbol': {
-          result = getSymbol(db, a as unknown as Parameters<typeof getSymbol>[1]);
+          result = getSymbol(db, args as GetSymbolInput);
           heuristicMultiplier = result ? 15 : 0;
           break;
         }
         case 'get_context': {
-          result = await getContext(db, projectRoot, a as unknown as Parameters<typeof getContext>[2]);
+          result = await getContext(db, projectRoot, args as GetContextInput);
           heuristicMultiplier = result ? 5 : 0;
           break;
         }
         case 'get_file_summary': {
-          result = getFileSummary(db, a as unknown as Parameters<typeof getFileSummary>[1]);
+          result = getFileSummary(db, args as GetFileSummaryInput);
           heuristicMultiplier = result ? 8 : 0;
           break;
         }
         case 'find_usages': {
-          result = findUsages(db, a as unknown as Parameters<typeof findUsages>[1]);
+          result = findUsages(db, args as FindUsagesInput);
           heuristicMultiplier = 10;
           break;
         }
         case 'get_dependencies': {
-          result = getDependencies(db, a as unknown as Parameters<typeof getDependencies>[1]);
+          result = getDependencies(db, args as GetDependenciesInput);
           heuristicMultiplier = 10;
           break;
         }
         case 'get_project_overview': {
-          result = getProjectOverview(db, projectRoot, federatedDbs, sessionId, a as unknown as Parameters<typeof getProjectOverview>[4]);
+          result = getProjectOverview(db, projectRoot, federatedDbs, sessionId, args as GetProjectOverviewInput);
           heuristicMultiplier = 5;
           break;
         }
@@ -352,33 +385,33 @@ export function createMcpServer(
           break;
         }
         case 'reindex': {
-          result = await reindex(db, indexer, a as unknown as Parameters<typeof reindex>[2]);
+          result = await reindex(db, indexer, args as ReindexInput);
           break;
         }
         case 'get_token_stats': {
-          result = getTokenStats(db, a as unknown as Parameters<typeof getTokenStats>[1]);
+          result = getTokenStats(db, args as GetTokenStatsInput);
           break;
         }
         case 'start_comparison': {
-          result = startComparison(db, a as unknown as Parameters<typeof startComparison>[1], monitoringPort);
+          result = startComparison(db, args as StartComparisonInput, monitoringPort);
           break;
         }
         case 'search_docs': {
-          result = searchDocs(db, a as unknown as Parameters<typeof searchDocs>[1]);
+          result = searchDocs(db, args as SearchDocsInput);
           heuristicMultiplier = 8;
           break;
         }
         case 'get_doc_chunk': {
-          result = getDocChunk(db, a as unknown as Parameters<typeof getDocChunk>[1]);
+          result = getDocChunk(db, args as GetDocChunkInput);
           heuristicMultiplier = result ? 3 : 0;
           break;
         }
         case 'save_context': {
-          result = saveContext(db, sessionId, a as unknown as Parameters<typeof saveContext>[2]);
+          result = saveContext(db, sessionId, args as SaveContextInput);
           break;
         }
         case 'get_session_memory': {
-          result = getSessionMemory(db, sessionId, a as unknown as Parameters<typeof getSessionMemory>[2]);
+          result = getSessionMemory(db, sessionId, args as GetSessionMemoryInput);
           break;
         }
         default:
