@@ -79,6 +79,12 @@ export function startMonitoringServer(
   const httpServer = createServer(app);
   const wss = new WebSocketServer({ server: httpServer });
   wss.on('error', () => { /* suppressed — httpServer error handler covers this */ });
+
+  // Per-client error handler to prevent single client crashes from killing the server
+  wss.on('connection', (ws) => {
+    ws.on('error', () => { /* suppress per-client errors */ });
+  });
+
   const emitter = new EventEmitter();
 
   // Forward events from emitter to all WebSocket clients
@@ -107,6 +113,10 @@ export function startMonitoringServer(
 
   const close = (): Promise<void> =>
     new Promise((resolve, reject) => {
+      // Terminate all existing WebSocket connections first
+      for (const client of wss.clients) {
+        client.terminate();
+      }
       wss.close(() => {
         httpServer.close((err) => {
           if (err) reject(err);

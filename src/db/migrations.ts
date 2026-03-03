@@ -39,6 +39,23 @@ const migrations: Migration[] = [
       `);
     },
   },
+  {
+    version: 5,
+    up: (db) => {
+      // UNIQUE constraints to make INSERT OR IGNORE work correctly
+      // + missing indexes for query performance
+      db.exec(`
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_dependencies_unique
+          ON dependencies(from_file, to_file, symbol_name);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_usages_unique
+          ON usages(symbol_id, used_in_file, used_at_line);
+        CREATE INDEX IF NOT EXISTS idx_usages_used_in_file
+          ON usages(used_in_file);
+        CREATE INDEX IF NOT EXISTS idx_session_events_type_session
+          ON session_events(event_type, session_id);
+      `);
+    },
+  },
 ];
 
 /** Returns the current schema version (0 for a fresh, unmigrated database). */

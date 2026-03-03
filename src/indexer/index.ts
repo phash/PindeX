@@ -1,4 +1,4 @@
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, statSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import { glob } from 'glob';
 import type Database from 'better-sqlite3';
@@ -57,6 +57,9 @@ const LANGUAGE_PATTERNS: Record<string, string[]> = {
 };
 
 const DEFAULT_LANGUAGES = ['typescript', 'javascript'];
+
+/** Maximum file size to index (1 MB). Larger files are skipped to prevent OOM. */
+const MAX_FILE_SIZE = 1024 * 1024;
 
 /** Builds the set of glob patterns for the given language list. */
 function buildCodePatterns(languages: string[]): string[] {
@@ -166,6 +169,14 @@ export class Indexer {
       };
     }
 
+    // Skip files larger than MAX_FILE_SIZE to prevent OOM
+    try {
+      const stat = statSync(absolutePath);
+      if (stat.size > MAX_FILE_SIZE) {
+        return { status: 'skipped', errors: [] };
+      }
+    } catch { /* fall through to read attempt */ }
+
     let content: string;
     try {
       content = readFileSync(absolutePath, 'utf-8');
@@ -178,56 +189,56 @@ export class Indexer {
 
     const hash = hashContent(content);
 
-    // Check if file has changed (skip if unchanged)
-    if (!force) {
-      const existing = getFileByPath(this.db, relativePath);
-      if (existing && existing.hash === hash) {
-        return { status: 'skipped', errors: [] };
-      }
+    // Check if file has changed (skip if unchanged) — single DB lookup
+    const existing = getFileByPath(this.db, relativePath);
+    if (!force && existing && existing.hash === hash) {
+      return { status: 'skipped', errors: [] };
     }
-
-    const isUpdate = getFileByPath(this.db, relativePath) !== null;
+    const isUpdate = existing !== null;
 
     try {
       const parsed = parseFile(absolutePath, content);
 
-      // Update file record
-      upsertFile(this.db, {
-        path: relativePath,
-        language: parsed.language,
-        hash,
-        rawTokenEstimate: parsed.rawTokenEstimate,
-        summary: null,
+      // Wrap all DB mutations in a single transaction for atomicity + performance
+      const runInTransaction = this.db.transaction(() => {
+        upsertFile(this.db, {
+          path: relativePath,
+          language: parsed.language,
+          hash,
+          rawTokenEstimate: parsed.rawTokenEstimate,
+          summary: null,
+        });
+
+        // Re-fetch after upsert to get the ID (needed for FK references)
+        const fileRecord = getFileByPath(this.db, relativePath)!;
+
+        // Compute AST diff before replacing symbols (snapshots updated inside)
+        const diff = computeAstDiff(this.db, relativePath, parsed.symbols);
+
+        // Replace symbols for this file
+        deleteSymbolsByFileId(this.db, fileRecord.id);
+        for (const sym of parsed.symbols) {
+          upsertSymbol(this.db, {
+            fileId: fileRecord.id,
+            name: sym.name,
+            kind: sym.kind,
+            signature: sym.signature,
+            summary: null,
+            startLine: sym.startLine,
+            endLine: sym.endLine,
+            isExported: sym.isExported,
+            isAsync: sym.isAsync,
+            hasTryCatch: sym.hasTryCatch,
+          });
+        }
+
+        // Update dependencies
+        deleteDependenciesByFile(this.db, fileRecord.id);
+
+        return diff;
       });
 
-      const fileRecord = getFileByPath(this.db, relativePath)!;
-
-      // Compute AST diff before replacing symbols (snapshots updated inside)
-      const diff = computeAstDiff(this.db, relativePath, parsed.symbols);
-
-      // Replace symbols for this file
-      deleteSymbolsByFileId(this.db, fileRecord.id);
-      for (const sym of parsed.symbols) {
-        upsertSymbol(this.db, {
-          fileId: fileRecord.id,
-          name: sym.name,
-          kind: sym.kind,
-          signature: sym.signature,
-          summary: null,
-          startLine: sym.startLine,
-          endLine: sym.endLine,
-          isExported: sym.isExported,
-          isAsync: sym.isAsync,
-          hasTryCatch: sym.hasTryCatch,
-        });
-      }
-
-      // Update dependencies
-      deleteDependenciesByFile(this.db, fileRecord.id);
-      // Note: dependency resolution (finding to_file IDs) happens after all files are indexed.
-      // We store the raw import sources first; a second pass resolves them.
-      // For now, store as strings using the _resolveAndStoreDependencies helper below.
-
+      const diff = runInTransaction();
       return { status: isUpdate ? 'updated' : 'indexed', errors: [], diff };
     } catch (err) {
       return {
@@ -254,40 +265,41 @@ export class Indexer {
 
     const hash = hashContent(content);
 
-    if (!force) {
-      const existing = getFileByPath(this.db, relativePath);
-      if (existing && existing.hash === hash) {
-        return { status: 'skipped', errors: [] };
-      }
+    // Single DB lookup instead of triple
+    const existing = getFileByPath(this.db, relativePath);
+    if (!force && existing && existing.hash === hash) {
+      return { status: 'skipped', errors: [] };
     }
-
-    const isUpdate = getFileByPath(this.db, relativePath) !== null;
+    const isUpdate = existing !== null;
 
     try {
       const parsed = parseDocument(absolutePath, content);
 
-      upsertFile(this.db, {
-        path: relativePath,
-        language: parsed.language,
-        hash,
-        rawTokenEstimate: parsed.rawTokenEstimate,
-        summary: null,
+      const runInTransaction = this.db.transaction(() => {
+        upsertFile(this.db, {
+          path: relativePath,
+          language: parsed.language,
+          hash,
+          rawTokenEstimate: parsed.rawTokenEstimate,
+          summary: null,
+        });
+
+        const fileRecord = getFileByPath(this.db, relativePath)!;
+
+        deleteDocumentChunksByFileId(this.db, fileRecord.id);
+        for (const chunk of parsed.chunks) {
+          insertDocumentChunk(this.db, {
+            fileId: fileRecord.id,
+            chunkIndex: chunk.chunkIndex,
+            heading: chunk.heading,
+            startLine: chunk.startLine,
+            endLine: chunk.endLine,
+            content: chunk.content,
+          });
+        }
       });
 
-      const fileRecord = getFileByPath(this.db, relativePath)!;
-
-      deleteDocumentChunksByFileId(this.db, fileRecord.id);
-      for (const chunk of parsed.chunks) {
-        insertDocumentChunk(this.db, {
-          fileId: fileRecord.id,
-          chunkIndex: chunk.chunkIndex,
-          heading: chunk.heading,
-          startLine: chunk.startLine,
-          endLine: chunk.endLine,
-          content: chunk.content,
-        });
-      }
-
+      runInTransaction();
       return { status: isUpdate ? 'updated' : 'indexed', errors: [] };
     } catch (err) {
       return { status: 'error', errors: [`Failed to index document ${relativePath}: ${String(err)}`] };

@@ -20,6 +20,8 @@ export class FileWatcher extends EventEmitter {
   private readonly observer?: SessionObserver;
   private watcher: unknown = null;
   private started = false;
+  private readonly debounceTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private static readonly DEBOUNCE_MS = 300;
 
   constructor(private readonly options: WatcherOptions) {
     super();
@@ -43,18 +45,35 @@ export class FileWatcher extends EventEmitter {
     });
 
     (this.watcher as ReturnType<typeof chokidar.watch>)
-      .on('add', (path: string) => this.handleChange('add', path))
-      .on('change', (path: string) => this.handleChange('change', path))
-      .on('unlink', (path: string) => this.handleChange('unlink', path));
+      .on('add', (path: string) => this.debouncedHandleChange('add', path))
+      .on('change', (path: string) => this.debouncedHandleChange('change', path))
+      .on('unlink', (path: string) => this.debouncedHandleChange('unlink', path));
   }
 
   /** Stops the file watcher. */
   async stop(): Promise<void> {
+    // Clear all pending debounce timers
+    for (const timer of this.debounceTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.debounceTimers.clear();
+
     if (this.watcher) {
       await (this.watcher as { close(): Promise<void> }).close();
       this.watcher = null;
       this.started = false;
     }
+  }
+
+  /** Debounces handleChange per file path (300ms). */
+  private debouncedHandleChange(type: 'add' | 'change' | 'unlink', path: string): void {
+    const existing = this.debounceTimers.get(path);
+    if (existing) clearTimeout(existing);
+    const timer = setTimeout(() => {
+      this.debounceTimers.delete(path);
+      this.handleChange(type, path).catch((err) => this.emit('error', err));
+    }, FileWatcher.DEBOUNCE_MS);
+    this.debounceTimers.set(path, timer);
   }
 
   private async handleChange(type: 'add' | 'change' | 'unlink', path: string): Promise<void> {

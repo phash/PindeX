@@ -61,8 +61,10 @@ async function main(): Promise<void> {
     generateSummaries: GENERATE_SUMMARIES,
   });
 
-  // 3. Initial indexing (non-blocking)
-  indexer.indexAll().then(() => indexer.resolveDependencies()).catch(() => {});
+  // 3. Initial indexing (non-blocking) — log errors instead of swallowing
+  indexer.indexAll().then(() => indexer.resolveDependencies()).catch((err) => {
+    process.stderr.write(`[pindex] Initial indexing failed: ${String(err)}\n`);
+  });
 
   // 4. Start monitoring server
   const emitter = new EventEmitter();
@@ -83,8 +85,9 @@ async function main(): Promise<void> {
   applyObservationRetention(db, sessionId, OBSERVATION_RETENTION);
 
   // 6. Start file watcher
+  let watcher: FileWatcher | null = null;
   if (AUTO_REINDEX) {
-    const watcher = new FileWatcher({ db, indexer, projectRoot: PROJECT_ROOT, observer });
+    watcher = new FileWatcher({ db, indexer, projectRoot: PROJECT_ROOT, observer });
     watcher.start().catch(() => {});
   }
 
@@ -100,6 +103,25 @@ async function main(): Promise<void> {
 
   const transport = new StdioServerTransport();
   await server.connect(transport);
+
+  // ─── Graceful Shutdown ──────────────────────────────────────────────────
+  const cleanup = async (): Promise<void> => {
+    try {
+      if (watcher) await watcher.stop();
+      await monitoringServer.close();
+      for (const fed of federatedDbs) {
+        try { fed.db.close(); } catch { /* ignore */ }
+      }
+      db.close();
+    } catch { /* best effort */ }
+  };
+
+  process.on('SIGTERM', () => {
+    cleanup().finally(() => process.exit(0));
+  });
+  process.on('SIGINT', () => {
+    cleanup().finally(() => process.exit(0));
+  });
 }
 
 // Catch any unhandled exception / rejection and exit so Claude Code auto-restarts the server.

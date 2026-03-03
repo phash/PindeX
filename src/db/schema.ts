@@ -68,7 +68,10 @@ export function initSchema(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_symbols_name ON symbols(name);
     CREATE INDEX IF NOT EXISTS idx_dependencies_from ON dependencies(from_file);
     CREATE INDEX IF NOT EXISTS idx_dependencies_to ON dependencies(to_file);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_dependencies_unique ON dependencies(from_file, to_file, symbol_name);
     CREATE INDEX IF NOT EXISTS idx_usages_symbol ON usages(symbol_id);
+    CREATE INDEX IF NOT EXISTS idx_usages_used_in_file ON usages(used_in_file);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_usages_unique ON usages(symbol_id, used_in_file, used_at_line);
     CREATE INDEX IF NOT EXISTS idx_token_log_session ON token_log(session_id);
   `);
 
@@ -228,5 +231,6 @@ export function initSchema(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_session_observations_file ON session_observations(file_path);
     CREATE INDEX IF NOT EXISTS idx_session_events_session ON session_events(session_id);
     CREATE INDEX IF NOT EXISTS idx_session_events_file_time ON session_events(file_path, timestamp);
+    CREATE INDEX IF NOT EXISTS idx_session_events_type_session ON session_events(event_type, session_id);
   `);
 }

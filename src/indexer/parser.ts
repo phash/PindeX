@@ -483,6 +483,40 @@ export function parseFile(filePath: string, content: string): ParsedFile {
   const language = detectLanguage(filePath);
   const rawTokenEstimate = estimateTokens(content);
 
+  // Route non-TS languages to regex-based parsers (no tree-sitter needed)
+  if (language === 'java') {
+    const { symbols, imports } = parseJava(content);
+    return { language, symbols, imports, rawTokenEstimate };
+  }
+  if (language === 'kotlin') {
+    const { symbols, imports } = parseKotlin(content);
+    return { language, symbols, imports, rawTokenEstimate };
+  }
+  if (language === 'python') {
+    const { symbols, imports } = parsePython(content);
+    return { language, symbols, imports, rawTokenEstimate };
+  }
+  if (language === 'php') {
+    const { symbols, imports } = parsePhp(content);
+    return { language, symbols, imports, rawTokenEstimate };
+  }
+  if (language === 'ruby') {
+    const { symbols, imports } = parseRuby(content);
+    return { language, symbols, imports, rawTokenEstimate };
+  }
+  if (language === 'csharp') {
+    const { symbols, imports } = parseCsharp(content);
+    return { language, symbols, imports, rawTokenEstimate };
+  }
+  if (language === 'go') {
+    const { symbols, imports } = parseGo(content);
+    return { language, symbols, imports, rawTokenEstimate };
+  }
+  if (language === 'rust') {
+    const { symbols, imports } = parseRust(content);
+    return { language, symbols, imports, rawTokenEstimate };
+  }
+
   try {
     // _require is a createRequire-based CJS loader (see top of file).
     // Using _require keeps vi.mock('tree-sitter') working in Vitest because
@@ -490,45 +524,9 @@ export function parseFile(filePath: string, content: string): ParsedFile {
     const Parser = _require('tree-sitter') as { new(): { setLanguage(l: unknown): void; parse(s: string): { rootNode: AstNode } } };
     const parser = new Parser();
 
-    // Route non-TS languages to regex-based parsers (no tree-sitter needed)
-    if (language === 'java') {
-      const { symbols, imports } = parseJava(content);
-      return { language, symbols, imports, rawTokenEstimate };
-    }
-    if (language === 'kotlin') {
-      const { symbols, imports } = parseKotlin(content);
-      return { language, symbols, imports, rawTokenEstimate };
-    }
-    if (language === 'python') {
-      const { symbols, imports } = parsePython(content);
-      return { language, symbols, imports, rawTokenEstimate };
-    }
-    if (language === 'php') {
-      const { symbols, imports } = parsePhp(content);
-      return { language, symbols, imports, rawTokenEstimate };
-    }
-    if (language === 'ruby') {
-      const { symbols, imports } = parseRuby(content);
-      return { language, symbols, imports, rawTokenEstimate };
-    }
-    if (language === 'csharp') {
-      const { symbols, imports } = parseCsharp(content);
-      return { language, symbols, imports, rawTokenEstimate };
-    }
-    if (language === 'go') {
-      const { symbols, imports } = parseGo(content);
-      return { language, symbols, imports, rawTokenEstimate };
-    }
-    if (language === 'rust') {
-      const { symbols, imports } = parseRust(content);
-      return { language, symbols, imports, rawTokenEstimate };
-    }
     if (language === 'vue' || language === 'svelte') {
-      // Parse the <script> block as TypeScript via tree-sitter
       const scriptContent = extractSfcScript(content);
       if (!scriptContent.trim()) return { language, symbols: [], imports: [], rawTokenEstimate };
-      const Parser = _require('tree-sitter') as { new(): { setLanguage(l: unknown): void; parse(s: string): { rootNode: AstNode } } };
-      const parser = new Parser();
       const tsLangs = _require('tree-sitter-typescript') as { typescript: unknown; tsx: unknown };
       parser.setLanguage(tsLangs.typescript);
       const tree = parser.parse(scriptContent);
