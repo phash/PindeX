@@ -2,7 +2,6 @@ import type Database from 'better-sqlite3';
 import type { GetProjectOverviewInput, GetProjectOverviewOutput, IndexRecommendation, SessionMemorySummary } from '../types.js';
 import {
   getAllFiles,
-  getSymbolsByFileId,
   countStaleObservations,
   countPriorSessions,
   getAntiPatternEvents,
@@ -55,12 +54,19 @@ export function getProjectOverview(
     totalSymbols = row.cnt;
     modules = files.map((f) => ({ path: f.path, summary: null, symbolCount: 0 }));
   } else {
-    // Full mode: per-file symbol counts
-    modules = files.map((f) => {
-      const symbols = getSymbolsByFileId(db, f.id);
-      totalSymbols += symbols.length;
-      return { path: f.path, summary: f.summary, symbolCount: symbols.length };
-    });
+    // Full mode: single aggregate query instead of N+1 per-file lookups
+    const symbolCounts = new Map<number, number>();
+    const rows = db.prepare('SELECT file_id, COUNT(*) as cnt FROM symbols GROUP BY file_id')
+      .all() as Array<{ file_id: number; cnt: number }>;
+    for (const row of rows) {
+      symbolCounts.set(row.file_id, row.cnt);
+      totalSymbols += row.cnt;
+    }
+    modules = files.map((f) => ({
+      path: f.path,
+      summary: f.summary,
+      symbolCount: symbolCounts.get(f.id) ?? 0,
+    }));
   }
 
   const primaryResult: GetProjectOverviewOutput = {
@@ -120,11 +126,8 @@ export function getProjectOverview(
   // Append per-federated-repo stats
   const federatedProjects = federatedDbs.map(({ path, db: fedDb }) => {
     const fedFiles = getAllFiles(fedDb);
-    let fedSymbols = 0;
-    for (const f of fedFiles) {
-      fedSymbols += getSymbolsByFileId(fedDb, f.id).length;
-    }
-    return { rootPath: path, stats: { totalFiles: fedFiles.length, totalSymbols: fedSymbols } };
+    const fedTotalSymbols = (fedDb.prepare('SELECT COUNT(*) as cnt FROM symbols').get() as { cnt: number }).cnt;
+    return { rootPath: path, stats: { totalFiles: fedFiles.length, totalSymbols: fedTotalSymbols } };
   });
 
   return { ...primaryResult, federatedProjects } as GetProjectOverviewOutput;

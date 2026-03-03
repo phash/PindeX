@@ -235,7 +235,7 @@ function extractRouteFromExpression(node: AstNode): ParsedSymbol | null {
     startLine: node.startPosition.row + 1,
     endLine: node.endPosition.row + 1,
     isExported: false,
-    isAsync: true, // Express route handlers are typically async
+    isAsync: handlerNode ? nodeIsAsync(handlerNode) : false,
     hasTryCatch,
   };
 }
@@ -583,11 +583,9 @@ function splitMarkdownByHeadings(lines: string[]): DocumentChunk[] {
     const line = lines[i];
     const headingMatch = /^#{1,3}\s+(.+)$/.exec(line);
     if (headingMatch) {
-      if (i > chunkStart) {
-        flush(i); // end previous chunk before heading
-        chunkStart = i;
-      }
-      currentHeading = headingMatch[1].trim(); // always capture heading, even at line 0
+      flush(i); // end previous chunk before heading (flush is a no-op if empty)
+      chunkStart = i;
+      currentHeading = headingMatch[1].trim();
     }
     chunkLines.push(line);
   }

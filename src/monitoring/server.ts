@@ -6,7 +6,7 @@ import express from 'express';
 import { WebSocketServer } from 'ws';
 import type Database from 'better-sqlite3';
 import type { MonitoringEvent } from '../types.js';
-import { listSessions, getSessionStats, getAllAntiPatternEvents, getAllObservations } from '../db/queries.js';
+import { listSessions, getSession, getSessionStats, getAllAntiPatternEvents, getAllObservations } from '../db/queries.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const UI_DIR = join(__dirname, 'ui');
@@ -50,8 +50,7 @@ export function createMonitoringApp(db: Database.Database): express.Application 
   });
 
   app.get('/api/sessions/:id', (req, res) => {
-    const sessions = listSessions(db);
-    const session = sessions.find((s) => s.id === req.params.id);
+    const session = getSession(db, req.params.id);
     if (!session) {
       res.status(404).json({ error: 'Session not found' });
       return;
@@ -113,6 +112,7 @@ export function startMonitoringServer(
 
   const close = (): Promise<void> =>
     new Promise((resolve, reject) => {
+      emitter.removeAllListeners();
       // Terminate all existing WebSocket connections first
       for (const client of wss.clients) {
         client.terminate();

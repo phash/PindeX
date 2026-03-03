@@ -80,7 +80,7 @@ export function upsertSymbol(
   input: UpsertSymbolInput,
 ): number {
   const result = db.prepare(`
-    INSERT INTO symbols (file_id, name, kind, signature, summary, start_line, end_line, is_exported, is_async, has_try_catch)
+    INSERT OR REPLACE INTO symbols (file_id, name, kind, signature, summary, start_line, end_line, is_exported, is_async, has_try_catch)
     VALUES (@fileId, @name, @kind, @signature, @summary, @startLine, @endLine, @isExported, @isAsync, @hasTryCatch)
   `).run({
     ...input,
@@ -196,7 +196,7 @@ export function upsertDependency(
 ): void {
   db.prepare(`
     INSERT OR IGNORE INTO dependencies (from_file, to_file, symbol_name)
-    VALUES (@fromFile, @toFile, @symbolName)
+    VALUES (@fromFile, @toFile, COALESCE(@symbolName, ''))
   `).run(input);
 }
 
@@ -256,15 +256,17 @@ export interface UsageWithFile extends UsageRecord {
 export function getUsagesBySymbol(
   db: Database.Database,
   symbolId: number,
+  limit = 200,
 ): UsageWithFile[] {
   return db
     .prepare(
       `SELECT u.*, f.path AS file_path
        FROM usages u JOIN files f ON u.used_in_file = f.id
        WHERE u.symbol_id = ?
-       ORDER BY f.path, u.used_at_line`,
+       ORDER BY f.path, u.used_at_line
+       LIMIT ?`,
     )
-    .all(symbolId) as UsageWithFile[];
+    .all(symbolId, limit) as UsageWithFile[];
 }
 
 export function deleteUsagesByFile(db: Database.Database, fileId: number): void {
@@ -591,10 +593,13 @@ export function insertObservation(
 export function getObservationsBySession(
   db: Database.Database,
   sessionId: string,
+  includeStale = true,
+  limit = 500,
 ): SessionObservationRecord[] {
+  const staleClause = includeStale ? '' : ' AND stale = 0';
   return db
-    .prepare('SELECT * FROM session_observations WHERE session_id = ? ORDER BY created_at')
-    .all(sessionId) as SessionObservationRecord[];
+    .prepare(`SELECT * FROM session_observations WHERE session_id = ?${staleClause} ORDER BY created_at LIMIT ?`)
+    .all(sessionId, limit) as SessionObservationRecord[];
 }
 
 export function getObservationsByFile(
@@ -661,6 +666,8 @@ export function deleteObservationsOlderThan(
   cutoffIso: string,
 ): void {
   db.prepare('DELETE FROM session_observations WHERE created_at < ?').run(cutoffIso);
+  db.prepare('DELETE FROM session_events WHERE timestamp < ?').run(cutoffIso);
+  db.prepare('DELETE FROM token_log WHERE timestamp < ?').run(cutoffIso);
 }
 
 export function deleteObservationsExceptSession(
@@ -669,6 +676,7 @@ export function deleteObservationsExceptSession(
 ): void {
   db.prepare('DELETE FROM session_observations WHERE session_id != ?').run(sessionId);
   db.prepare('DELETE FROM session_events WHERE session_id != ?').run(sessionId);
+  db.prepare('DELETE FROM token_log WHERE session_id != ?').run(sessionId);
 }
 
 // ─── Session Event Queries ─────────────────────────────────────────────────────
@@ -724,16 +732,58 @@ export function getRecentFileChangeEvents(
   sessionId: string,
   windowMinutes: number,
 ): SessionEventRecord[] {
+  const cutoff = new Date(Date.now() - windowMinutes * 60 * 1000).toISOString();
   return db
     .prepare(
       `SELECT * FROM session_events
        WHERE session_id = ?
          AND file_path = ?
          AND event_type IN ('symbol_added', 'symbol_removed', 'sig_changed')
-         AND timestamp >= datetime('now', '-' || ? || ' minutes')
+         AND timestamp >= ?
        ORDER BY timestamp`,
     )
-    .all(sessionId, filePath, windowMinutes) as SessionEventRecord[];
+    .all(sessionId, filePath, cutoff) as SessionEventRecord[];
+}
+
+/**
+ * Check if at least one session event matching the given criteria exists.
+ * Uses EXISTS + LIMIT 1 for efficiency — avoids fetching the entire event stream.
+ */
+export function hasMatchingSessionEvent(
+  db: Database.Database,
+  sessionId: string,
+  eventType: SessionEventType,
+  filePath?: string,
+  symbolName?: string,
+): boolean {
+  let sql = 'SELECT 1 FROM session_events WHERE session_id = ? AND event_type = ?';
+  const params: unknown[] = [sessionId, eventType];
+  if (filePath) {
+    sql += ' AND file_path = ?';
+    params.push(filePath);
+  }
+  if (symbolName) {
+    sql += ' AND symbol_name = ?';
+    params.push(symbolName);
+  }
+  sql += ' LIMIT 1';
+  return db.prepare(sql).get(...params) !== undefined;
+}
+
+/**
+ * Get the most recent session event of a given type for a specific file.
+ */
+export function getLatestSessionEvent(
+  db: Database.Database,
+  sessionId: string,
+  eventType: SessionEventType,
+  filePath: string,
+): SessionEventRecord | undefined {
+  return db.prepare(
+    `SELECT * FROM session_events
+     WHERE session_id = ? AND event_type = ? AND file_path = ?
+     ORDER BY timestamp DESC LIMIT 1`,
+  ).get(sessionId, eventType, filePath) as SessionEventRecord | undefined;
 }
 
 export function getAntiPatternEvents(

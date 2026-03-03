@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import type Database from 'better-sqlite3';
@@ -263,8 +266,16 @@ export function createMcpServer(
   monitoringServerInstance: MonitoringServer | null,
   options: ServerOptions,
 ): Server {
+  // Read version from package.json to stay in sync
+  const __dirname = dirname(fileURLToPath(import.meta.url));
+  let version = '1.0.0';
+  try {
+    const pkg = JSON.parse(readFileSync(join(__dirname, '..', 'package.json'), 'utf-8')) as { version: string };
+    version = pkg.version;
+  } catch { /* fallback */ }
+
   const server = new Server(
-    { name: 'mcp-codebase-indexer', version: '1.0.0' },
+    { name: 'mcp-codebase-indexer', version },
     { capabilities: { tools: {} } },
   );
 
@@ -294,53 +305,50 @@ export function createMcpServer(
     // Estimated token cost if the AI had to read raw source instead of using the index.
     // Each tool uses a heuristic multiplier: search results save ~10×, full-file reads ~5×, etc.
     let tokensWithoutIndex = 0;
+    let heuristicMultiplier = 0;
     let toolIsError = false;
 
     try {
       const a = args as Record<string, unknown>;
       switch (name) {
         case 'search_symbols': {
-          const r = searchSymbols(db, a as unknown as Parameters<typeof searchSymbols>[1], federatedDbs, projectRoot);
-          tokensWithoutIndex = estimateResponseTokens(r) * 10;
-          result = r;
+          result = searchSymbols(db, a as unknown as Parameters<typeof searchSymbols>[1], federatedDbs, projectRoot);
+          heuristicMultiplier = 10;
           break;
         }
         case 'get_symbol': {
-          const r = getSymbol(db, a as unknown as Parameters<typeof getSymbol>[1]);
-          tokensWithoutIndex = r ? estimateResponseTokens(r) * 15 : 0;
-          result = r;
+          result = getSymbol(db, a as unknown as Parameters<typeof getSymbol>[1]);
+          heuristicMultiplier = result ? 15 : 0;
           break;
         }
         case 'get_context': {
-          const r = await getContext(db, projectRoot, a as unknown as Parameters<typeof getContext>[2]);
-          tokensWithoutIndex = r ? estimateResponseTokens(r) * 5 : 0;
-          result = r;
+          result = await getContext(db, projectRoot, a as unknown as Parameters<typeof getContext>[2]);
+          heuristicMultiplier = result ? 5 : 0;
           break;
         }
         case 'get_file_summary': {
-          const r = getFileSummary(db, a as unknown as Parameters<typeof getFileSummary>[1]);
-          tokensWithoutIndex = r ? estimateResponseTokens(r) * 8 : 0;
-          result = r;
+          result = getFileSummary(db, a as unknown as Parameters<typeof getFileSummary>[1]);
+          heuristicMultiplier = result ? 8 : 0;
           break;
         }
         case 'find_usages': {
           result = findUsages(db, a as unknown as Parameters<typeof findUsages>[1]);
-          tokensWithoutIndex = estimateResponseTokens(result) * 10;
+          heuristicMultiplier = 10;
           break;
         }
         case 'get_dependencies': {
           result = getDependencies(db, a as unknown as Parameters<typeof getDependencies>[1]);
-          tokensWithoutIndex = estimateResponseTokens(result) * 10;
+          heuristicMultiplier = 10;
           break;
         }
         case 'get_project_overview': {
           result = getProjectOverview(db, projectRoot, federatedDbs, sessionId, a as unknown as Parameters<typeof getProjectOverview>[4]);
-          tokensWithoutIndex = estimateResponseTokens(result) * 5;
+          heuristicMultiplier = 5;
           break;
         }
         case 'get_api_endpoints': {
           result = getApiEndpoints(db);
-          tokensWithoutIndex = estimateResponseTokens(result) * 8;
+          heuristicMultiplier = 8;
           break;
         }
         case 'reindex': {
@@ -356,15 +364,13 @@ export function createMcpServer(
           break;
         }
         case 'search_docs': {
-          const r = searchDocs(db, a as unknown as Parameters<typeof searchDocs>[1]);
-          tokensWithoutIndex = estimateResponseTokens(r) * 8;
-          result = r;
+          result = searchDocs(db, a as unknown as Parameters<typeof searchDocs>[1]);
+          heuristicMultiplier = 8;
           break;
         }
         case 'get_doc_chunk': {
-          const r = getDocChunk(db, a as unknown as Parameters<typeof getDocChunk>[1]);
-          tokensWithoutIndex = r ? estimateResponseTokens(r) * 3 : 0;
-          result = r;
+          result = getDocChunk(db, a as unknown as Parameters<typeof getDocChunk>[1]);
+          heuristicMultiplier = result ? 3 : 0;
           break;
         }
         case 'save_context': {
@@ -394,6 +400,7 @@ export function createMcpServer(
 
     const text = JSON.stringify(result, null, 2);
     const tokensUsed = estimateTextTokens(text);
+    tokensWithoutIndex = tokensUsed * heuristicMultiplier;
 
     // Record token usage for this call; reindex is write-only so excluded from stats.
     if (tokenLogger && name !== 'reindex') {
@@ -431,6 +438,3 @@ function estimateTextTokens(text: string): number {
 }
 
 /** Serialises `value` to JSON and delegates to {@link estimateTextTokens}. */
-function estimateResponseTokens(value: unknown): number {
-  return estimateTextTokens(JSON.stringify(value));
-}

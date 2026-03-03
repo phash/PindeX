@@ -1,12 +1,14 @@
 import { EventEmitter } from 'node:events';
 import type Database from 'better-sqlite3';
-import type { Indexer } from './index.js';
+import { type Indexer, LANGUAGE_PATTERNS } from './index.js';
 import type { SessionObserver } from '../memory/observer.js';
+import { deleteFile } from '../db/queries.js';
 
 export interface WatcherOptions {
   db: Database.Database;
   indexer: Indexer;
   projectRoot: string;
+  languages?: string[];
   observer?: SessionObserver;
 }
 
@@ -37,7 +39,18 @@ export class FileWatcher extends EventEmitter {
     // Dynamic import allows mocking chokidar in tests
     const { default: chokidar } = await import('chokidar');
 
-    this.watcher = chokidar.watch(['**/*.ts', '**/*.tsx', '**/*.js'], {
+    // Build glob patterns from configured languages (falls back to TS/JS)
+    const languages = this.options.languages ?? ['typescript', 'javascript'];
+    const patterns: string[] = [];
+    for (const lang of languages) {
+      const langPatterns = LANGUAGE_PATTERNS[lang];
+      if (langPatterns) patterns.push(...langPatterns);
+    }
+    if (patterns.length === 0) {
+      patterns.push('**/*.ts', '**/*.tsx', '**/*.js');
+    }
+
+    this.watcher = chokidar.watch(patterns, {
       cwd: this.options.projectRoot,
       ignored: ['**/node_modules/**', '**/.git/**', '**/dist/**'],
       persistent: true,
@@ -90,8 +103,13 @@ export class FileWatcher extends EventEmitter {
       } catch (err) {
         this.emit('error', err);
       }
+    } else if (type === 'unlink') {
+      try {
+        deleteFile(this.options.db, path);
+        this.emit('removed', path);
+      } catch (err) {
+        this.emit('error', err);
+      }
     }
-    // Note: 'unlink' events could trigger file removal from the index
-    // (future enhancement – for now we leave stale entries)
   }
 }

@@ -1,5 +1,5 @@
 import { writeFileSync, existsSync, mkdirSync, readFileSync, appendFileSync, unlinkSync } from 'node:fs';
-import { resolve, join, relative } from 'node:path';
+import { resolve, join, relative, basename } from 'node:path';
 import {
   findProjectRoot,
   getProjectIndexPath,
@@ -29,9 +29,8 @@ export function writeMcpJson(
           MONITORING_PORT: String(entry.monitoringPort),
           AUTO_REINDEX: 'true',
           GENERATE_SUMMARIES: 'false',
-          MONITORING_AUTO_OPEN: 'true',
+          MONITORING_AUTO_OPEN: 'false',
           BASELINE_MODE: 'false',
-          TOKEN_PRICE_PER_MILLION: '3.00',
           ...federationEnv,
         },
       },
@@ -363,7 +362,7 @@ export async function addFederatedRepo(cwd: string, repoPath: string): Promise<v
   const updatedEntry = registry.getByPath(projectRoot)!;
   writeMcpJson(projectRoot, updatedEntry);
 
-  const repoName = resolvedRepo.split('/').pop() ?? resolvedRepo;
+  const repoName = basename(resolvedRepo);
   console.log(`\n  ✓ Linked: ${repoName}  (${resolvedRepo})`);
   console.log('  .mcp.json updated with FEDERATION_REPOS.\n');
   console.log('  Restart Claude Code to activate cross-repo search.\n');

@@ -1,5 +1,5 @@
 import { readFileSync, existsSync, statSync } from 'node:fs';
-import { join, relative, resolve } from 'node:path';
+import { join, relative, resolve, dirname } from 'node:path';
 import { glob } from 'glob';
 import type Database from 'better-sqlite3';
 import type { IndexResult } from '../types.js';
@@ -41,7 +41,7 @@ const DEFAULT_IGNORE = [
 ];
 
 /** Glob patterns per language name (as used in EXTENSION_MAP). */
-const LANGUAGE_PATTERNS: Record<string, string[]> = {
+export const LANGUAGE_PATTERNS: Record<string, string[]> = {
   typescript:  ['**/*.ts', '**/*.tsx'],
   javascript:  ['**/*.js', '**/*.mjs', '**/*.cjs', '**/*.jsx'],
   java:        ['**/*.java'],
@@ -256,6 +256,14 @@ export class Indexer {
       return { status: 'error', errors: [`File not found: ${relativePath}`] };
     }
 
+    // Skip oversized documents (same guard as indexFile)
+    try {
+      const stat = statSync(absolutePath);
+      if (stat.size > MAX_FILE_SIZE) {
+        return { status: 'skipped', errors: [] };
+      }
+    } catch { /* fall through */ }
+
     let content: string;
     try {
       content = readFileSync(absolutePath, 'utf-8');
@@ -312,6 +320,7 @@ export class Indexer {
     const { getAllFiles } = await import('../db/queries.js');
     const allFiles = getAllFiles(this.db);
     const pathIndex = new Map(allFiles.map((f) => [f.path, f.id]));
+    const knownPaths = new Set(pathIndex.keys());
 
     for (const file of allFiles) {
       const absolutePath = join(this.projectRoot, file.path);
@@ -325,7 +334,7 @@ export class Indexer {
 
         for (const imp of parsed.imports) {
           // Resolve relative imports to known project files
-          const resolvedPath = this.resolveImportPath(file.path, imp.source);
+          const resolvedPath = this.resolveImportPath(file.path, imp.source, knownPaths);
           if (!resolvedPath) continue;
 
           const toFileId = pathIndex.get(resolvedPath);
@@ -346,22 +355,22 @@ export class Indexer {
   }
 
   /** Resolves a relative import path to a project-relative file path. */
-  private resolveImportPath(fromFile: string, importSource: string): string | null {
+  private resolveImportPath(fromFile: string, importSource: string, knownPaths?: Set<string>): string | null {
     if (!importSource.startsWith('.')) return null; // Skip external packages
 
-    const fromDir = fromFile.split('/').slice(0, -1).join('/');
+    const fromDir = dirname(fromFile).replace(/\\/g, '/');
     const extensions = ['.ts', '.tsx', '.js', '/index.ts', '/index.js'];
 
     for (const ext of extensions) {
       const candidate = join(fromDir, importSource + ext).replace(/\\/g, '/');
-      if (existsSync(join(this.projectRoot, candidate))) {
+      if (knownPaths ? knownPaths.has(candidate) : existsSync(join(this.projectRoot, candidate))) {
         return candidate;
       }
     }
 
     // Try without extension (already has extension)
     const withoutResolve = join(fromDir, importSource).replace(/\\/g, '/');
-    if (existsSync(join(this.projectRoot, withoutResolve))) {
+    if (knownPaths ? knownPaths.has(withoutResolve) : existsSync(join(this.projectRoot, withoutResolve))) {
       return withoutResolve;
     }
 

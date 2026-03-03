@@ -23,19 +23,15 @@ export function getSessionMemory(
   const session = getSession(db, targetSessionId);
 
   // Resolve observations based on optional filters
-  let observations = (() => {
+  const observations = (() => {
     if (input.file && input.symbol) {
       return getObservationsByFileSymbol(db, input.file, input.symbol, 20);
     }
     if (input.file) {
       return getObservationsByFile(db, input.file, 20);
     }
-    return getObservationsBySession(db, targetSessionId);
+    return getObservationsBySession(db, targetSessionId, input.include_stale === true);
   })();
-
-  if (!input.include_stale) {
-    observations = observations.filter((o) => o.stale === 0);
-  }
 
   const antiPatternEvents = getAntiPatternEvents(db, targetSessionId);
 

@@ -1,7 +1,8 @@
 import type Database from 'better-sqlite3';
 import {
   getRecentFileChangeEvents,
-  getSessionEvents,
+  hasMatchingSessionEvent,
+  getLatestSessionEvent,
   insertSessionEvent,
   insertObservation,
 } from '../db/queries.js';
@@ -21,19 +22,15 @@ export class AntiPatternDetector {
    * Dead-end: symbol_added + symbol_removed for the same node in one session.
    */
   checkDeadEnd(filePath: string, symbolName: string): void {
-    const events = getSessionEvents(this.db, this.sessionId, [
-      'symbol_added',
-      'symbol_removed',
-    ]).filter((e) => e.file_path === filePath && e.symbol_name === symbolName);
+    // Use targeted SQL queries instead of fetching the entire event stream
+    const hasAdd = hasMatchingSessionEvent(this.db, this.sessionId, 'symbol_added', filePath, symbolName);
+    if (!hasAdd) return;
 
-    const hasAdd = events.some((e) => e.event_type === 'symbol_added');
-    const hasRemove = events.some((e) => e.event_type === 'symbol_removed');
-    if (!hasAdd || !hasRemove) return;
+    const hasRemove = hasMatchingSessionEvent(this.db, this.sessionId, 'symbol_removed', filePath, symbolName);
+    if (!hasRemove) return;
 
     // Only emit once per file+symbol
-    const alreadyDetected = getSessionEvents(this.db, this.sessionId, ['dead_end']).some(
-      (e) => e.file_path === filePath && e.symbol_name === symbolName,
-    );
+    const alreadyDetected = hasMatchingSessionEvent(this.db, this.sessionId, 'dead_end', filePath, symbolName);
     if (alreadyDetected) return;
 
     insertSessionEvent(this.db, {
@@ -61,10 +58,7 @@ export class AntiPatternDetector {
     if (recent.length < 4) return;
 
     // Don't re-emit if we already flagged thrash for this file recently
-    const recentThrash = getSessionEvents(this.db, this.sessionId, ['thrash_detected']).filter(
-      (e) => e.file_path === filePath,
-    );
-    const last = recentThrash.at(-1);
+    const last = getLatestSessionEvent(this.db, this.sessionId, 'thrash_detected', filePath);
     if (last) {
       const msAgo = Date.now() - new Date(last.timestamp).getTime();
       if (msAgo < 5 * 60 * 1000) return;

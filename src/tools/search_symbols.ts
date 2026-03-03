@@ -1,5 +1,5 @@
 import { readFileSync, existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, basename } from 'node:path';
 import type Database from 'better-sqlite3';
 import type { SearchSymbolsInput, SymbolSearchResult } from '../types.js';
 import { searchSymbolsFts } from '../db/queries.js';
@@ -57,7 +57,7 @@ export function searchSymbols(
     try {
       return searchSymbolsFts(fedDb, input.query, limit, filters).map((row) => ({
         ...mapRow(row),
-        project: path.split('/').pop() ?? path,
+        project: basename(path),
       }));
     } catch {
       return [];

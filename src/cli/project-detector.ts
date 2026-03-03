@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { resolve, join, dirname } from 'node:path';
+import { resolve, join, dirname, basename } from 'node:path';
 import { homedir } from 'node:os';
 import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync } from 'node:fs';
 
@@ -135,7 +135,7 @@ export class GlobalRegistry {
     let port = computeDefaultPort(hash);
     while (usedPorts.has(port)) port++;
 
-    const name = normalizedPath.split('/').pop() ?? normalizedPath;
+    const name = basename(normalizedPath);
     const entry: RegistryEntry = {
       path: normalizedPath,
       hash,

@@ -14,7 +14,6 @@ import {
 } from './db/queries.js';
 import { getProjectIndexPath } from './cli/project-detector.js';
 import { SessionObserver } from './memory/observer.js';
-import { EventEmitter } from 'node:events';
 import { v4 as uuidv4 } from 'uuid';
 
 // ─── Configuration (from environment variables) ───────────────────────────────
@@ -67,7 +66,6 @@ async function main(): Promise<void> {
   });
 
   // 4. Start monitoring server
-  const emitter = new EventEmitter();
   const monitoringServer = startMonitoringServer(db, MONITORING_PORT);
 
   if (MONITORING_AUTO_OPEN) {
@@ -78,7 +76,7 @@ async function main(): Promise<void> {
   // 5. Set up token logger + session observer for the current session
   const sessionId = uuidv4();
   createSession(db, { id: sessionId, mode: BASELINE_MODE ? 'baseline' : 'indexed', label: null });
-  const tokenLogger = new TokenLogger({ db, sessionId, emitter });
+  const tokenLogger = new TokenLogger({ db, sessionId });
   const observer = new SessionObserver({ db, sessionId, projectRoot: PROJECT_ROOT });
 
   // 5b. Observation retention cleanup
@@ -87,8 +85,10 @@ async function main(): Promise<void> {
   // 6. Start file watcher
   let watcher: FileWatcher | null = null;
   if (AUTO_REINDEX) {
-    watcher = new FileWatcher({ db, indexer, projectRoot: PROJECT_ROOT, observer });
-    watcher.start().catch(() => {});
+    watcher = new FileWatcher({ db, indexer, projectRoot: PROJECT_ROOT, languages: LANGUAGES, observer });
+    watcher.start().catch((err) => {
+      process.stderr.write(`[pindex] File watcher failed to start: ${String(err)}\n`);
+    });
   }
 
   // 7. Create and start the MCP server

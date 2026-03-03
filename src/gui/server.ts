@@ -104,14 +104,26 @@ export function createGuiApp(): express.Application {
   const app = express();
   app.use(express.json());
 
+  // Cache registry reads with a 5-second TTL to avoid re-reading the file on every request
+  let registryCache: ReturnType<GlobalRegistry['list']> | null = null;
+  let registryCacheTime = 0;
+  const REGISTRY_TTL_MS = 5000;
+  function getCachedRegistry(): ReturnType<GlobalRegistry['list']> {
+    const now = Date.now();
+    if (!registryCache || now - registryCacheTime > REGISTRY_TTL_MS) {
+      registryCache = new GlobalRegistry().list();
+      registryCacheTime = now;
+    }
+    return registryCache;
+  }
+
   app.get('/api/projects', (_req, res) => {
-    const registry = new GlobalRegistry();
-    const projects = registry.list().map(loadProjectStats);
+    const projects = getCachedRegistry().map(loadProjectStats);
     res.json(projects);
   });
 
   app.get('/api/projects/:hash/detail', (req, res) => {
-    const registry = new GlobalRegistry();
+    const registry = { list: getCachedRegistry };
     const entry = registry.list().find((p) => p.hash === req.params.hash);
     if (!entry) return res.status(404).json({ error: 'project not found' });
 
@@ -142,7 +154,7 @@ export function createGuiApp(): express.Application {
   });
 
   app.get('/api/projects/:hash/sessions', (req, res) => {
-    const registry = new GlobalRegistry();
+    const registry = { list: getCachedRegistry };
     const entry = registry.list().find((p) => p.hash === req.params.hash);
     if (!entry) return res.status(404).json({ error: 'project not found' });
 
@@ -164,7 +176,7 @@ export function createGuiApp(): express.Application {
   });
 
   app.get('/api/overview', async (_req, res) => {
-    const registry = new GlobalRegistry();
+    const registry = { list: getCachedRegistry };
     const entries = registry.list();
     const baseStats = entries.map(loadProjectStats);
 
@@ -193,7 +205,7 @@ export function createGuiApp(): express.Application {
   });
 
   app.get('/api/sessions/recent', (_req, res) => {
-    const registry = new GlobalRegistry();
+    const registry = { list: getCachedRegistry };
     type SRow = { id: string; started_at: string; mode: string; label: string | null; total_tokens: number; total_savings: number; last_activity_at: string | null };
     const all: Array<SRow & { projectName: string; projectHash: string }> = [];
 
@@ -233,7 +245,7 @@ export function createGuiApp(): express.Application {
   });
 
   app.get('/api/projects/:hash/open', async (req, res) => {
-    const registry = new GlobalRegistry();
+    const registry = { list: getCachedRegistry };
     const entry = registry.list().find((p) => p.hash === req.params.hash);
     if (!entry) return res.status(404).json({ error: 'project not found' });
     try {

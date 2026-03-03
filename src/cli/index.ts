@@ -4,7 +4,7 @@
 import { existsSync, mkdirSync, copyFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runSetup } from './setup.js';
-import { isDaemonRunning, stopDaemon, showStatus, getDaemonPid } from './daemon.js';
+import { isDaemonRunning, stopDaemon, getDaemonPid } from './daemon.js';
 import { openDatabase } from '../db/database.js';
 import { runMigrations } from '../db/migrations.js';
 import { Indexer } from '../indexer/index.js';
@@ -132,18 +132,21 @@ async function main(): Promise<void> {
 
       const dbPath = getProjectIndexPath(targetPath);
       const db = openDatabase(dbPath);
-      runMigrations(db);
+      try {
+        runMigrations(db);
 
-      const languages = process.env.LANGUAGES?.split(',').map((l) => l.trim()).filter(Boolean);
-      const indexer = new Indexer({ db, projectRoot: targetPath, languages });
-      const result = await indexer.indexAll({ force });
-      await indexer.resolveDependencies();
+        const languages = process.env.LANGUAGES?.split(',').map((l) => l.trim()).filter(Boolean);
+        const indexer = new Indexer({ db, projectRoot: targetPath, languages });
+        const result = await indexer.indexAll({ force });
+        await indexer.resolveDependencies();
 
-      console.log(`Done: ${result.indexed} indexed, ${result.updated} updated, ${result.skipped} skipped`);
-      if (result.errors.length > 0) {
-        console.error(`Errors: ${result.errors.join(', ')}`);
+        console.log(`Done: ${result.indexed} indexed, ${result.updated} updated, ${result.skipped} skipped`);
+        if (result.errors.length > 0) {
+          console.error(`Errors: ${result.errors.join(', ')}`);
+        }
+      } finally {
+        db.close();
       }
-      db.close();
       break;
     }
 

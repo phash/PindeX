@@ -6,7 +6,7 @@ import { insertTokenLog } from '../db/queries.js';
 export interface TokenLoggerOptions {
   db: Database.Database;
   sessionId: string;
-  emitter: EventEmitter;
+  emitter?: EventEmitter;
 }
 
 export interface LogInput {
@@ -20,7 +20,7 @@ export interface LogInput {
 export class TokenLogger {
   private readonly db: Database.Database;
   private readonly sessionId: string;
-  private readonly emitter: EventEmitter;
+  private readonly emitter?: EventEmitter;
   private cumulativeActual = 0;
   private cumulativeSavings = 0;
 
@@ -62,7 +62,7 @@ export class TokenLogger {
       cumulative_savings: this.cumulativeSavings,
     };
 
-    this.emitter.emit('token_event', event);
+    this.emitter?.emit('token_event', event);
   }
 
   getCurrentSessionId(): string {
