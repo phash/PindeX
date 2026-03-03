@@ -55,12 +55,13 @@ MCP server that structurally indexes codebases (TypeScript, JavaScript, Java, Ko
 | `uuid` | ^9.0.0 | Eindeutige IDs |
 | `ws` | ^8.16.0 | WebSocket-Server |
 | `open` | ^9.1.0 | Browser öffnen |
+| `zod` | ^3.24.0 | Runtime Input-Validierung (MCP Tool-Argumente) |
 
 ### Dev-Tools
 | Tool | Zweck |
 |---|---|
 | `typescript` ^5.0.0 | Compiler (`tsc`), kein Bundler |
-| `vitest` ^1.0.0 | Test-Runner (`pool: forks` — nötig für native Bindings) |
+| `vitest` ^4.0.0 | Test-Runner (`pool: forks` — nötig für native Bindings) |
 | `@vitest/coverage-v8` | Code Coverage (Schwelle: >80%) |
 | `supertest` ^6.0.0 | HTTP Integration Testing |
 | `tsc --noEmit` | Lint (nur Type-Check) |
@@ -94,7 +95,7 @@ npm run build         # compile src/ → dist/
 - **DB**: SQLite via `better-sqlite3` — FTS5 virtual table with triggers for symbol search
 - **Parser**: `tree-sitter` + `tree-sitter-typescript` — AST-based symbol/import extraction
 - **Indexer**: MD5-hash-based incremental reindexing, glob file discovery
-- **MCP Tools**: 13 tools registered via `@modelcontextprotocol/sdk`
+- **MCP Tools**: 14 tools registered via `@modelcontextprotocol/sdk` (Zod-validierte Inputs)
 - **Monitoring**: per-project Express + WebSocket server, per-project deterministic port
 - **GUI**: `pindex-gui` binary — aggregated Express dashboard reading all project DBs directly
 - **CLI**: `pindex` (init/add/remove/status), per-project daemon management
@@ -138,7 +139,10 @@ INDEX_PATH=~/.pindex/projects/{hash}/index.db  # SQLite DB path (set by pindex i
 PROJECT_ROOT=.                                  # project to index
 LANGUAGES=typescript,javascript                 # comma-separated
 AUTO_REINDEX=true                               # watch for file changes
-GENERATE_SUMMARIES=false                        # LLM summaries (stub)
+GENERATE_SUMMARIES=false                        # LLM-Summaries (OpenAI-kompatible API)
+SUMMARIZER_API_KEY=                             # API-Key für LLM-Summaries
+SUMMARIZER_BASE_URL=https://api.openai.com/v1   # API-Basis-URL (OpenAI, Ollama, etc.)
+SUMMARIZER_MODEL=gpt-4o-mini                    # Modell für Summaries
 MONITORING_PORT=7843                            # per-project port (assigned by pindex init)
 MONITORING_AUTO_OPEN=false                      # open browser on start
 BASELINE_MODE=false                             # disable index (A/B testing)
@@ -208,9 +212,9 @@ src/
 ├── indexer/
 │   ├── index.ts          # Indexer orchestrator
 │   ├── parser.ts         # tree-sitter AST parsing
-│   ├── summarizer.ts     # LLM summary stub
+│   ├── summarizer.ts     # LLM summary (OpenAI-kompatible API)
 │   └── watcher.ts        # chokidar file watcher
-├── tools/                # one file per MCP tool
+├── tools/                # one file per MCP tool + schemas.ts (Zod-Validierung)
 ├── monitoring/
 │   ├── server.ts         # Express + WebSocket (per-project)
 │   ├── token-logger.ts   # per-call token logging

@@ -516,7 +516,10 @@ These are set automatically in the generated `.mcp.json` — you rarely need to 
 | `MONITORING_PORT` | assigned per-project | Port for the live dashboard + WebSocket |
 | `MONITORING_AUTO_OPEN` | `false` | Open the dashboard in the browser on startup |
 | `BASELINE_MODE` | `false` | Disable the index entirely (for A/B baseline sessions) |
-| `GENERATE_SUMMARIES` | `false` | Generate LLM summaries per symbol (stub — not yet wired) |
+| `GENERATE_SUMMARIES` | `false` | Generate LLM summaries per file and symbol (requires `SUMMARIZER_API_KEY`) |
+| `SUMMARIZER_API_KEY` | _(empty)_ | API key for the LLM summarization provider |
+| `SUMMARIZER_BASE_URL` | `https://api.openai.com/v1` | Base URL for the OpenAI-compatible chat completions API. Works with OpenAI, Ollama, LiteLLM, Anthropic proxy, etc. |
+| `SUMMARIZER_MODEL` | `gpt-4o-mini` | Model name for summarization requests |
 | `TOKEN_PRICE_PER_MILLION` | `3.00` | USD price per million tokens — used for cost estimates |
 | `FEDERATION_REPOS` | _(empty)_ | Colon-separated absolute paths to linked repositories |
 | `DOCUMENT_PATTERNS` | `**/*.md,**/*.markdown,**/*.yaml,**/*.yml,**/*.txt` | Glob patterns for document files to index alongside code |
@@ -763,7 +766,7 @@ tests/
 ├── helpers/              # createTestDb(), fixtures, test server
 ├── db/                   # schema, migrations, queries
 ├── indexer/              # parser, indexer, watcher
-├── tools/                # one file per MCP tool (13 total)
+├── tools/                # one file per MCP tool + validation tests
 ├── monitoring/           # estimator, token-logger, Express server
 ├── cli/                  # project-detector, setup, daemon
 └── integration/
@@ -778,7 +781,7 @@ tests/
 ```
 src/
 ├── index.ts                  # Entry point — MCP stdio server + FEDERATION_REPOS
-├── server.ts                 # Tool registration (13 tools, FederatedDb interface)
+├── server.ts                 # Tool registration (14 tools, Zod validation, FederatedDb)
 ├── types.ts                  # Shared TypeScript interfaces
 │
 ├── db/
@@ -790,7 +793,7 @@ src/
 ├── indexer/
 │   ├── index.ts              # Orchestrator — code + document file discovery
 │   ├── parser.ts             # tree-sitter AST → symbols; text → doc chunks
-│   ├── summarizer.ts         # LLM summary stub (not yet active)
+│   ├── summarizer.ts         # LLM summaries (OpenAI-compatible API, concurrency-limited)
 │   └── watcher.ts            # chokidar file watcher → auto-reindex
 │
 ├── tools/                    # One file per MCP tool
@@ -807,7 +810,8 @@ src/
 │   ├── search_docs.ts        # FTS5 across documents + context entries
 │   ├── get_doc_chunk.ts      # retrieve specific document section(s)
 │   ├── save_context.ts       # persist a fact/decision to context store
-│   └── get_session_memory.ts # query passive session observations
+│   ├── get_session_memory.ts # query passive session observations
+│   └── schemas.ts            # Zod schemas for runtime input validation
 │
 ├── memory/                   # Passive session memory (v1.1+)
 │   ├── ast-diff.ts           # AST diff engine — detects symbol changes
