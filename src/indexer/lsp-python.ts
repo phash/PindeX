@@ -8,7 +8,10 @@ import {
   createMessageConnection,
   type MessageConnection,
 } from 'vscode-jsonrpc/node.js';
+import type { DocumentSymbol } from 'vscode-languageserver-protocol';
 import type { ParsedSymbol, ParsedImport } from '../types.js';
+import { mapDocumentSymbols } from './lsp-mapper.js';
+import { parseFile } from './parser.js';
 
 export type LspReadyState = 'idle' | 'starting' | 'ready' | 'failed' | 'closed';
 
@@ -32,6 +35,7 @@ export class LspPythonClient {
   private proc: ChildProcessWithoutNullStreams | null = null;
   private connection: MessageConnection | null = null;
   private static warnedMissing = false;
+  private pendingQueue: Promise<unknown> = Promise.resolve();
 
   constructor(options: LspPythonClientOptions) {
     this.enabled = options.enabled;
@@ -128,23 +132,68 @@ export class LspPythonClient {
   }
 
   async getDocumentSymbols(
-    _relPath: string,
-    _content: string,
+    relPath: string,
+    content: string,
   ): Promise<{ symbols: ParsedSymbol[]; imports: ParsedImport[] } | null> {
-    if (this._state !== 'ready') return null;
-    // Request dispatch arrives in Task 5.
-    return null;
+    if (this._state !== 'ready' || !this.connection) return null;
+
+    // Serialise concurrent callers so the LSP sees one request at a time.
+    const task = this.pendingQueue.then(() => this.runRequest(relPath, content));
+    this.pendingQueue = task.catch(() => undefined);
+    return task;
+  }
+
+  private async runRequest(
+    relPath: string,
+    content: string,
+  ): Promise<{ symbols: ParsedSymbol[]; imports: ParsedImport[] } | null> {
+    if (!this.connection || this._state !== 'ready') return null;
+
+    const uri = pathToFileURL(resolve(this.projectRoot, relPath)).href;
+
+    try {
+      this.connection.sendNotification('textDocument/didOpen', {
+        textDocument: { uri, languageId: 'python', version: 1, text: content },
+      });
+
+      const response = (await Promise.race([
+        this.connection.sendRequest('textDocument/documentSymbol', {
+          textDocument: { uri },
+        }),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('request timeout')), this.timeoutMs)),
+      ])) as DocumentSymbol[] | null;
+
+      this.connection.sendNotification('textDocument/didClose', {
+        textDocument: { uri },
+      });
+
+      if (!response || !Array.isArray(response)) {
+        return { symbols: [], imports: extractImportsFromContent(content) };
+      }
+
+      return {
+        symbols: mapDocumentSymbols(response),
+        imports: extractImportsFromContent(content),
+      };
+    } catch (err) {
+      process.stderr.write(`[pindex] LSP: documentSymbol failed for ${relPath}: ${String(err)}\n`);
+      return null;
+    }
   }
 
   async close(): Promise<void> {
     this._state = 'closed';
     if (this.connection) {
-      try {
-        await this.connection.sendRequest('shutdown', null);
-        this.connection.sendNotification('exit', null);
-      } catch { /* subprocess may already be dead */ }
-      this.connection.dispose();
+      const conn = this.connection;
       this.connection = null;
+      try {
+        await Promise.race([
+          conn.sendRequest('shutdown', null),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('shutdown timeout')), 1000)),
+        ]);
+        conn.sendNotification('exit', null);
+      } catch { /* subprocess may already be dead */ }
+      conn.dispose();
     }
     if (this.proc) {
       try { this.proc.kill('SIGTERM'); } catch { /* ignore */ }
@@ -162,4 +211,11 @@ function resolvePyrightLangserver(): string | null {
   const local = join(process.cwd(), 'node_modules', '.bin', 'pyright-langserver');
   if (existsSync(local)) return local;
   return null;
+}
+
+/** Reuses the existing Python regex import extractor from parseFile(). Pyright's
+ *  documentSymbol does not expose import statements; the regex is reliable
+ *  enough for `import X` / `from Y import Z`. */
+function extractImportsFromContent(content: string): ParsedImport[] {
+  return parseFile('pseudo.py', content).imports;
 }

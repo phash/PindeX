@@ -165,3 +165,115 @@ describe('LspPythonClient — handshake', () => {
     expect(client.state).toBe('failed');
   });
 });
+
+describe('LspPythonClient — getDocumentSymbols', () => {
+  beforeEach(() => {
+    LspPythonClient._resetWarnedMissingForTest();
+  });
+
+  /** Drives a fake subprocess through initialize then makes it ready. */
+  async function makeReadyClient(): Promise<{
+    client: LspPythonClient;
+    fake: ReturnType<typeof createFakeSubprocess>;
+  }> {
+    const fake = createFakeSubprocess();
+    const client = new LspPythonClient({
+      projectRoot: '/tmp/fake',
+      enabled: true,
+      _spawn: (() => fake) as never,
+      _resolveServerPath: () => '/fake/pyright-langserver',
+    } as never);
+    const startPromise = client.start();
+    await new Promise((r) => setImmediate(r));
+    fake.stdout.push(encodeLspMessage({ jsonrpc: '2.0', id: 0, result: { capabilities: {} } }));
+    await startPromise;
+    return { client, fake };
+  }
+
+  it('returns mapped symbols + regex-derived imports on success', async () => {
+    const { client, fake } = await makeReadyClient();
+    const content = 'import os\n\nclass Foo:\n    def bar(self):\n        pass\n';
+    const requestPromise = client.getDocumentSymbols('foo.py', content);
+
+    // Consume pending stdin writes (didOpen notification + documentSymbol request).
+    await new Promise((r) => setImmediate(r));
+
+    // Reply with a DocumentSymbol response.
+    // initialize used id 0; the next request (documentSymbol) uses id 1.
+    // didOpen and didClose are notifications with no id.
+    fake.stdout.push(
+      encodeLspMessage({
+        jsonrpc: '2.0',
+        id: 1,
+        result: [
+          {
+            name: 'Foo',
+            kind: 5,
+            range: { start: { line: 2, character: 0 }, end: { line: 4, character: 0 } },
+            selectionRange: { start: { line: 2, character: 6 }, end: { line: 2, character: 9 } },
+            children: [
+              {
+                name: 'bar',
+                kind: 6,
+                range: { start: { line: 3, character: 4 }, end: { line: 4, character: 0 } },
+                selectionRange: { start: { line: 3, character: 8 }, end: { line: 3, character: 11 } },
+              },
+            ],
+          },
+        ],
+      }),
+    );
+
+    const result = await requestPromise;
+    expect(result).not.toBeNull();
+    expect(result!.symbols.map((s) => s.name)).toEqual(['Foo', 'bar']);
+    expect(result!.symbols.map((s) => s.kind)).toEqual(['class', 'method']);
+    expect(result!.imports).toEqual([{ source: 'os', symbols: [] }]);
+
+    await client.close();
+  });
+
+  it('returns null when request times out', async () => {
+    const fake = createFakeSubprocess();
+    const client = new LspPythonClient({
+      projectRoot: '/tmp/fake',
+      enabled: true,
+      timeoutMs: 50,
+      _spawn: (() => fake) as never,
+      _resolveServerPath: () => '/fake/pyright-langserver',
+    } as never);
+    const startPromise = client.start();
+    await new Promise((r) => setImmediate(r));
+    fake.stdout.push(encodeLspMessage({ jsonrpc: '2.0', id: 0, result: { capabilities: {} } }));
+    await startPromise;
+
+    // Do not push a response for the documentSymbol request — let it time out.
+    const result = await client.getDocumentSymbols('slow.py', 'x = 1');
+    expect(result).toBeNull();
+
+    await client.close();
+  });
+
+  it('serialises concurrent calls', async () => {
+    const { client, fake } = await makeReadyClient();
+
+    const p1 = client.getDocumentSymbols('a.py', 'a = 1');
+    const p2 = client.getDocumentSymbols('b.py', 'b = 2');
+
+    await new Promise((r) => setImmediate(r));
+
+    // Reply to the first documentSymbol (id 1).
+    fake.stdout.push(encodeLspMessage({ jsonrpc: '2.0', id: 1, result: [] }));
+    const r1 = await p1;
+    expect(r1).not.toBeNull();
+
+    await new Promise((r) => setImmediate(r));
+
+    // Reply to the second documentSymbol (id 2).
+    fake.stdout.push(encodeLspMessage({ jsonrpc: '2.0', id: 2, result: [] }));
+    const r2 = await p2;
+    expect(r2).not.toBeNull();
+
+    await client.close();
+  });
+});
