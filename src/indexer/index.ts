@@ -184,6 +184,18 @@ export class Indexer {
       return { status: 'error', errors: [`Failed to read ${relativePath}: ${String(err)}`] };
     }
 
+    const hash = hashContent(content);
+
+    // Fast path: skip re-parsing unchanged files. The watcher hot path
+    // relies on this short-circuit; ParsePool-backed indexAll bypasses
+    // indexFile so it does not pay this extra lookup.
+    if (!force) {
+      const existing = getFileByPath(this.db, relativePath);
+      if (existing && existing.hash === hash) {
+        return { status: 'skipped', errors: [] };
+      }
+    }
+
     let parsed: ParsedFile;
     try {
       parsed = parseFile(absolutePath, content);
@@ -191,7 +203,6 @@ export class Indexer {
       return { status: 'error', errors: [`Failed to parse ${relativePath}: ${String(err)}`] };
     }
 
-    const hash = hashContent(content);
     return this.processParsedFile(relativePath, parsed, content, hash, force);
   }
 
