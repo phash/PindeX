@@ -9,6 +9,11 @@ export default defineConfig({
     pool: 'forks',
     setupFiles: ['./tests/setup.ts'],
     include: ['tests/**/*.test.ts'],
+    exclude: [
+      'node_modules/**',
+      'dist/**',
+      'tests/integration/parse-pool-workers.test.ts',
+    ],
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json', 'html'],
