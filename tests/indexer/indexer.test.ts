@@ -6,6 +6,7 @@ import type Database from 'better-sqlite3';
 import { createTestDb } from '../helpers/db.js';
 import { Indexer } from '../../src/indexer/index.js';
 import { getAllFiles, getFileByPath, getSymbolsByFileId } from '../../src/db/queries.js';
+import { LspPythonClient } from '../../src/indexer/lsp-python.js';
 
 // ─── Test Fixtures ────────────────────────────────────────────────────────────
 
@@ -125,5 +126,54 @@ describe('Indexer', () => {
     // cached imports should still be used, so the call must not error.
     rmSync(join(testDir, 'src', 'service.ts'));
     await expect(indexer.resolveDependencies()).resolves.toBeUndefined();
+  });
+
+  it('overwrites regex symbols with LSP result when LSP is ready', async () => {
+    class FakeLsp extends LspPythonClient {
+      async start(): Promise<void> { (this as never as { _state: string })._state = 'ready'; }
+      get ready(): boolean { return true; }
+      get state(): 'ready' { return 'ready'; }
+      async getDocumentSymbols() {
+        return {
+          symbols: [
+            {
+              name: 'from_lsp',
+              kind: 'function' as const,
+              signature: 'from_lsp',
+              startLine: 1,
+              endLine: 3,
+              isExported: true,
+              isAsync: false,
+              hasTryCatch: false,
+            },
+          ],
+          imports: [{ source: 'os', symbols: [] }],
+        };
+      }
+      async close(): Promise<void> { /* no-op */ }
+    }
+
+    const pyDir = join(tmpdir(), `pindex-lsp-indexer-${Date.now()}`);
+    mkdirSync(pyDir, { recursive: true });
+    writeFileSync(join(pyDir, 'x.py'), 'def not_from_lsp(): pass\n');
+
+    try {
+      const indexer = new Indexer({ db, projectRoot: pyDir, languages: ['python'] });
+      // Inject the fake LSP client.
+      (indexer as never as { lsp: LspPythonClient }).lsp = new FakeLsp({
+        projectRoot: pyDir,
+        enabled: true,
+      });
+
+      await indexer.indexAll();
+
+      const file = getFileByPath(db, 'x.py');
+      expect(file).not.toBeNull();
+      const symbols = getSymbolsByFileId(db, file!.id);
+      expect(symbols.map((s) => s.name)).toContain('from_lsp');
+      expect(symbols.map((s) => s.name)).not.toContain('not_from_lsp');
+    } finally {
+      rmSync(pyDir, { recursive: true, force: true });
+    }
   });
 });
