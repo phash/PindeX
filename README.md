@@ -521,6 +521,8 @@ These are set automatically in the generated `.mcp.json` — you rarely need to 
 | `SUMMARIZER_BASE_URL` | `https://api.openai.com/v1` | Base URL for the OpenAI-compatible chat completions API. Works with OpenAI, Ollama, LiteLLM, Anthropic proxy, etc. |
 | `SUMMARIZER_MODEL` | `gpt-4o-mini` | Model name for summarization requests |
 | `TOKEN_PRICE_PER_MILLION` | `3.00` | USD price per million tokens — used for cost estimates |
+| `PINDEX_PARSE_WORKERS` | _(empty)_ | Parse workers (0=sync, empty=auto) |
+| `PINDEX_BIND_HOST` | `127.0.0.1` | Bind host for monitoring/GUI (default loopback) |
 | `FEDERATION_REPOS` | _(empty)_ | Colon-separated absolute paths to linked repositories |
 | `DOCUMENT_PATTERNS` | `**/*.md,**/*.markdown,**/*.yaml,**/*.yml,**/*.txt` | Glob patterns for document files to index alongside code |
 | `OBSERVATION_RETENTION` | `permanent` | How long passive session observations are kept: `permanent`, `session`, or `Nd` (e.g. `30d`) |

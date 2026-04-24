@@ -2,7 +2,8 @@ import { readFileSync, existsSync, statSync } from 'node:fs';
 import { join, relative, resolve, dirname } from 'node:path';
 import { glob } from 'glob';
 import type Database from 'better-sqlite3';
-import type { IndexResult } from '../types.js';
+import type { IndexResult, ParsedFile, ParsedImport } from '../types.js';
+import { ParsePool } from './parse-pool.js';
 import { parseFile, parseDocument, hashContent } from './parser.js';
 import {
   upsertFile,
@@ -89,6 +90,9 @@ export interface IndexerOptions {
   generateSummaries?: boolean;
   summarizerOptions?: SummarizerOptions;
   documentPatterns?: string[];
+  /** 0 = run parsing synchronously on main (test / small-project mode).
+   *  undefined = auto-select based on CPU count. */
+  maxParseWorkers?: number;
 }
 
 export interface IndexAllOptions {
@@ -111,6 +115,9 @@ export class Indexer {
   private readonly generateSummaries: boolean;
   private readonly summarizer: Summarizer;
   private readonly documentPatterns: string[];
+  private pool: ParsePool | null = null;
+  private readonly configuredMaxWorkers: number;
+  private lastImportsCache: Map<string, ParsedImport[]> | null = null;
 
   constructor(options: IndexerOptions) {
     this.db = options.db;
@@ -120,6 +127,7 @@ export class Indexer {
     this.generateSummaries = options.generateSummaries ?? false;
     this.summarizer = new Summarizer(options.summarizerOptions ?? { enabled: false });
     this.documentPatterns = options.documentPatterns ?? DEFAULT_DOCUMENT_PATTERNS;
+    this.configuredMaxWorkers = ParsePool.pickDefaultWorkerCount(options.maxParseWorkers);
   }
 
   /** Discovers and indexes all source files and document files in the project root. */
@@ -128,29 +136,52 @@ export class Indexer {
     const codePatterns = buildCodePatterns(this.languages);
 
     const [codePaths, docPaths] = await Promise.all([
-      glob(codePatterns, {
-        cwd: this.projectRoot,
-        ignore: this.ignorePatterns,
-        absolute: false,
-      }),
-      glob(this.documentPatterns, {
-        cwd: this.projectRoot,
-        ignore: this.ignorePatterns,
-        absolute: false,
-      }),
+      glob(codePatterns, { cwd: this.projectRoot, ignore: this.ignorePatterns, absolute: false }),
+      glob(this.documentPatterns, { cwd: this.projectRoot, ignore: this.ignorePatterns, absolute: false }),
     ]);
 
-    // Include any additional paths requested
     const allCodePaths = [...codePaths, ...(options.additionalPaths ?? [])];
 
-    for (const relativePath of allCodePaths) {
-      const fileResult = await this.indexFile(relativePath, options.force);
-      if (fileResult.status === 'indexed') result.indexed++;
-      else if (fileResult.status === 'updated') result.updated++;
-      else if (fileResult.status === 'skipped') result.skipped++;
-      result.errors.push(...fileResult.errors);
+    const jobs = allCodePaths.map((rel) => ({
+      absolutePath: join(this.projectRoot, rel),
+      relativePath: rel,
+    }));
+
+    const importsCache = new Map<string, ParsedImport[]>();
+
+    const effectiveWorkers = ParsePool.pickEffectiveWorkerCount(
+      jobs.length,
+      this.configuredMaxWorkers,
+    );
+    // Close any pool from a prior indexAll call and size a new one for this batch.
+    if (this.pool) await this.pool.close();
+    this.pool = new ParsePool({ maxWorkers: effectiveWorkers });
+
+    for await (const parseResult of this.pool.parseMany(jobs)) {
+      if (parseResult.status === 'skipped') {
+        result.skipped++;
+        continue;
+      }
+      if (parseResult.status === 'error') {
+        result.errors.push(parseResult.error);
+        continue;
+      }
+      const fileRes = await this.processParsedFile(
+        parseResult.relativePath,
+        parseResult.parsed,
+        parseResult.content,
+        parseResult.hash,
+        options.force ?? false,
+      );
+      if (fileRes.status === 'indexed') result.indexed++;
+      else if (fileRes.status === 'updated') result.updated++;
+      else if (fileRes.status === 'skipped') result.skipped++;
+      result.errors.push(...fileRes.errors);
+
+      importsCache.set(parseResult.relativePath, parseResult.parsed.imports);
     }
 
+    // Documents stay sequential; they are few and cheap.
     for (const relativePath of docPaths) {
       const fileResult = await this.indexDocument(relativePath, options.force);
       if (fileResult.status === 'indexed') result.indexed++;
@@ -158,6 +189,9 @@ export class Indexer {
       else if (fileResult.status === 'skipped') result.skipped++;
       result.errors.push(...fileResult.errors);
     }
+
+    // Stash the cache for resolveDependencies (Task 7 will consume it).
+    this.lastImportsCache = importsCache;
 
     return result;
   }
@@ -167,13 +201,9 @@ export class Indexer {
     const absolutePath = join(this.projectRoot, relativePath);
 
     if (!existsSync(absolutePath)) {
-      return {
-        status: 'error',
-        errors: [`File not found: ${relativePath}`],
-      };
+      return { status: 'error', errors: [`File not found: ${relativePath}`] };
     }
 
-    // Skip files larger than MAX_FILE_SIZE to prevent OOM
     try {
       const stat = statSync(absolutePath);
       if (stat.size > MAX_FILE_SIZE) {
@@ -185,43 +215,62 @@ export class Indexer {
     try {
       content = readFileSync(absolutePath, 'utf-8');
     } catch (err) {
-      return {
-        status: 'error',
-        errors: [`Failed to read ${relativePath}: ${String(err)}`],
-      };
+      return { status: 'error', errors: [`Failed to read ${relativePath}: ${String(err)}`] };
     }
 
     const hash = hashContent(content);
 
-    // Check if file has changed (skip if unchanged) — single DB lookup
+    // Fast path: skip re-parsing unchanged files. The watcher hot path
+    // relies on this short-circuit; ParsePool-backed indexAll bypasses
+    // indexFile so it does not pay this extra lookup.
+    if (!force) {
+      const existing = getFileByPath(this.db, relativePath);
+      if (existing && existing.hash === hash) {
+        return { status: 'skipped', errors: [] };
+      }
+    }
+
+    let parsed: ParsedFile;
+    try {
+      parsed = parseFile(absolutePath, content);
+    } catch (err) {
+      return { status: 'error', errors: [`Failed to parse ${relativePath}: ${String(err)}`] };
+    }
+
+    return this.processParsedFile(relativePath, parsed, content, hash, force);
+  }
+
+  /** Everything that happens after a file has been read, parsed, and hashed.
+   *  Runs entirely on the main thread: summarizer → AST diff → DB transaction. */
+  private async processParsedFile(
+    relativePath: string,
+    parsed: ParsedFile,
+    content: string,
+    hash: string,
+    force: boolean,
+  ): Promise<IndexFileResult> {
     const existing = getFileByPath(this.db, relativePath);
     if (!force && existing && existing.hash === hash) {
       return { status: 'skipped', errors: [] };
     }
     const isUpdate = existing !== null;
 
-    try {
-      const parsed = parseFile(absolutePath, content);
+    let fileSummary: string | null = null;
+    const symbolSummaries = new Map<string, string | null>();
 
-      // Summarization happens OUTSIDE the transaction (async HTTP calls
-      // can't be inside synchronous SQLite transactions)
-      let fileSummary: string | null = null;
-      const symbolSummaries = new Map<string, string | null>();
-
-      if (this.generateSummaries) {
-        fileSummary = await this.summarizer.summarizeFile(relativePath, content);
-        // Summarize each symbol in parallel (bounded by the semaphore inside Summarizer)
-        const symbolEntries = parsed.symbols.map(async (sym) => {
-          const snippet = content.split('\n').slice(sym.startLine - 1, sym.endLine).join('\n');
-          const summary = await this.summarizer.summarizeSymbol(sym.signature, snippet);
-          return [sym.name, summary] as const;
-        });
-        for (const [name, summary] of await Promise.all(symbolEntries)) {
-          symbolSummaries.set(name, summary);
-        }
+    if (this.generateSummaries) {
+      fileSummary = await this.summarizer.summarizeFile(relativePath, content);
+      const symbolEntries = parsed.symbols.map(async (sym) => {
+        const snippet = content.split('\n').slice(sym.startLine - 1, sym.endLine).join('\n');
+        const summary = await this.summarizer.summarizeSymbol(sym.signature, snippet);
+        return [sym.name, summary] as const;
+      });
+      for (const [name, summary] of await Promise.all(symbolEntries)) {
+        symbolSummaries.set(name, summary);
       }
+    }
 
-      // Wrap all DB mutations in a single transaction for atomicity + performance
+    try {
       const runInTransaction = this.db.transaction(() => {
         upsertFile(this.db, {
           path: relativePath,
@@ -230,14 +279,8 @@ export class Indexer {
           rawTokenEstimate: parsed.rawTokenEstimate,
           summary: fileSummary,
         });
-
-        // Re-fetch after upsert to get the ID (needed for FK references)
         const fileRecord = getFileByPath(this.db, relativePath)!;
-
-        // Compute AST diff before replacing symbols (snapshots updated inside)
         const diff = computeAstDiff(this.db, relativePath, parsed.symbols);
-
-        // Replace symbols for this file
         deleteSymbolsByFileId(this.db, fileRecord.id);
         for (const sym of parsed.symbols) {
           upsertSymbol(this.db, {
@@ -253,13 +296,9 @@ export class Indexer {
             hasTryCatch: sym.hasTryCatch,
           });
         }
-
-        // Update dependencies
         deleteDependenciesByFile(this.db, fileRecord.id);
-
         return diff;
       });
-
       const diff = runInTransaction();
       return { status: isUpdate ? 'updated' : 'indexed', errors: [], diff };
     } catch (err) {
@@ -336,44 +375,60 @@ export class Indexer {
     }
   }
 
-  /** Second-pass: resolves import strings to file IDs and stores dependencies. */
-  async resolveDependencies(): Promise<void> {
-    // Re-parse all files to extract imports, then match to known file paths
+  /** Resolves import strings to file IDs and stores dependencies.
+   *  Fast path: pass an importsCache built during indexAll() to skip re-reading
+   *  and re-parsing every file. Slow path (no cache) re-parses as before. */
+  async resolveDependencies(importsCache?: Map<string, ParsedImport[]>): Promise<void> {
+    const cache = importsCache ?? this.lastImportsCache ?? undefined;
     const { getAllFiles } = await import('../db/queries.js');
     const allFiles = getAllFiles(this.db);
     const pathIndex = new Map(allFiles.map((f) => [f.path, f.id]));
     const knownPaths = new Set(pathIndex.keys());
 
     for (const file of allFiles) {
-      const absolutePath = join(this.projectRoot, file.path);
-      if (!existsSync(absolutePath)) continue;
+      let imports: ParsedImport[] | undefined;
 
-      try {
-        const content = readFileSync(absolutePath, 'utf-8');
-        const parsed = parseFile(absolutePath, content);
-
-        deleteDependenciesByFile(this.db, file.id);
-
-        for (const imp of parsed.imports) {
-          // Resolve relative imports to known project files
-          const resolvedPath = this.resolveImportPath(file.path, imp.source, knownPaths);
-          if (!resolvedPath) continue;
-
-          const toFileId = pathIndex.get(resolvedPath);
-          if (!toFileId) continue;
-
-          for (const sym of imp.symbols.length > 0 ? imp.symbols : [null]) {
-            upsertDependency(this.db, {
-              fromFile: file.id,
-              toFile: toFileId,
-              symbolName: sym,
-            });
-          }
+      if (cache && cache.has(file.path)) {
+        imports = cache.get(file.path);
+      } else {
+        const absolutePath = join(this.projectRoot, file.path);
+        if (!existsSync(absolutePath)) continue;
+        try {
+          const content = readFileSync(absolutePath, 'utf-8');
+          imports = parseFile(absolutePath, content).imports;
+        } catch (err) {
+          process.stderr.write(
+            `[pindex] resolveDependencies: re-parse failed for ${file.path}: ${String(err)}\n`,
+          );
+          continue;
         }
-      } catch {
-        // Silently skip files that fail dependency resolution
+      }
+
+      if (!imports) continue;
+
+      deleteDependenciesByFile(this.db, file.id);
+      for (const imp of imports) {
+        const resolvedPath = this.resolveImportPath(file.path, imp.source, knownPaths);
+        if (!resolvedPath) continue;
+        const toFileId = pathIndex.get(resolvedPath);
+        if (!toFileId) continue;
+        for (const sym of imp.symbols.length > 0 ? imp.symbols : [null]) {
+          upsertDependency(this.db, {
+            fromFile: file.id,
+            toFile: toFileId,
+            symbolName: sym,
+          });
+        }
       }
     }
+  }
+
+  /** Terminates any worker threads owned by the parse pool. Safe to call
+   *  multiple times; no-op when no pool was ever constructed. */
+  async closePool(): Promise<void> {
+    if (!this.pool) return;
+    await this.pool.close();
+    this.pool = null;
   }
 
   /** Resolves a relative import path to a project-relative file path. */

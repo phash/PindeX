@@ -147,6 +147,8 @@ MONITORING_PORT=7843                            # per-project port (assigned by 
 MONITORING_AUTO_OPEN=false                      # open browser on start
 BASELINE_MODE=false                             # disable index (A/B testing)
 TOKEN_PRICE_PER_MILLION=3.00                    # for cost estimates
+PINDEX_PARSE_WORKERS=                           # parse workers (0=sync, empty=auto)
+PINDEX_BIND_HOST=127.0.0.1                      # bind host (loopback default)
 FEDERATION_REPOS=/path/a:/path/b               # colon-separated extra repos (optional)
 ```
 

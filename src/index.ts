@@ -123,6 +123,7 @@ async function main(): Promise<void> {
   const cleanup = async (): Promise<void> => {
     try {
       if (watcher) await watcher.stop();
+      await indexer.closePool();
       await monitoringServer.close();
       for (const fed of federatedDbs) {
         try { fed.db.close(); } catch { /* ignore */ }
