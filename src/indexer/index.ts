@@ -375,42 +375,50 @@ export class Indexer {
     }
   }
 
-  /** Second-pass: resolves import strings to file IDs and stores dependencies. */
-  async resolveDependencies(): Promise<void> {
-    // Re-parse all files to extract imports, then match to known file paths
+  /** Resolves import strings to file IDs and stores dependencies.
+   *  Fast path: pass an importsCache built during indexAll() to skip re-reading
+   *  and re-parsing every file. Slow path (no cache) re-parses as before. */
+  async resolveDependencies(importsCache?: Map<string, ParsedImport[]>): Promise<void> {
+    const cache = importsCache ?? this.lastImportsCache ?? undefined;
     const { getAllFiles } = await import('../db/queries.js');
     const allFiles = getAllFiles(this.db);
     const pathIndex = new Map(allFiles.map((f) => [f.path, f.id]));
     const knownPaths = new Set(pathIndex.keys());
 
     for (const file of allFiles) {
-      const absolutePath = join(this.projectRoot, file.path);
-      if (!existsSync(absolutePath)) continue;
+      let imports: ParsedImport[] | undefined;
 
-      try {
-        const content = readFileSync(absolutePath, 'utf-8');
-        const parsed = parseFile(absolutePath, content);
-
-        deleteDependenciesByFile(this.db, file.id);
-
-        for (const imp of parsed.imports) {
-          // Resolve relative imports to known project files
-          const resolvedPath = this.resolveImportPath(file.path, imp.source, knownPaths);
-          if (!resolvedPath) continue;
-
-          const toFileId = pathIndex.get(resolvedPath);
-          if (!toFileId) continue;
-
-          for (const sym of imp.symbols.length > 0 ? imp.symbols : [null]) {
-            upsertDependency(this.db, {
-              fromFile: file.id,
-              toFile: toFileId,
-              symbolName: sym,
-            });
-          }
+      if (cache && cache.has(file.path)) {
+        imports = cache.get(file.path);
+      } else {
+        const absolutePath = join(this.projectRoot, file.path);
+        if (!existsSync(absolutePath)) continue;
+        try {
+          const content = readFileSync(absolutePath, 'utf-8');
+          imports = parseFile(absolutePath, content).imports;
+        } catch (err) {
+          process.stderr.write(
+            `[pindex] resolveDependencies: re-parse failed for ${file.path}: ${String(err)}\n`,
+          );
+          continue;
         }
-      } catch {
-        // Silently skip files that fail dependency resolution
+      }
+
+      if (!imports) continue;
+
+      deleteDependenciesByFile(this.db, file.id);
+      for (const imp of imports) {
+        const resolvedPath = this.resolveImportPath(file.path, imp.source, knownPaths);
+        if (!resolvedPath) continue;
+        const toFileId = pathIndex.get(resolvedPath);
+        if (!toFileId) continue;
+        for (const sym of imp.symbols.length > 0 ? imp.symbols : [null]) {
+          upsertDependency(this.db, {
+            fromFile: file.id,
+            toFile: toFileId,
+            symbolName: sym,
+          });
+        }
       }
     }
   }

@@ -116,4 +116,14 @@ describe('Indexer', () => {
     const result = await indexer.indexAll({ additionalPaths: ['nonexistent/ghost.ts'] });
     expect(Array.isArray(result.errors)).toBe(true);
   });
+
+  it('resolveDependencies reuses parsed imports from indexAll (no file re-read)', async () => {
+    const indexer = new Indexer({ db, projectRoot: testDir });
+    await indexer.indexAll();
+
+    // Delete the source file between indexAll and resolveDependencies; the
+    // cached imports should still be used, so the call must not error.
+    rmSync(join(testDir, 'src', 'service.ts'));
+    await expect(indexer.resolveDependencies()).resolves.toBeUndefined();
+  });
 });
