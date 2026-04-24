@@ -2,7 +2,7 @@ import { readFileSync, existsSync, statSync } from 'node:fs';
 import { join, relative, resolve, dirname } from 'node:path';
 import { glob } from 'glob';
 import type Database from 'better-sqlite3';
-import type { IndexResult } from '../types.js';
+import type { IndexResult, ParsedFile } from '../types.js';
 import { parseFile, parseDocument, hashContent } from './parser.js';
 import {
   upsertFile,
@@ -167,13 +167,9 @@ export class Indexer {
     const absolutePath = join(this.projectRoot, relativePath);
 
     if (!existsSync(absolutePath)) {
-      return {
-        status: 'error',
-        errors: [`File not found: ${relativePath}`],
-      };
+      return { status: 'error', errors: [`File not found: ${relativePath}`] };
     }
 
-    // Skip files larger than MAX_FILE_SIZE to prevent OOM
     try {
       const stat = statSync(absolutePath);
       if (stat.size > MAX_FILE_SIZE) {
@@ -185,43 +181,51 @@ export class Indexer {
     try {
       content = readFileSync(absolutePath, 'utf-8');
     } catch (err) {
-      return {
-        status: 'error',
-        errors: [`Failed to read ${relativePath}: ${String(err)}`],
-      };
+      return { status: 'error', errors: [`Failed to read ${relativePath}: ${String(err)}`] };
+    }
+
+    let parsed: ParsedFile;
+    try {
+      parsed = parseFile(absolutePath, content);
+    } catch (err) {
+      return { status: 'error', errors: [`Failed to parse ${relativePath}: ${String(err)}`] };
     }
 
     const hash = hashContent(content);
+    return this.processParsedFile(relativePath, parsed, content, hash, force);
+  }
 
-    // Check if file has changed (skip if unchanged) — single DB lookup
+  /** Everything that happens after a file has been read, parsed, and hashed.
+   *  Runs entirely on the main thread: summarizer → AST diff → DB transaction. */
+  private async processParsedFile(
+    relativePath: string,
+    parsed: ParsedFile,
+    content: string,
+    hash: string,
+    force: boolean,
+  ): Promise<IndexFileResult> {
     const existing = getFileByPath(this.db, relativePath);
     if (!force && existing && existing.hash === hash) {
       return { status: 'skipped', errors: [] };
     }
     const isUpdate = existing !== null;
 
-    try {
-      const parsed = parseFile(absolutePath, content);
+    let fileSummary: string | null = null;
+    const symbolSummaries = new Map<string, string | null>();
 
-      // Summarization happens OUTSIDE the transaction (async HTTP calls
-      // can't be inside synchronous SQLite transactions)
-      let fileSummary: string | null = null;
-      const symbolSummaries = new Map<string, string | null>();
-
-      if (this.generateSummaries) {
-        fileSummary = await this.summarizer.summarizeFile(relativePath, content);
-        // Summarize each symbol in parallel (bounded by the semaphore inside Summarizer)
-        const symbolEntries = parsed.symbols.map(async (sym) => {
-          const snippet = content.split('\n').slice(sym.startLine - 1, sym.endLine).join('\n');
-          const summary = await this.summarizer.summarizeSymbol(sym.signature, snippet);
-          return [sym.name, summary] as const;
-        });
-        for (const [name, summary] of await Promise.all(symbolEntries)) {
-          symbolSummaries.set(name, summary);
-        }
+    if (this.generateSummaries) {
+      fileSummary = await this.summarizer.summarizeFile(relativePath, content);
+      const symbolEntries = parsed.symbols.map(async (sym) => {
+        const snippet = content.split('\n').slice(sym.startLine - 1, sym.endLine).join('\n');
+        const summary = await this.summarizer.summarizeSymbol(sym.signature, snippet);
+        return [sym.name, summary] as const;
+      });
+      for (const [name, summary] of await Promise.all(symbolEntries)) {
+        symbolSummaries.set(name, summary);
       }
+    }
 
-      // Wrap all DB mutations in a single transaction for atomicity + performance
+    try {
       const runInTransaction = this.db.transaction(() => {
         upsertFile(this.db, {
           path: relativePath,
@@ -230,14 +234,8 @@ export class Indexer {
           rawTokenEstimate: parsed.rawTokenEstimate,
           summary: fileSummary,
         });
-
-        // Re-fetch after upsert to get the ID (needed for FK references)
         const fileRecord = getFileByPath(this.db, relativePath)!;
-
-        // Compute AST diff before replacing symbols (snapshots updated inside)
         const diff = computeAstDiff(this.db, relativePath, parsed.symbols);
-
-        // Replace symbols for this file
         deleteSymbolsByFileId(this.db, fileRecord.id);
         for (const sym of parsed.symbols) {
           upsertSymbol(this.db, {
@@ -253,13 +251,9 @@ export class Indexer {
             hasTryCatch: sym.hasTryCatch,
           });
         }
-
-        // Update dependencies
         deleteDependenciesByFile(this.db, fileRecord.id);
-
         return diff;
       });
-
       const diff = runInTransaction();
       return { status: isUpdate ? 'updated' : 'indexed', errors: [], diff };
     } catch (err) {
