@@ -523,6 +523,7 @@ These are set automatically in the generated `.mcp.json` — you rarely need to 
 | `TOKEN_PRICE_PER_MILLION` | `3.00` | USD price per million tokens — used for cost estimates |
 | `PINDEX_PARSE_WORKERS` | _(empty)_ | Parse workers (0=sync, empty=auto) |
 | `PINDEX_BIND_HOST` | `127.0.0.1` | Bind host for monitoring/GUI (default loopback) |
+| `PINDEX_LSP` | `true` | opt-in LSP parsing for Python (set to `false` to force regex) |
 | `FEDERATION_REPOS` | _(empty)_ | Colon-separated absolute paths to linked repositories |
 | `DOCUMENT_PATTERNS` | `**/*.md,**/*.markdown,**/*.yaml,**/*.yml,**/*.txt` | Glob patterns for document files to index alongside code |
 | `OBSERVATION_RETENTION` | `permanent` | How long passive session observations are kept: `permanent`, `session`, or `Nd` (e.g. `30d`) |
@@ -632,6 +633,12 @@ Replace `{hash}` and `{port}` with the values shown by `pindex`. A ready-to-copy
 ```bash
 goose session start
 ```
+
+---
+
+### Python (LSP)
+
+PindeX ships with Pyright as an optional dependency. When installed, Pyright's LSP server produces the precise symbol tree instead of the fallback regex extractor. Set `PINDEX_LSP=false` to opt out. If Pyright is missing (for example when installed with `--no-optional`), PindeX logs a one-time warning and falls back to the regex path.
 
 ---
 
