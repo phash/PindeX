@@ -1,6 +1,6 @@
 {
   "name": "pindex",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "description": "MCP server providing structural codebase indexing for token-efficient AI coding assistants on medium-to-large projects",
   "type": "module",
   "bin": {
