@@ -39,7 +39,8 @@ export class ParsePool {
       if (st.size > this.maxFileSize) {
         return { status: 'skipped', relativePath: job.relativePath, reason: 'too_large' };
       }
-    } catch {
+    } catch (err) {
+      process.stderr.write(`[pindex] ParsePool: stat failed for ${job.relativePath}: ${String(err)}\n`);
       return { status: 'skipped', relativePath: job.relativePath, reason: 'not_found' };
     }
 

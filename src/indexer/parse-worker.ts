@@ -25,7 +25,8 @@ function runJob(job: ParseJobInput, maxFileSize: number): ParseJobResult {
     if (st.size > maxFileSize) {
       return { status: 'skipped', relativePath: job.relativePath, reason: 'too_large' };
     }
-  } catch {
+  } catch (err) {
+    process.stderr.write(`[pindex] parse-worker: stat failed for ${job.relativePath}: ${String(err)}\n`);
     return { status: 'skipped', relativePath: job.relativePath, reason: 'not_found' };
   }
 
