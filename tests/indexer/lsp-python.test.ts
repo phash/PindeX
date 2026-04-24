@@ -75,6 +75,10 @@ function encodeLspMessage(obj: unknown): Buffer {
 }
 
 describe('LspPythonClient — handshake', () => {
+  beforeEach(() => {
+    LspPythonClient._resetWarnedMissingForTest();
+  });
+
   it('transitions idle → starting → ready on a successful initialize', async () => {
     const fake = createFakeSubprocess();
     const spawnMock = vi.fn(() => fake);
@@ -129,6 +133,35 @@ describe('LspPythonClient — handshake', () => {
     fake.emit('exit', 1, null);
 
     await startPromise;
+    expect(client.state).toBe('failed');
+  });
+
+  it('transitions to failed when spawn throws synchronously', async () => {
+    const client = new LspPythonClient({
+      projectRoot: '/tmp/fake',
+      enabled: true,
+      _spawn: (() => {
+        throw new Error('spawn ENOENT');
+      }) as never,
+      _resolveServerPath: () => '/fake/pyright-langserver',
+    } as never);
+
+    await client.start();
+    expect(client.state).toBe('failed');
+  });
+
+  it('transitions to failed when initialize response never arrives (timeout)', async () => {
+    const fake = createFakeSubprocess();
+    const client = new LspPythonClient({
+      projectRoot: '/tmp/fake',
+      enabled: true,
+      timeoutMs: 50,
+      _spawn: (() => fake) as never,
+      _resolveServerPath: () => '/fake/pyright-langserver',
+    } as never);
+
+    await client.start();
+    // No stdout push → initialize never resolves → timeout fires.
     expect(client.state).toBe('failed');
   });
 });

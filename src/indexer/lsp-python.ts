@@ -43,6 +43,12 @@ export class LspPythonClient {
     this.resolveImpl = options._resolveServerPath ?? (() => resolvePyrightLangserver());
   }
 
+  /** Test-only: resets module-level warning guard so tests can observe
+   *  stderr output repeatedly. NOT for production use. */
+  static _resetWarnedMissingForTest(): void {
+    LspPythonClient.warnedMissing = false;
+  }
+
   get state(): LspReadyState {
     return this._state;
   }
@@ -109,16 +115,11 @@ export class LspPythonClient {
         exitPromise,
         new Promise((_, reject) => setTimeout(() => reject(new Error('initialize timeout')), this.timeoutMs)),
       ]);
-      if ((this._state as LspReadyState) === 'failed' || (this._state as LspReadyState) === 'closed') {
-        // Subprocess crashed during handshake; exit handler already set state.
-        return;
-      }
       this.connection.sendNotification('initialized', {});
       this._state = 'ready';
     } catch (err) {
       // The exit handler may have already set _state to 'failed' via the event loop.
-      // Cast through unknown so TS's control-flow narrowing doesn't hide the mutation.
-      const currentState = this._state as unknown as string;
+      const currentState = this._state as LspReadyState;
       if (currentState !== 'failed' && currentState !== 'closed') {
         process.stderr.write(`[pindex] LSP: initialize failed: ${String(err)}\n`);
         this._state = 'failed';
@@ -152,13 +153,13 @@ export class LspPythonClient {
   }
 }
 
-/** Resolves the pyright-langserver binary path. Checks node_modules first, then PATH. */
+/** Resolves the pyright-langserver binary path by checking node_modules/.bin.
+ *  Returns null if not found; PATH-based discovery is intentionally not
+ *  implemented (would require spawn + stderr capture to detect failure, which
+ *  is a larger change and not worth the complexity for the optionalDependency
+ *  install path where node_modules is the canonical location). */
 function resolvePyrightLangserver(): string | null {
   const local = join(process.cwd(), 'node_modules', '.bin', 'pyright-langserver');
   if (existsSync(local)) return local;
-  // On Windows node ships `.cmd` shims, but we are a pure Node process so direct
-  // paths work; PATH search we delegate to spawn by returning the bare name.
-  // existsSync cannot check PATH, so we rely on spawn failing and the exit
-  // handler to detect the missing-binary case.
   return null;
 }
