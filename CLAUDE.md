@@ -11,8 +11,19 @@ Wenn der User "commit", "push", "commit und push" o.ä. sagt:
 Wenn der User "publish", "npm publish", "release" o.ä. sagt:
 1. Versuche `Skill` mit `npm-publish`
 2. Manuell: `npm version patch` → `gh release create vX.Y.Z --title "vX.Y.Z" --target main --notes "..."` → Workflow via `gh run watch` beobachten
-- Voraussetzung: GitHub Secret `NPM_TOKEN` (Granular Access Token mit bypass-2fa) muss gesetzt sein
+- Token-Anforderungen (ALLE drei, sonst schlägt Publish fehl):
+  1. Package `pindex` unter "Only select packages and scopes" aufgeführt
+  2. Permissions = `Read and write` (nicht "Read only")
+  3. ☑ "Bypass two-factor authentication for publishing"
+- Fehler-Matrix:
+  - `404 PUT .../pindex` → Package fehlt im Token-Scope
+  - `EOTP` (one-time password required) → Bypass-2FA-Haken fehlt
+  - `403 Forbidden` → Permission steht auf "Read only"
+- Token-Rotation: alten revoken → neuen mit allen 3 Punkten erstellen → Secret `NPM_TOKEN` aktualisieren → `gh workflow run publish.yml --ref main` + `gh run watch`
 - Workflow-Datei: `.github/workflows/publish.yml` (triggt bei Release + `workflow_dispatch`)
+
+### Subagents in Worktrees
+Wenn du einen Subagent in einem anderen Worktree arbeiten lässt: im Prompt explizit `cd <worktree-path>` VOR jedem Shell-Befehl erzwingen und `git rev-parse --abbrev-ref HEAD` VOR jedem `git commit` verifizieren lassen. Subagents ignorieren sonst gern den „Work from:"-Hinweis und committen im Default-Worktree.
 
 ### PindeX-Tools nutzen
 - **Immer** `mcp__pindex__*` Tools für Codebase-Exploration verwenden
@@ -83,11 +94,13 @@ npm run build
 ## Development Commands
 
 ```bash
-npm test              # run all unit tests (vitest, pool: forks)
-npm run test:watch    # watch mode
-npm run test:coverage # coverage report (threshold: >80%)
-npm run lint          # TypeScript type-check only (tsc --noEmit)
-npm run build         # compile src/ → dist/
+npm test                 # run all unit tests (vitest, pool: forks)
+npm run test:watch       # watch mode
+npm run test:coverage    # coverage report (threshold: >80%)
+npm run test:integration # echte tree-sitter-Bindings; nutzt vitest.integration.config.ts
+npm run bench:index      # synth-Projekt + Timing (Envs: BENCH_FILES, BENCH_FUNCS_PER_FILE, PINDEX_PARSE_WORKERS)
+npm run lint             # TypeScript type-check only (tsc --noEmit)
+npm run build            # compile src/ → dist/
 ```
 
 ## Architecture
@@ -258,6 +271,8 @@ Passive memory that requires **zero cooperation from Claude** — no `save_conte
 
 - All relative imports use `.js` extension (TypeScript ESM/NodeNext resolution)
 - Tests use `pool: 'forks'` in vitest — required for `better-sqlite3` native bindings
+- vitest 4: `test.exclude` schlägt CLI-File-Args; excluded Tests nur über separaten Config erreichbar (→ `vitest.integration.config.ts`)
+- `process.env.VITEST === 'true'` erzwingt `ParsePool`-Sync-Fallback — Worker-Threads haben eigenen Module-Cache und würden den globalen tree-sitter-Mock in `tests/setup.ts` umgehen
 - FTS5 sync is handled by SQLite triggers (not application code)
 - `get_context` reads files from disk at call time (DB stores only metadata)
 - `createMonitoringApp()` and `startMonitoringServer()` are separate for testability
@@ -265,6 +280,7 @@ Passive memory that requires **zero cooperation from Claude** — no `save_conte
   (`7842 + (parseInt(hash.slice(0,4), 16) % 2000)`) and stored to stay stable
 - Migration from `~/.mcp-indexer` to `~/.pindex` runs automatically on first call to
   `getPindexHome()` if the old directory exists
+- Pflicht für jeden Tool-Input mit User-Pfad: `resolveWithinRoot(projectRoot, userPath)` aus `src/util/paths.ts` — verhindert Path-Traversal via `..`. Rückgabe `null` heißt „escapet Root, verwerfen". Schon verdrahtet in `get_context.ts` und `search_symbols.ts`.
 
 ## PindeX – Codebase Navigation
 
