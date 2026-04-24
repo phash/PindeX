@@ -423,6 +423,14 @@ export class Indexer {
     }
   }
 
+  /** Terminates any worker threads owned by the parse pool. Safe to call
+   *  multiple times; no-op when no pool was ever constructed. */
+  async closePool(): Promise<void> {
+    if (!this.pool) return;
+    await this.pool.close();
+    this.pool = null;
+  }
+
   /** Resolves a relative import path to a project-relative file path. */
   private resolveImportPath(fromFile: string, importSource: string, knownPaths?: Set<string>): string | null {
     if (!importSource.startsWith('.')) return null; // Skip external packages
