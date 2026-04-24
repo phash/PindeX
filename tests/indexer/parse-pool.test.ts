@@ -90,3 +90,91 @@ describe('ParsePool (maxWorkers: 0, sync fallback)', () => {
     await expect(pool.close()).resolves.toBeUndefined();
   });
 });
+
+// ─── Static helpers ────────────────────────────────────────────────────────
+
+describe('ParsePool.pickDefaultWorkerCount', () => {
+  const ORIG_PINDEX = process.env.PINDEX_PARSE_WORKERS;
+  const ORIG_VITEST = process.env.VITEST;
+
+  afterEach(() => {
+    if (ORIG_PINDEX === undefined) delete process.env.PINDEX_PARSE_WORKERS;
+    else process.env.PINDEX_PARSE_WORKERS = ORIG_PINDEX;
+    if (ORIG_VITEST === undefined) delete process.env.VITEST;
+    else process.env.VITEST = ORIG_VITEST;
+  });
+
+  it('honors an explicit numeric argument', () => {
+    expect(ParsePool.pickDefaultWorkerCount(4)).toBe(4);
+    expect(ParsePool.pickDefaultWorkerCount(0)).toBe(0);
+  });
+
+  it('clamps negative explicit values to 0', () => {
+    expect(ParsePool.pickDefaultWorkerCount(-3)).toBe(0);
+  });
+
+  it('honors PINDEX_PARSE_WORKERS when explicit is undefined', () => {
+    process.env.PINDEX_PARSE_WORKERS = '6';
+    expect(ParsePool.pickDefaultWorkerCount(undefined)).toBe(6);
+  });
+
+  it('ignores PINDEX_PARSE_WORKERS when explicit is given', () => {
+    process.env.PINDEX_PARSE_WORKERS = '6';
+    expect(ParsePool.pickDefaultWorkerCount(2)).toBe(2);
+  });
+
+  it('ignores empty or non-numeric PINDEX_PARSE_WORKERS values', () => {
+    process.env.PINDEX_PARSE_WORKERS = '';
+    process.env.VITEST = 'true';
+    expect(ParsePool.pickDefaultWorkerCount(undefined)).toBe(0);
+
+    process.env.PINDEX_PARSE_WORKERS = 'nope';
+    expect(ParsePool.pickDefaultWorkerCount(undefined)).toBe(0);
+  });
+
+  it('ignores negative PINDEX_PARSE_WORKERS', () => {
+    process.env.PINDEX_PARSE_WORKERS = '-2';
+    process.env.VITEST = 'true';
+    // falls through to VITEST → 0 (negative parsed int fails the >= 0 guard)
+    expect(ParsePool.pickDefaultWorkerCount(undefined)).toBe(0);
+  });
+
+  it('returns 0 when VITEST=true and PINDEX_PARSE_WORKERS is unset', () => {
+    delete process.env.PINDEX_PARSE_WORKERS;
+    process.env.VITEST = 'true';
+    expect(ParsePool.pickDefaultWorkerCount(undefined)).toBe(0);
+  });
+
+  it('uses cpus().length - 1 (min 1) when not under VITEST and no env override', () => {
+    delete process.env.PINDEX_PARSE_WORKERS;
+    delete process.env.VITEST;
+    const n = ParsePool.pickDefaultWorkerCount(undefined);
+    expect(n).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe('ParsePool.pickEffectiveWorkerCount', () => {
+  it('returns 0 when configured is 0 regardless of jobCount', () => {
+    expect(ParsePool.pickEffectiveWorkerCount(0, 0)).toBe(0);
+    expect(ParsePool.pickEffectiveWorkerCount(1000, 0)).toBe(0);
+  });
+
+  it('returns 0 for batches smaller than 10', () => {
+    expect(ParsePool.pickEffectiveWorkerCount(0, 4)).toBe(0);
+    expect(ParsePool.pickEffectiveWorkerCount(9, 4)).toBe(0);
+  });
+
+  it('returns 1 for batches smaller than configured*2 but at least 10', () => {
+    expect(ParsePool.pickEffectiveWorkerCount(10, 8)).toBe(1);
+    expect(ParsePool.pickEffectiveWorkerCount(15, 8)).toBe(1);
+  });
+
+  it('returns the configured value for larger batches', () => {
+    expect(ParsePool.pickEffectiveWorkerCount(20, 8)).toBe(8);
+    expect(ParsePool.pickEffectiveWorkerCount(10_000, 4)).toBe(4);
+  });
+
+  it('boundary: jobCount === configured*2 returns configured', () => {
+    expect(ParsePool.pickEffectiveWorkerCount(16, 8)).toBe(8);
+  });
+});
