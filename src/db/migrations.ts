@@ -63,13 +63,19 @@ export function getCurrentVersion(db: Database.Database): number {
   return db.pragma('user_version', { simple: true }) as number;
 }
 
-/** Runs all pending migrations and updates PRAGMA user_version. */
+/** Runs all pending migrations and updates PRAGMA user_version.
+ *  Each migration + its version bump runs inside a single transaction so a
+ *  crash mid-migration leaves the DB at the previous version instead of a
+ *  half-applied state. */
 export function runMigrations(db: Database.Database): void {
   const current = getCurrentVersion(db);
 
   const pending = migrations.filter((m) => m.version > current);
   for (const migration of pending) {
-    migration.up(db);
-    db.pragma(`user_version = ${migration.version}`);
+    const run = db.transaction(() => {
+      migration.up(db);
+      db.pragma(`user_version = ${migration.version}`);
+    });
+    run();
   }
 }

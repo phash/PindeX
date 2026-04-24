@@ -1,9 +1,9 @@
 import { existsSync, createReadStream } from 'node:fs';
 import { createInterface } from 'node:readline';
-import { join } from 'node:path';
 import type Database from 'better-sqlite3';
 import type { GetContextInput, GetContextOutput } from '../types.js';
 import { getFileByPath } from '../db/queries.js';
+import { resolveWithinRoot } from '../util/paths.js';
 
 const DEFAULT_RANGE = 30;
 
@@ -17,7 +17,8 @@ export async function getContext(
   const fileRecord = getFileByPath(db, input.file);
   if (!fileRecord) return null;
 
-  const absolutePath = join(projectRoot, input.file);
+  const absolutePath = resolveWithinRoot(projectRoot, input.file);
+  if (!absolutePath) return null;
   if (!existsSync(absolutePath)) return null;
 
   const range = input.range ?? DEFAULT_RANGE;

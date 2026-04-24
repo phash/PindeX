@@ -188,15 +188,21 @@ describe('SessionObserver', () => {
       expect(getObservationsBySession(db, SESSION)).toHaveLength(0);
     });
 
-    it('generates observation when file was previously accessed', () => {
-      // Access the file first
+    it('generates observation when the specific symbol was previously accessed', () => {
+      // Access the symbol via a file summary that actually contains it
       observer.onToolCall(
         'get_file_summary',
         { file: 'src/auth.ts' },
-        { symbols: [], imports: [], exports: [], language: 'typescript', summary: null },
+        {
+          symbols: [{ name: 'foo', kind: 'function', signature: 'function foo(): void' }],
+          imports: [],
+          exports: [],
+          language: 'typescript',
+          summary: null,
+        },
         false,
       );
-      // Now diff triggers an observation
+      // Now diff for foo triggers an observation
       observer.onFileDiff(
         makeDiff('src/auth.ts', [
           {
@@ -211,6 +217,24 @@ describe('SessionObserver', () => {
       );
       const obs = getObservationsBySession(db, SESSION);
       expect(obs.length).toBeGreaterThanOrEqual(1);
+    });
+
+    it('does NOT generate observation when only the file (not the specific symbol) was touched', () => {
+      // get_context on a line range does not count as accessing any specific symbol
+      observer.onToolCall('get_context', { file: 'src/auth.ts', line: 10 }, {}, false);
+      observer.onFileDiff(
+        makeDiff('src/auth.ts', [
+          {
+            type: 'sig_changed',
+            name: 'unrelatedSymbol',
+            kind: 'function',
+            oldSignature: 'old',
+            newSignature: 'new',
+            description: 'unrelatedSymbol changed',
+          },
+        ]),
+      );
+      expect(getObservationsBySession(db, SESSION)).toHaveLength(0);
     });
 
     it('marks prior observations stale on sig_changed', () => {

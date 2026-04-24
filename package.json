@@ -1,7 +1,7 @@
 {
   "name": "pindex",
   "version": "1.2.3",
-  "description": "MCP Server that structurally indexes a codebase for 80-90% token reduction",
+  "description": "MCP server providing structural codebase indexing for token-efficient AI coding assistants on medium-to-large projects",
   "type": "module",
   "bin": {
     "pindex": "./dist/cli/index.js",

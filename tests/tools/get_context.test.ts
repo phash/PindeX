@@ -65,6 +65,28 @@ describe('getContext', () => {
     expect(result).toBeNull();
   });
 
+  it('refuses path-traversal attempts that escape projectRoot', async () => {
+    // Create a "secret" file outside the project root and an indexed DB entry
+    // pointing at a traversal string. Even though the DB record exists, the
+    // resolved path must fall OUTSIDE the root and be rejected.
+    const outsideDir = join(tmpdir(), `pindex-ctx-outside-${Date.now()}`);
+    mkdirSync(outsideDir, { recursive: true });
+    writeFileSync(join(outsideDir, 'secret.txt'), 'top secret data');
+    insertTestFile(db, { path: '../secret.txt', language: 'typescript' });
+    try {
+      const result = await getContext(db, testDir, { file: '../secret.txt', line: 1 });
+      expect(result).toBeNull();
+    } finally {
+      rmSync(outsideDir, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses absolute paths pointing outside projectRoot', async () => {
+    insertTestFile(db, { path: '/etc/passwd', language: 'typescript' });
+    const result = await getContext(db, testDir, { file: '/etc/passwd', line: 1 });
+    expect(result).toBeNull();
+  });
+
   it('clamps to first line when requesting line 0 or negative', async () => {
     const result = await getContext(db, testDir, { file: 'src/file.ts', line: 0 });
     expect(result).not.toBeNull();

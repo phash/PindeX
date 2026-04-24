@@ -104,7 +104,11 @@ export function startMonitoringServer(
     }
   });
 
-  httpServer.listen(port);
+  // Bind to loopback by default. Dashboards contain project paths, symbol
+  // names and session data and MUST NOT be exposed to other hosts on the LAN.
+  // Operators who explicitly need a non-loopback bind can set PINDEX_BIND_HOST.
+  const bindHost = process.env.PINDEX_BIND_HOST ?? '127.0.0.1';
+  httpServer.listen(port, bindHost);
 
   const broadcast = (event: MonitoringEvent): void => {
     emitter.emit('event', event);

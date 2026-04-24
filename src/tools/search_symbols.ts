@@ -1,9 +1,10 @@
 import { readFileSync, existsSync } from 'node:fs';
-import { join, basename } from 'node:path';
+import { basename } from 'node:path';
 import type Database from 'better-sqlite3';
 import type { SearchSymbolsInput, SymbolSearchResult } from '../types.js';
 import { searchSymbolsFts } from '../db/queries.js';
 import type { FederatedDb } from '../server.js';
+import { resolveWithinRoot } from '../util/paths.js';
 
 export function searchSymbols(
   db: Database.Database,
@@ -30,14 +31,14 @@ export function searchSymbols(
     };
 
     if (input.snippet && root) {
-      const absPath = join(root, row.file_path);
-      if (existsSync(absPath)) {
+      const absPath = resolveWithinRoot(root, row.file_path);
+      if (absPath && existsSync(absPath)) {
         try {
           const lines = readFileSync(absPath, 'utf-8').split('\n');
           const startIdx = Math.max(0, row.start_line - 1);
           result.snippet = lines.slice(startIdx, startIdx + 5).join('\n');
-        } catch {
-          // ignore read errors
+        } catch (err) {
+          process.stderr.write(`[pindex] search_symbols snippet read failed for ${absPath}: ${String(err)}\n`);
         }
       }
     }

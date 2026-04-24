@@ -296,7 +296,11 @@ export function startGuiServer(port: number): Promise<GuiServerWithPort> {
       reject(err);
     });
 
-    httpServer.listen(port);
+    // Bind to loopback by default. The GUI exposes aggregated project data
+    // across ALL registered PindeX projects and must not be reachable from
+    // other hosts without an explicit opt-in via PINDEX_BIND_HOST.
+    const bindHost = process.env.PINDEX_BIND_HOST ?? '127.0.0.1';
+    httpServer.listen(port, bindHost);
   });
 }
 

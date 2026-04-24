@@ -536,9 +536,17 @@ export function parseFile(filePath: string, content: string): ParsedFile {
     }
 
     let lang: unknown;
-    if (language === 'typescript' || language === 'tsx') {
+    if (
+      language === 'typescript' ||
+      language === 'tsx' ||
+      language === 'javascript' ||
+      language === 'jsx'
+    ) {
+      // The tree-sitter-typescript grammar is a TS-superset parser that also
+      // handles plain JavaScript and JSX correctly. Using it for JS files
+      // gives real AST-based symbol extraction instead of a silent empty result.
       const tsLangs = _require('tree-sitter-typescript') as { typescript: unknown; tsx: unknown };
-      lang = language === 'tsx' ? tsLangs.tsx : tsLangs.typescript;
+      lang = language === 'tsx' || language === 'jsx' ? tsLangs.tsx : tsLangs.typescript;
     } else {
       return { language, symbols: [], imports: [], rawTokenEstimate };
     }

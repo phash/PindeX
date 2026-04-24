@@ -188,7 +188,23 @@ export class SessionObserver {
       return;
     }
 
-    this.recordAccess(file);
+    // A file summary exposes every symbol of the file to Claude. Record each
+    // one explicitly so staleness / signature-change observations are scoped
+    // to symbols Claude has actually seen, not every symbol in a touched file.
+    const summary = result as { symbols?: Array<{ name?: unknown }> };
+    const names = (summary.symbols ?? [])
+      .map((s) => (typeof s.name === 'string' ? s.name : null))
+      .filter((n): n is string => n !== null);
+
+    if (names.length === 0) {
+      // No symbol detail — fall back to file-level access (e.g. an empty file).
+      this.recordAccess(file);
+      return;
+    }
+
+    for (const name of names) {
+      this.recordAccess(file, name);
+    }
   }
 
   private handleGetContext(args: Record<string, unknown>): void {
@@ -272,8 +288,11 @@ export class SessionObserver {
   }
 
   private wasSymbolAccessed(filePath: string, symbolName: string): boolean {
-    // A symbol is "accessed" if the file itself was accessed (Claude may have seen all symbols)
-    if (this.accessedFiles.has(filePath)) return true;
+    // A symbol counts as "accessed" only if Claude explicitly looked at it
+    // (via get_symbol / search_symbols) or saw it in a file summary result.
+    // Previously, any file-level access (e.g. get_context line range) marked
+    // ALL symbols in that file as accessed, which produced noisy sig_changed
+    // observations for symbols Claude never actually inspected.
     return this.accessedSymbols.get(filePath)?.has(symbolName) ?? false;
   }
 }
