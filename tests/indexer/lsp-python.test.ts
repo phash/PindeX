@@ -277,3 +277,91 @@ describe('LspPythonClient — getDocumentSymbols', () => {
     await client.close();
   });
 });
+
+describe('LspPythonClient — crash recovery', () => {
+  beforeEach(() => {
+    LspPythonClient._resetWarnedMissingForTest();
+  });
+
+  it('attempts one restart after an unexpected subprocess exit', async () => {
+    let spawnCount = 0;
+    const fakes: ReturnType<typeof createFakeSubprocess>[] = [];
+
+    const spawnMock = vi.fn(() => {
+      const f = createFakeSubprocess();
+      fakes.push(f);
+      spawnCount++;
+      return f as never;
+    });
+
+    const client = new LspPythonClient({
+      projectRoot: '/tmp/fake',
+      enabled: true,
+      _spawn: spawnMock,
+      _resolveServerPath: () => '/fake/pyright-langserver',
+    } as never);
+
+    // First start: success.
+    const s1 = client.start();
+    await new Promise((r) => setImmediate(r));
+    fakes[0].stdout.push(encodeLspMessage({ jsonrpc: '2.0', id: 0, result: { capabilities: {} } }));
+    await s1;
+    expect(client.state).toBe('ready');
+
+    // Now simulate a crash.
+    fakes[0].emit('exit', 137, 'SIGKILL');
+    // Flush micro-tasks so the exit handler and restart logic run.
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
+
+    // A restart should have been attempted (spawnCount === 2).
+    expect(spawnCount).toBe(2);
+
+    // Reply to the second initialize to bring client back to ready.
+    fakes[1].stdout.push(encodeLspMessage({ jsonrpc: '2.0', id: 0, result: { capabilities: {} } }));
+    // Give the handshake time to complete.
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
+    expect(client.state).toBe('ready');
+
+    await client.close();
+  });
+
+  it('stays failed after a second consecutive crash', async () => {
+    let spawnCount = 0;
+    const fakes: ReturnType<typeof createFakeSubprocess>[] = [];
+
+    const spawnMock = vi.fn(() => {
+      const f = createFakeSubprocess();
+      fakes.push(f);
+      spawnCount++;
+      return f as never;
+    });
+
+    const client = new LspPythonClient({
+      projectRoot: '/tmp/fake',
+      enabled: true,
+      _spawn: spawnMock,
+      _resolveServerPath: () => '/fake/pyright-langserver',
+    } as never);
+
+    // First start: success.
+    const s1 = client.start();
+    await new Promise((r) => setImmediate(r));
+    fakes[0].stdout.push(encodeLspMessage({ jsonrpc: '2.0', id: 0, result: { capabilities: {} } }));
+    await s1;
+
+    // Crash once.
+    fakes[0].emit('exit', 1, null);
+    await new Promise((r) => setImmediate(r));
+    // Crash the restart too, before initialize completes.
+    fakes[1].emit('exit', 1, null);
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
+
+    expect(client.state).toBe('failed');
+    expect(spawnCount).toBe(2); // no third attempt
+
+    await client.close();
+  });
+});

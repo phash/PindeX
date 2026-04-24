@@ -36,6 +36,8 @@ export class LspPythonClient {
   private connection: MessageConnection | null = null;
   private static warnedMissing = false;
   private pendingQueue: Promise<unknown> = Promise.resolve();
+  private restartAttempted = false;
+  private consecutiveTimeouts = 0;
 
   constructor(options: LspPythonClientOptions) {
     this.enabled = options.enabled;
@@ -96,11 +98,26 @@ export class LspPythonClient {
     const exitPromise = new Promise<never>((_, reject) => { exitReject = reject; });
 
     this.proc.on('exit', (code) => {
-      if (this._state !== 'closed') {
-        process.stderr.write(`[pindex] LSP: pyright-langserver exited (code ${code})\n`);
-        this._state = 'failed';
-        exitReject(new Error(`pyright-langserver exited with code ${String(code)}`));
+      if (this._state === 'closed') return;
+
+      process.stderr.write(`[pindex] LSP: pyright-langserver exited (code ${code})\n`);
+
+      if (!this.restartAttempted && this._state === 'ready') {
+        this.restartAttempted = true;
+        process.stderr.write(`[pindex] LSP: attempting one restart\n`);
+        this._state = 'idle';
+        this.proc = null;
+        this.connection?.dispose();
+        this.connection = null;
+        // Fire and forget — the restart is opportunistic.
+        this.start().catch(() => {
+          /* swallow — state already reflects any failure */
+        });
+        return;
       }
+
+      this._state = 'failed';
+      exitReject(new Error(`pyright-langserver exited with code ${String(code)}`));
     });
 
     this.connection = createMessageConnection(
@@ -156,12 +173,31 @@ export class LspPythonClient {
         textDocument: { uri, languageId: 'python', version: 1, text: content },
       });
 
-      const response = (await Promise.race([
-        this.connection.sendRequest('textDocument/documentSymbol', {
-          textDocument: { uri },
-        }),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('request timeout')), this.timeoutMs)),
-      ])) as DocumentSymbol[] | null;
+      let timedOut = false;
+      let response: DocumentSymbol[] | null;
+      try {
+        response = (await Promise.race([
+          this.connection.sendRequest('textDocument/documentSymbol', {
+            textDocument: { uri },
+          }),
+          new Promise((_, reject) =>
+            setTimeout(() => {
+              timedOut = true;
+              reject(new Error('request timeout'));
+            }, this.timeoutMs),
+          ),
+        ])) as DocumentSymbol[] | null;
+      } catch (err) {
+        if (timedOut) {
+          this.consecutiveTimeouts++;
+          if (this.consecutiveTimeouts >= 3) {
+            process.stderr.write(`[pindex] LSP: 3 consecutive timeouts, treating as crash\n`);
+            this.simulateCrash();
+          }
+          return null;
+        }
+        throw err;
+      }
 
       this.connection.sendNotification('textDocument/didClose', {
         textDocument: { uri },
@@ -171,6 +207,7 @@ export class LspPythonClient {
         return { symbols: [], imports: extractImportsFromContent(content) };
       }
 
+      this.consecutiveTimeouts = 0;
       return {
         symbols: mapDocumentSymbols(response),
         imports: extractImportsFromContent(content),
@@ -178,6 +215,23 @@ export class LspPythonClient {
     } catch (err) {
       process.stderr.write(`[pindex] LSP: documentSymbol failed for ${relPath}: ${String(err)}\n`);
       return null;
+    }
+  }
+
+  /** Manually triggers the same restart-or-fail path the exit handler uses.
+   *  Used when the subprocess is unresponsive (repeated request timeouts). */
+  private simulateCrash(): void {
+    if (this._state !== 'ready') return;
+    this._state = 'idle';
+    try { this.proc?.kill('SIGKILL'); } catch { /* process already dead */ }
+    this.proc = null;
+    this.connection?.dispose();
+    this.connection = null;
+    if (!this.restartAttempted) {
+      this.restartAttempted = true;
+      this.start().catch(() => { /* swallow */ });
+    } else {
+      this._state = 'failed';
     }
   }
 
