@@ -38,4 +38,28 @@ describe('parse-worker.js (real worker_threads)', () => {
       rmSync(dir, { recursive: true, force: true });
     }
   }, 10_000);
+
+  it('ParsePool with maxWorkers=2 processes a batch of files', async () => {
+    const { ParsePool } = await import('../../src/indexer/parse-pool.js');
+    const dir = join(tmpdir(), `pindex-pool-it-${Date.now()}`);
+    mkdirSync(dir, { recursive: true });
+    const jobs = [];
+    for (let i = 0; i < 5; i++) {
+      const abs = join(dir, `f${i}.ts`);
+      writeFileSync(abs, `export const v${i} = ${i};`);
+      jobs.push({ absolutePath: abs, relativePath: `f${i}.ts` });
+    }
+    const pool = new ParsePool({ maxWorkers: 2 });
+    const results: Array<{ status: string; relativePath: string }> = [];
+    try {
+      for await (const r of pool.parseMany(jobs)) {
+        results.push(r);
+      }
+    } finally {
+      await pool.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+    expect(results).toHaveLength(5);
+    expect(results.every((r) => r.status === 'ok')).toBe(true);
+  }, 15_000);
 });
