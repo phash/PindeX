@@ -1,4 +1,5 @@
 import { readFile, stat } from 'node:fs/promises';
+import { cpus } from 'node:os';
 import { Worker } from 'node:worker_threads';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
@@ -160,6 +161,31 @@ export class ParsePool {
         maxFileSize: this.maxFileSize,
       });
     }
+  }
+
+  /** Picks a default worker count based on the host CPU count and an env
+   *  override. Capped to leave at least one CPU for the main thread. Forces
+   *  0 (sync fallback) when VITEST is running, so the global tree-sitter
+   *  mock in tests/setup.ts continues to apply. */
+  static pickDefaultWorkerCount(explicit: number | undefined): number {
+    if (explicit !== undefined) return Math.max(0, explicit);
+    const fromEnv = process.env.PINDEX_PARSE_WORKERS;
+    if (fromEnv !== undefined && fromEnv !== '') {
+      const n = parseInt(fromEnv, 10);
+      if (!Number.isNaN(n) && n >= 0) return n;
+    }
+    if (process.env.VITEST === 'true') return 0;
+    const cpuCount = cpus().length;
+    return Math.max(1, cpuCount - 1);
+  }
+
+  /** Picks the effective worker count for a given job batch. Small batches
+   *  downshift to avoid the worker startup overhead exceeding the gain. */
+  static pickEffectiveWorkerCount(jobCount: number, configured: number): number {
+    if (configured === 0) return 0;
+    if (jobCount < 10) return 0;
+    if (jobCount < configured * 2) return 1;
+    return configured;
   }
 
   private async runJobSync(job: ParseJobInput): Promise<ParseJobResult> {

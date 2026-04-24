@@ -2,7 +2,8 @@ import { readFileSync, existsSync, statSync } from 'node:fs';
 import { join, relative, resolve, dirname } from 'node:path';
 import { glob } from 'glob';
 import type Database from 'better-sqlite3';
-import type { IndexResult, ParsedFile } from '../types.js';
+import type { IndexResult, ParsedFile, ParsedImport } from '../types.js';
+import { ParsePool } from './parse-pool.js';
 import { parseFile, parseDocument, hashContent } from './parser.js';
 import {
   upsertFile,
@@ -89,6 +90,9 @@ export interface IndexerOptions {
   generateSummaries?: boolean;
   summarizerOptions?: SummarizerOptions;
   documentPatterns?: string[];
+  /** 0 = run parsing synchronously on main (test / small-project mode).
+   *  undefined = auto-select based on CPU count. */
+  maxParseWorkers?: number;
 }
 
 export interface IndexAllOptions {
@@ -111,6 +115,9 @@ export class Indexer {
   private readonly generateSummaries: boolean;
   private readonly summarizer: Summarizer;
   private readonly documentPatterns: string[];
+  private pool: ParsePool | null = null;
+  private readonly configuredMaxWorkers: number;
+  private lastImportsCache: Map<string, ParsedImport[]> | null = null;
 
   constructor(options: IndexerOptions) {
     this.db = options.db;
@@ -120,6 +127,7 @@ export class Indexer {
     this.generateSummaries = options.generateSummaries ?? false;
     this.summarizer = new Summarizer(options.summarizerOptions ?? { enabled: false });
     this.documentPatterns = options.documentPatterns ?? DEFAULT_DOCUMENT_PATTERNS;
+    this.configuredMaxWorkers = ParsePool.pickDefaultWorkerCount(options.maxParseWorkers);
   }
 
   /** Discovers and indexes all source files and document files in the project root. */
@@ -128,29 +136,52 @@ export class Indexer {
     const codePatterns = buildCodePatterns(this.languages);
 
     const [codePaths, docPaths] = await Promise.all([
-      glob(codePatterns, {
-        cwd: this.projectRoot,
-        ignore: this.ignorePatterns,
-        absolute: false,
-      }),
-      glob(this.documentPatterns, {
-        cwd: this.projectRoot,
-        ignore: this.ignorePatterns,
-        absolute: false,
-      }),
+      glob(codePatterns, { cwd: this.projectRoot, ignore: this.ignorePatterns, absolute: false }),
+      glob(this.documentPatterns, { cwd: this.projectRoot, ignore: this.ignorePatterns, absolute: false }),
     ]);
 
-    // Include any additional paths requested
     const allCodePaths = [...codePaths, ...(options.additionalPaths ?? [])];
 
-    for (const relativePath of allCodePaths) {
-      const fileResult = await this.indexFile(relativePath, options.force);
-      if (fileResult.status === 'indexed') result.indexed++;
-      else if (fileResult.status === 'updated') result.updated++;
-      else if (fileResult.status === 'skipped') result.skipped++;
-      result.errors.push(...fileResult.errors);
+    const jobs = allCodePaths.map((rel) => ({
+      absolutePath: join(this.projectRoot, rel),
+      relativePath: rel,
+    }));
+
+    const importsCache = new Map<string, ParsedImport[]>();
+
+    const effectiveWorkers = ParsePool.pickEffectiveWorkerCount(
+      jobs.length,
+      this.configuredMaxWorkers,
+    );
+    // Close any pool from a prior indexAll call and size a new one for this batch.
+    if (this.pool) await this.pool.close();
+    this.pool = new ParsePool({ maxWorkers: effectiveWorkers });
+
+    for await (const parseResult of this.pool.parseMany(jobs)) {
+      if (parseResult.status === 'skipped') {
+        result.skipped++;
+        continue;
+      }
+      if (parseResult.status === 'error') {
+        result.errors.push(parseResult.error);
+        continue;
+      }
+      const fileRes = await this.processParsedFile(
+        parseResult.relativePath,
+        parseResult.parsed,
+        parseResult.content,
+        parseResult.hash,
+        options.force ?? false,
+      );
+      if (fileRes.status === 'indexed') result.indexed++;
+      else if (fileRes.status === 'updated') result.updated++;
+      else if (fileRes.status === 'skipped') result.skipped++;
+      result.errors.push(...fileRes.errors);
+
+      importsCache.set(parseResult.relativePath, parseResult.parsed.imports);
     }
 
+    // Documents stay sequential; they are few and cheap.
     for (const relativePath of docPaths) {
       const fileResult = await this.indexDocument(relativePath, options.force);
       if (fileResult.status === 'indexed') result.indexed++;
@@ -158,6 +189,9 @@ export class Indexer {
       else if (fileResult.status === 'skipped') result.skipped++;
       result.errors.push(...fileResult.errors);
     }
+
+    // Stash the cache for resolveDependencies (Task 7 will consume it).
+    this.lastImportsCache = importsCache;
 
     return result;
   }
