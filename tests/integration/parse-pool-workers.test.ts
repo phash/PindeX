@@ -24,15 +24,13 @@ describe('parse-worker.js (real worker_threads)', () => {
         worker.once('message', (m) => resolvePromise(m));
         worker.once('error', rejectPromise);
         worker.postMessage({
-          jobId: 1,
           job: { absolutePath: abs, relativePath: 'sample.ts' },
           maxFileSize: 1024 * 1024,
         });
       });
       await worker.terminate();
 
-      const r = result as { jobId: number; result: { status: string; parsed?: { symbols: Array<{ name: string }> } } };
-      expect(r.jobId).toBe(1);
+      const r = result as { result: { status: string; parsed?: { symbols: Array<{ name: string }> } } };
       expect(r.result.status).toBe('ok');
       expect(r.result.parsed?.symbols.map((s) => s.name)).toContain('greet');
     } finally {
@@ -66,5 +64,45 @@ describe('parse-worker.js (real worker_threads)', () => {
     }
     expect(results).toHaveLength(5);
     expect(results.every((r) => r.status === 'ok')).toBe(true);
+  }, 15_000);
+
+  it('close() resolves the generator even when jobs are still pending', async () => {
+    const { ParsePool } = (await import(
+      pathToFileURL(resolve(process.cwd(), 'dist/indexer/parse-pool.js')).href
+    )) as typeof import('../../src/indexer/parse-pool.js');
+
+    const dir = join(tmpdir(), `pindex-pool-close-it-${Date.now()}`);
+    mkdirSync(dir, { recursive: true });
+    const jobs: Array<{ absolutePath: string; relativePath: string }> = [];
+    for (let i = 0; i < 20; i++) {
+      const abs = join(dir, `close${i}.ts`);
+      writeFileSync(abs, `export const v${i} = ${i};`);
+      jobs.push({ absolutePath: abs, relativePath: `close${i}.ts` });
+    }
+
+    const pool = new ParsePool({ maxWorkers: 2 });
+    const results: Array<{ status: string; relativePath: string }> = [];
+
+    try {
+      // Start consuming; after 3 results, close the pool. The generator must
+      // still complete (not hang), yielding error results for the rest.
+      let count = 0;
+      for await (const r of pool.parseMany(jobs)) {
+        results.push(r);
+        count++;
+        if (count === 3) {
+          // Fire and forget; close() runs concurrently with the generator.
+          void pool.close();
+        }
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+
+    expect(results.length).toBe(20);
+    const okCount = results.filter((r) => r.status === 'ok').length;
+    const errorCount = results.filter((r) => r.status === 'error').length;
+    expect(okCount).toBeGreaterThanOrEqual(3);
+    expect(errorCount).toBeGreaterThan(0);
   }, 15_000);
 });

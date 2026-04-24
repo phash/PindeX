@@ -9,14 +9,13 @@ if (!parentPort) {
 }
 
 interface WorkerMessage {
-  jobId: number;
   job: ParseJobInput;
   maxFileSize: number;
 }
 
 parentPort.on('message', (msg: WorkerMessage) => {
   const result = runJob(msg.job, msg.maxFileSize);
-  parentPort!.postMessage({ jobId: msg.jobId, result });
+  parentPort!.postMessage({ result });
 });
 
 function runJob(job: ParseJobInput, maxFileSize: number): ParseJobResult {

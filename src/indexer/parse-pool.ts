@@ -30,7 +30,6 @@ export class ParsePool {
   private idleWorkers: Worker[] = [];
   private workerJobs = new Map<Worker, PendingJob>();
   private pending: PendingJob[] = [];
-  private nextJobId = 1;
   private closed = false;
 
   constructor(options: ParsePoolOptions) {
@@ -84,18 +83,33 @@ export class ParsePool {
 
   async close(): Promise<void> {
     this.closed = true;
+    // Drain the pending queue: every waiting job gets a terminal result so the
+    // AsyncGenerator in parseMany can exit instead of hanging.
+    const cancelResult = (job: ParseJobInput): ParseJobResult => ({
+      status: 'error',
+      relativePath: job.relativePath,
+      error: 'ParsePool closed',
+    });
+    for (const p of this.pending) {
+      p.resolve(cancelResult(p.job));
+    }
+    this.pending = [];
+    // Resolve any in-flight jobs BEFORE terminate, so the generator notifies
+    // and wakes before we tear down the workers.
+    for (const [, p] of this.workerJobs) {
+      p.resolve(cancelResult(p.job));
+    }
+    this.workerJobs.clear();
     await Promise.all(this.workers.map((w) => w.terminate().then(() => undefined)));
     this.workers = [];
     this.idleWorkers = [];
-    this.workerJobs.clear();
-    this.pending = [];
   }
 
   // ─── Internal ────────────────────────────────────────────────────────────────
 
   private spawnWorker(): void {
     const worker = new Worker(WORKER_URL);
-    worker.on('message', (msg: { jobId: number; result: ParseJobResult }) => {
+    worker.on('message', (msg: { result: ParseJobResult }) => {
       const pending = this.workerJobs.get(worker);
       this.workerJobs.delete(worker);
       this.idleWorkers.push(worker);
@@ -142,7 +156,6 @@ export class ParsePool {
       const worker = this.idleWorkers.shift()!;
       this.workerJobs.set(worker, pending);
       worker.postMessage({
-        jobId: this.nextJobId++,
         job: pending.job,
         maxFileSize: this.maxFileSize,
       });
