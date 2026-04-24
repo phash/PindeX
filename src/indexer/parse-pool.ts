@@ -13,13 +13,9 @@ const DEFAULT_MAX_FILE_SIZE = 1024 * 1024;
 const MAX_RETRIES = 1;
 
 // Resolve the compiled worker script relative to this module.
-// When running from dist/ (production), both files live in dist/indexer/.
-// When vitest imports the source directly, __dirname is src/indexer/; in that
-// case we walk up two levels (to project root) and back down into dist/.
+// After `npm run build`, both files live in dist/indexer/.
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const WORKER_URL = __dirname.endsWith('/src/indexer') || __dirname.endsWith('\\src\\indexer')
-  ? resolve(__dirname, '../../dist/indexer/parse-worker.js')
-  : resolve(__dirname, 'parse-worker.js');
+const WORKER_URL = resolve(__dirname, 'parse-worker.js');
 
 interface PendingJob {
   job: ParseJobInput;

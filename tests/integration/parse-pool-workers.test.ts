@@ -3,6 +3,7 @@ import { Worker } from 'node:worker_threads';
 import { tmpdir } from 'node:os';
 import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 // Real tree-sitter in this integration test; the unit-suite mock is bypassed.
 vi.unmock('tree-sitter');
@@ -40,7 +41,11 @@ describe('parse-worker.js (real worker_threads)', () => {
   }, 10_000);
 
   it('ParsePool with maxWorkers=2 processes a batch of files', async () => {
-    const { ParsePool } = await import('../../src/indexer/parse-pool.js');
+    // Import from dist/ so the module resolves WORKER_URL relative to the compiled
+    // location, matching how the worker itself is loaded in the first test. The
+    // test:integration script builds dist/ before running.
+    const distUrl = pathToFileURL(resolve(process.cwd(), 'dist/indexer/parse-pool.js'));
+    const { ParsePool } = (await import(distUrl.href)) as typeof import('../../src/indexer/parse-pool.js');
     const dir = join(tmpdir(), `pindex-pool-it-${Date.now()}`);
     mkdirSync(dir, { recursive: true });
     const jobs = [];
