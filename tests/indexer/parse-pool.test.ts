@@ -58,7 +58,7 @@ describe('ParsePool (maxWorkers: 0, sync fallback)', () => {
     expect(paths).toEqual(['a.ts', 'b.ts', 'c.ts']);
   });
 
-  it('returns error for a missing file without stopping subsequent jobs', async () => {
+  it('returns skipped for a missing file without stopping subsequent jobs', async () => {
     const pool = new ParsePool({ maxWorkers: 0 });
     const ok = writeFile('ok.ts', 'export const x = 1;');
     const missing: ParseJobInput = {
