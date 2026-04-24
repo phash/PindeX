@@ -18,6 +18,7 @@ import {
 } from '../db/queries.js';
 import { computeAstDiff, type AstDiffResult } from '../memory/ast-diff.js';
 import { Summarizer, type SummarizerOptions } from './summarizer.js';
+import { LspPythonClient } from './lsp-python.js';
 
 // ─── Default Configuration ────────────────────────────────────────────────────
 
@@ -93,6 +94,8 @@ export interface IndexerOptions {
   /** 0 = run parsing synchronously on main (test / small-project mode).
    *  undefined = auto-select based on CPU count. */
   maxParseWorkers?: number;
+  /** Enable the LSP-backed Python parser. Default: process.env.PINDEX_LSP !== 'false'. */
+  lspEnabled?: boolean;
 }
 
 export interface IndexAllOptions {
@@ -118,6 +121,7 @@ export class Indexer {
   private pool: ParsePool | null = null;
   private readonly configuredMaxWorkers: number;
   private lastImportsCache: Map<string, ParsedImport[]> | null = null;
+  private lsp: LspPythonClient | null = null;
 
   constructor(options: IndexerOptions) {
     this.db = options.db;
@@ -128,6 +132,10 @@ export class Indexer {
     this.summarizer = new Summarizer(options.summarizerOptions ?? { enabled: false });
     this.documentPatterns = options.documentPatterns ?? DEFAULT_DOCUMENT_PATTERNS;
     this.configuredMaxWorkers = ParsePool.pickDefaultWorkerCount(options.maxParseWorkers);
+    const lspEnabled = options.lspEnabled ?? (process.env.PINDEX_LSP !== 'false');
+    if (lspEnabled) {
+      this.lsp = new LspPythonClient({ projectRoot: this.projectRoot, enabled: true });
+    }
   }
 
   /** Discovers and indexes all source files and document files in the project root. */
@@ -254,6 +262,22 @@ export class Indexer {
       return { status: 'skipped', errors: [] };
     }
     const isUpdate = existing !== null;
+
+    if (parsed.language === 'python' && this.lsp) {
+      if (this.lsp.state === 'idle') {
+        // Fire-and-forget: first Python file proceeds with the regex result
+        // while pyright warms up. Subsequent files get LSP-quality output.
+        this.lsp.start().catch((err) => {
+          process.stderr.write(`[pindex] LSP start failed: ${String(err)}\n`);
+        });
+      }
+      if (this.lsp.ready) {
+        const upgraded = await this.lsp.getDocumentSymbols(relativePath, content);
+        if (upgraded) {
+          parsed = { ...parsed, symbols: upgraded.symbols, imports: upgraded.imports };
+        }
+      }
+    }
 
     let fileSummary: string | null = null;
     const symbolSummaries = new Map<string, string | null>();
@@ -426,6 +450,10 @@ export class Indexer {
   /** Terminates any worker threads owned by the parse pool. Safe to call
    *  multiple times; no-op when no pool was ever constructed. */
   async closePool(): Promise<void> {
+    if (this.lsp) {
+      await this.lsp.close();
+      this.lsp = null;
+    }
     if (!this.pool) return;
     await this.pool.close();
     this.pool = null;

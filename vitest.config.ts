@@ -13,6 +13,7 @@ export default defineConfig({
       'node_modules/**',
       'dist/**',
       'tests/integration/parse-pool-workers.test.ts',
+      'tests/integration/lsp-python-live.test.ts',
     ],
     coverage: {
       provider: 'v8',
