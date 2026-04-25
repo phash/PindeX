@@ -201,6 +201,7 @@ export interface SearchSymbolsInput {
   isAsync?: boolean;
   hasTryCatch?: boolean;
   snippet?: boolean;
+  repos?: string[];
 }
 
 export interface SymbolSearchResult {
@@ -218,6 +219,7 @@ export interface SymbolSearchResult {
 export interface GetSymbolInput {
   name: string;
   file?: string;
+  repos?: string[];
 }
 
 export interface MemoryContext {
@@ -243,6 +245,7 @@ export interface GetContextInput {
   file: string;
   line: number;
   range?: number;
+  repos?: string[];
 }
 
 export interface GetContextOutput {
@@ -254,6 +257,7 @@ export interface GetContextOutput {
 
 export interface GetFileSummaryInput {
   file: string;
+  repos?: string[];
 }
 
 export interface GetFileSummaryOutput {
@@ -269,6 +273,7 @@ export interface GetFileSummaryOutput {
 
 export interface FindUsagesInput {
   symbol: string;
+  repos?: string[];
 }
 
 export interface UsageResult {
@@ -280,6 +285,7 @@ export interface UsageResult {
 export interface GetDependenciesInput {
   target: string;
   direction?: 'imports' | 'imported_by' | 'both';
+  repos?: string[];
 }
 
 export interface GetDependenciesOutput {
@@ -296,6 +302,7 @@ export interface SessionMemorySummary {
 
 export interface GetProjectOverviewInput {
   mode?: 'brief' | 'full';
+  repos?: string[];
 }
 
 export interface GetApiEndpointsOutput {
@@ -376,6 +383,7 @@ export interface SearchDocsInput {
   query: string;
   limit?: number;
   type?: 'docs' | 'context' | 'all';
+  repos?: string[];
 }
 
 export interface DocSearchResult {
@@ -399,6 +407,7 @@ export interface DocSearchResult {
 export interface GetDocChunkInput {
   file: string;
   chunk_index?: number;
+  repos?: string[];
 }
 
 export interface DocChunk {
