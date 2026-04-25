@@ -135,7 +135,7 @@ function writeBenchmarkMcpConfigs(targetProjectRoot, baselineMode, mcpDbPath) {
     };
   }
   const filename = baselineMode ? '.benchmark-mcp-baseline.json' : '.benchmark-mcp-pindex.json';
-  const path = join(cwd(), filename);
+  const path = join(targetProjectRoot, filename);
   writeFileSync(path, JSON.stringify(cfg, null, 2));
   return path;
 }
@@ -146,7 +146,7 @@ const SYSTEM_PROMPT_APPEND =
   'Use mcp__pindex__* tools whenever possible for codebase exploration. ' +
   'Prefer search_symbols, find_usages, get_dependencies, and get_file_summary over Read/Grep.';
 
-function runClaudeOnce({ prompt, model, mcpConfigPath, capabilities, dryRun }) {
+function runClaudeOnce({ prompt, model, mcpConfigPath, capabilities, dryRun, cwd: targetCwd }) {
   const args = [
     '-p',
     prompt,
@@ -170,6 +170,8 @@ function runClaudeOnce({ prompt, model, mcpConfigPath, capabilities, dryRun }) {
     encoding: 'utf-8',
     timeout: 5 * 60_000, // 5 minutes per call
     maxBuffer: 32 * 1024 * 1024,
+    cwd: targetCwd,
+    env: BENCH_ENV,
   });
   if (result.status !== 0) {
     throw new Error(
@@ -300,6 +302,7 @@ function runOnePair({ codebase, task, taskIndex, root, dbPath, model, capabiliti
         mcpConfigPath: cfg,
         capabilities,
         dryRun: opts.dryRun,
+        cwd: root,
       });
     } catch (err) {
       process.stderr.write(`[realism] retry: ${String(err).slice(0, 200)}\n`);
@@ -310,6 +313,7 @@ function runOnePair({ codebase, task, taskIndex, root, dbPath, model, capabiliti
           mcpConfigPath: cfg,
           capabilities,
           dryRun: opts.dryRun,
+          cwd: root,
         });
       } catch (err2) {
         out[which] = { error: String(err2).slice(0, 500) };
