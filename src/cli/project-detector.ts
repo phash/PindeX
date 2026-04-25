@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto';
-import { resolve, join, dirname, basename } from 'node:path';
+import { resolve, join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync } from 'node:fs';
+import { assignName } from '../federation/registry-name.js';
 
 /** Returns the global ~/.pindex directory (migrates from ~/.mcp-indexer if present). */
 export function getPindexHome(): string {
@@ -101,12 +102,31 @@ export class GlobalRegistry {
 
   read(): RegistryEntry[] {
     if (!existsSync(this.registryPath)) return [];
+    let parsed: RegistryFile;
     try {
-      const data = JSON.parse(readFileSync(this.registryPath, 'utf-8')) as RegistryFile;
-      return data.projects ?? [];
-    } catch {
+      parsed = JSON.parse(readFileSync(this.registryPath, 'utf-8')) as RegistryFile;
+    } catch (err) {
+      process.stderr.write(`[pindex] registry: failed to parse ${this.registryPath}: ${String(err)}\n`);
       return [];
     }
+    const projects = parsed.projects ?? [];
+
+    // Migration: assign name to any entry that lacks one.
+    let migrated = false;
+    const usedNames = new Set<string>(
+      projects.map((p) => p.name).filter((n): n is string => Boolean(n)),
+    );
+    for (const p of projects) {
+      if (!p.name) {
+        p.name = assignName(p.path, usedNames);
+        usedNames.add(p.name);
+        migrated = true;
+      }
+    }
+    if (migrated) {
+      this.write(projects);
+    }
+    return projects;
   }
 
   private write(entries: RegistryEntry[]): void {
@@ -135,7 +155,8 @@ export class GlobalRegistry {
     let port = computeDefaultPort(hash);
     while (usedPorts.has(port)) port++;
 
-    const name = basename(normalizedPath);
+    const usedNames = new Set(projects.map((e) => e.name).filter((n): n is string => Boolean(n)));
+    const name = assignName(normalizedPath, usedNames);
     const entry: RegistryEntry = {
       path: normalizedPath,
       hash,
