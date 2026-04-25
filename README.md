@@ -63,25 +63,39 @@ Token savings are tracked per session and visible in a live web dashboard.
 
 ## When Is PindeX Worth Using?
 
-PindeX adds a fixed overhead per API turn (tool definitions are sent with every request). This overhead pays off only when the project is large enough that the savings from avoiding full-file reads exceed that cost.
+PindeX adds a fixed overhead per API turn (its 14 tool definitions are sent with every request). The overhead pays off when the project is large enough — and the questions complex enough — that the savings from targeted symbol lookups exceed that cost.
 
-**Benchmark results** (5 identical tasks, synthetic TypeScript API codebase, Claude Sonnet 4.6):
+### Realism benchmark (Sonnet 4.6, N=1, 6 Q&A tasks per codebase)
 
-| Config | Total input tokens | vs. baseline |
-|---|---|---|
-| baseline (read_file / glob) | 167 K | — |
-| PindeX (8 core tools, manifest injection) | 246 K | **+47 %** |
+A/B comparison: vanilla Claude Code (no PindeX MCP server, only native `Read`/`Grep`/`Glob`) vs. Claude Code with PindeX registered, on identical prompts.
 
-The test project had only **25 files at ~76 lines/file on average** — too small for PindeX to break even. The tool-definition overhead (~800 tokens/turn) outweighed the savings from narrower reads.
+| Codebase | Baseline tokens | PindeX tokens | Ratio | Reduction |
+|---|---:|---:|---:|---|
+| PindeX itself (~50 files) | 742 607 | 603 160 | 0.812 | **−19 %** |
+| `microsoft/typescript-eslint` (~600 files) | 948 848 | 779 469 | 0.821 | **−18 %** |
 
-**Rule of thumb — PindeX is beneficial when:**
+**Where the savings come from**: multi-hop / dependency-graph queries (e.g. "which modules does `src/indexer/index.ts` import?", "explain how `processParsedFile` interacts with the AST diff engine") deliver per-task ratios of 0.55 / 0.65 — PindeX wins clearly. Single-symbol lookups (e.g. "where is class X defined?") wash to ratio ~1.0; Claude can read the project's `CLAUDE.md` from the prompt cache and answer directly without any file reads in either condition.
+
+100 % cache-read share in both conditions means the 14-tool overhead is fully amortised by Anthropic's prompt cache after the first turn. There is no latency penalty.
+
+Full report: [`benchmarks/results/2026-04-25-realism-3.md`](benchmarks/results/2026-04-25-realism-3.md). Re-run yourself with `npm run bench:realism`.
+
+### Caveats
+
+- **N=1 across 12 tasks total.** Stochastic variance means the headline number is in the 15–25 % range, not a precise 18.5 %. For marketing-grade numbers, repeat at N=3.
+- **Q&A workload only.** Coding tasks ("implement feature X") are not measured; the cost profile is likely different and possibly less favourable.
+- **TypeScript-heavy codebases.** Both targets are pure TS / TS-monorepo. PindeX' regex extractors for Python / Java / Go / Rust have lower symbol-extraction quality than tree-sitter-typescript; the benefit on those stacks may be smaller.
+- **Older marketing copy claimed "80–90 % token reduction".** That number was aspirational and is not what the realism benchmark produces. The honest figure is ~18–19 %.
+
+### Rule of thumb
+
+PindeX is beneficial when:
 
 | Condition | Threshold |
 |---|---|
 | Number of files | ≥ 40 |
 | Average file length | ≥ 150 lines/file |
-
-For projects above these thresholds (e.g. the PindeX codebase itself with 80+ files), targeted symbol lookups consistently return far less than a full-file read, and the fixed overhead amortises over many turns.
+| Question type | Multi-hop / dependency / impact analysis (single-symbol lookups break even) |
 
 **Built-in recommendation:** `get_project_overview` always returns an `index_recommendation` field:
 
@@ -96,7 +110,7 @@ For projects above these thresholds (e.g. the PindeX codebase itself with 80+ fi
 }
 ```
 
-> **A note on the savings numbers:** PindeX can only measure tokens that flow through its own tools. It has no visibility into tokens used by `Write`, `Read`, `Bash`, or other non-PindeX operations. In sessions focused on exploring an unfamiliar codebase the savings are most pronounced; in sessions that are mostly editing, PindeX reduces only the exploration portion.
+> **Where PindeX's value is largest:** sessions that bounce across many files (impact analysis, refactoring research, onboarding to an unfamiliar codebase). Sessions that are mostly editing one file get little benefit and may pay net overhead.
 
 ---
 
