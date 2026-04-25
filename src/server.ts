@@ -387,7 +387,7 @@ export function createMcpServer(
           break;
         }
         case 'get_dependencies': {
-          result = getDependencies(db, args as GetDependenciesInput);
+          result = getDependencies(repoSet, args as GetDependenciesInput);
           heuristicMultiplier = 10;
           break;
         }

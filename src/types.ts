@@ -294,6 +294,8 @@ export interface GetDependenciesInput {
 }
 
 export interface GetDependenciesOutput {
+  file: string;
+  project: string;
   imports: string[];
   importedBy: string[];
 }

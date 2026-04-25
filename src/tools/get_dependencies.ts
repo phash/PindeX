@@ -1,27 +1,34 @@
-import type Database from 'better-sqlite3';
 import type { GetDependenciesInput, GetDependenciesOutput } from '../types.js';
 import { getFileByPath, getDependenciesByFile, getImportedByFile } from '../db/queries.js';
+import type { RepoSet } from '../federation/repo-set.js';
 
 export function getDependencies(
-  db: Database.Database,
+  repoSet: RepoSet,
   input: GetDependenciesInput,
-): GetDependenciesOutput {
+): GetDependenciesOutput[] {
+  const repos = repoSet.filter(input.repos);
   const direction = input.direction ?? 'both';
+  const out: GetDependenciesOutput[] = [];
 
-  const file = getFileByPath(db, input.target);
-  if (!file) {
-    return { imports: [], importedBy: [] };
+  for (const repo of repos) {
+    const file = getFileByPath(repo.db, input.target);
+    if (!file) continue;
+
+    const result: GetDependenciesOutput = {
+      file: input.target,
+      project: repo.name,
+      imports: [],
+      importedBy: [],
+    };
+
+    if (direction === 'imports' || direction === 'both') {
+      result.imports = getDependenciesByFile(repo.db, file.id);
+    }
+    if (direction === 'imported_by' || direction === 'both') {
+      result.importedBy = getImportedByFile(repo.db, file.id);
+    }
+    out.push(result);
   }
 
-  const imports =
-    direction === 'imports' || direction === 'both'
-      ? getDependenciesByFile(db, file.id)
-      : [];
-
-  const importedBy =
-    direction === 'imported_by' || direction === 'both'
-      ? getImportedByFile(db, file.id)
-      : [];
-
-  return { imports, importedBy };
+  return out;
 }
