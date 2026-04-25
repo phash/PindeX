@@ -6,7 +6,22 @@
 import { argv, exit, cwd, env } from 'node:process';
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
+import { spawnSync, execFileSync } from 'node:child_process';
+
+// ─── Resolve npm global bin (needed when ~/.npm-global/bin is not in PATH) ───
+
+function resolveEnvWithNpmBin() {
+  let npmPrefix = '';
+  try {
+    npmPrefix = execFileSync('npm', ['config', 'get', 'prefix'], { encoding: 'utf-8' }).trim();
+  } catch (_) { /* npm unavailable; fall through */ }
+  const npmBin = npmPrefix ? join(npmPrefix, 'bin') : '';
+  const PATH = [npmBin, env.PATH ?? ''].filter(Boolean).join(':');
+  return { ...env, PATH };
+}
+
+const BENCH_ENV = resolveEnvWithNpmBin();
 
 // ─── CLI parsing ──────────────────────────────────────────────────────────────
 
@@ -178,31 +193,228 @@ function costUsd(usage) {
   );
 }
 
+// ─── Codebase preparation ─────────────────────────────────────────────────────
+
+function ensurePindexCodebase() {
+  const root = resolve(cwd());
+  const dbPath = join(root, '.pindex', 'index.db');
+  if (!existsSync(dbPath)) {
+    process.stderr.write(`[realism] Indexing PindeX self (this may take a minute)...\n`);
+    const init = spawnSync('npx', ['--no-install', 'pindex', 'init'], {
+      cwd: root,
+      stdio: 'inherit',
+      env: BENCH_ENV,
+    });
+    if (init.status !== 0) {
+      throw new Error('pindex init failed for the PindeX-self codebase');
+    }
+    const reindex = spawnSync('npx', ['--no-install', 'pindex', 'reindex'], {
+      cwd: root,
+      stdio: 'inherit',
+      env: BENCH_ENV,
+    });
+    if (reindex.status !== 0) {
+      throw new Error('pindex reindex failed for the PindeX-self codebase');
+    }
+  }
+  return { root, dbPath };
+}
+
+function ensureTypescriptEslintCodebase() {
+  const root = join(tmpdir(), 'pindex-bench-typescript-eslint');
+  if (!existsSync(root)) {
+    process.stderr.write(`[realism] Cloning typescript-eslint into ${root}...\n`);
+    const clone = spawnSync(
+      'git',
+      ['clone', '--depth', '1', 'https://github.com/typescript-eslint/typescript-eslint.git', root],
+      { stdio: 'inherit' },
+    );
+    if (clone.status !== 0) {
+      throw new Error('git clone of typescript-eslint failed');
+    }
+  }
+  const dbPath = join(root, '.pindex', 'index.db');
+  if (!existsSync(dbPath)) {
+    process.stderr.write(`[realism] Indexing typescript-eslint (may take 1-3 min)...\n`);
+    const init = spawnSync('pindex', ['init'], { cwd: root, stdio: 'inherit', env: BENCH_ENV });
+    if (init.status !== 0) throw new Error('pindex init failed for typescript-eslint');
+    const reindex = spawnSync('pindex', ['reindex'], { cwd: root, stdio: 'inherit', env: BENCH_ENV });
+    if (reindex.status !== 0) throw new Error('pindex reindex failed for typescript-eslint');
+  }
+  return { root, dbPath };
+}
+
+const PREPS = {
+  pindex: ensurePindexCodebase,
+  'typescript-eslint': ensureTypescriptEslintCodebase,
+};
+
+// ─── Task loading ─────────────────────────────────────────────────────────────
+
+function loadTasks(codebase) {
+  const path = join(cwd(), 'benchmarks', 'tasks', `${codebase}.json`);
+  const json = JSON.parse(readFileSync(path, 'utf-8'));
+  if (!Array.isArray(json.tasks)) throw new Error(`Bad task file: ${path}`);
+  return json.tasks;
+}
+
+// ─── Per-task A/B run with order alternation ──────────────────────────────────
+
+function runOnePair({ codebase, task, taskIndex, root, dbPath, model, capabilities, opts, costSoFar }) {
+  // Even-indexed tasks: BASELINE first, then PINDEX.
+  // Odd-indexed tasks:  PINDEX first, then BASELINE.
+  const baselineFirst = taskIndex % 2 === 0;
+  const pindexCfg = writeBenchmarkMcpConfigs(root, false, dbPath);
+  const baselineCfg = writeBenchmarkMcpConfigs(root, true, dbPath);
+
+  const order = baselineFirst ? ['baseline', 'pindex'] : ['pindex', 'baseline'];
+  const out = { id: task.id, prompt: task.prompt };
+
+  for (const which of order) {
+    const cfg = which === 'pindex' ? pindexCfg : baselineCfg;
+    process.stderr.write(`[realism] ${codebase}/${task.id} (${which})...\n`);
+
+    if (costSoFar.usd > opts.budget) {
+      process.stderr.write(`[realism] BUDGET EXCEEDED ($${costSoFar.usd.toFixed(2)} > $${opts.budget}); aborting\n`);
+      out[which] = { error: 'budget_exceeded' };
+      out.aborted = true;
+      return out;
+    }
+
+    let result;
+    try {
+      result = runClaudeOnce({
+        prompt: task.prompt,
+        model,
+        mcpConfigPath: cfg,
+        capabilities,
+        dryRun: opts.dryRun,
+      });
+    } catch (err) {
+      process.stderr.write(`[realism] retry: ${String(err).slice(0, 200)}\n`);
+      try {
+        result = runClaudeOnce({
+          prompt: task.prompt,
+          model,
+          mcpConfigPath: cfg,
+          capabilities,
+          dryRun: opts.dryRun,
+        });
+      } catch (err2) {
+        out[which] = { error: String(err2).slice(0, 500) };
+        continue;
+      }
+    }
+
+    if (opts.dryRun) {
+      out[which] = result;
+      continue;
+    }
+
+    const usage = result.usage ?? {};
+    const usd = costUsd(usage);
+    costSoFar.usd += usd;
+
+    const rawDir = join(cwd(), 'benchmarks', 'results', 'raw');
+    mkdirSync(rawDir, { recursive: true });
+    writeFileSync(
+      join(rawDir, `${codebase}-${task.id}-${which}.json`),
+      JSON.stringify(result, null, 2),
+    );
+
+    out[which] = {
+      input_tokens: usage.input_tokens ?? 0,
+      cache_read_input_tokens: usage.cache_read_input_tokens ?? 0,
+      cache_creation_input_tokens: usage.cache_creation_input_tokens ?? 0,
+      output_tokens: usage.output_tokens ?? 0,
+      duration_ms: result.duration_ms ?? 0,
+      num_turns: result.num_turns ?? 0,
+      cost_usd: usd,
+      result_excerpt: (result.result ?? '').slice(0, 280),
+    };
+  }
+
+  return out;
+}
+
+// ─── Warm-up + measurement ────────────────────────────────────────────────────
+
+function runBenchmark(opts) {
+  const capabilities = detectClaudeCapabilities();
+  process.stderr.write(`[realism] capabilities: ${JSON.stringify(capabilities)}\n`);
+  process.stderr.write(`[realism] options: ${JSON.stringify(opts)}\n`);
+
+  const collected = [];
+  const costSoFar = { usd: 0 };
+
+  for (const codebase of opts.codebases) {
+    const prep = PREPS[codebase];
+    if (!prep) {
+      process.stderr.write(`[realism] unknown codebase: ${codebase}\n`);
+      continue;
+    }
+    const { root, dbPath } = prep();
+    const tasks = loadTasks(codebase).slice(0, opts.tasksLimit);
+
+    // Warm-up: one throwaway run per condition with the first task.
+    if (!opts.dryRun && tasks.length > 0) {
+      const warm = tasks[0];
+      process.stderr.write(`[realism] WARM-UP for ${codebase}: ${warm.id}\n`);
+      const dummy = { usd: 0 };
+      runOnePair({
+        codebase,
+        task: warm,
+        taskIndex: 0,
+        root,
+        dbPath,
+        model: opts.model,
+        capabilities,
+        opts: { ...opts, budget: opts.budget },
+        costSoFar: dummy,
+      });
+      costSoFar.usd += dummy.usd;
+      process.stderr.write(`[realism] warm-up cost: $${dummy.usd.toFixed(3)}\n`);
+    }
+
+    for (let i = 0; i < tasks.length; i++) {
+      const t = tasks[i];
+      const pair = runOnePair({
+        codebase,
+        task: t,
+        taskIndex: i,
+        root,
+        dbPath,
+        model: opts.model,
+        capabilities,
+        opts,
+        costSoFar,
+      });
+      collected.push({ codebase, ...pair });
+      if (pair.aborted) break;
+    }
+  }
+
+  return { collected, totalCost: costSoFar.usd };
+}
+
 // ─── Entry point ──────────────────────────────────────────────────────────────
 
 function main() {
   const opts = parseArgs(argv.slice(2));
-  const capabilities = detectClaudeCapabilities();
-
-  console.log('[realism] capabilities:', capabilities);
-  console.log('[realism] options:', opts);
+  const { collected, totalCost } = runBenchmark(opts);
 
   if (opts.dryRun) {
-    // Print one example invocation per condition.
-    const exampleMcp = writeBenchmarkMcpConfigs(cwd(), false, '/tmp/example.db');
-    const cmd = runClaudeOnce({
-      prompt: 'example task',
-      model: opts.model,
-      mcpConfigPath: exampleMcp,
-      capabilities,
-      dryRun: true,
-    });
-    console.log('[realism] sample command:', cmd.command);
+    console.log('[realism] dry-run plan:');
+    for (const r of collected) console.log(JSON.stringify(r, null, 2));
     exit(0);
   }
 
-  console.error('[realism] full execution arrives in Task 3');
-  exit(1);
+  const aggPath = join(cwd(), 'benchmarks', 'results', 'raw', 'aggregate.json');
+  mkdirSync(join(cwd(), 'benchmarks', 'results', 'raw'), { recursive: true });
+  writeFileSync(aggPath, JSON.stringify({ collected, totalCost, opts }, null, 2));
+
+  console.log(`[realism] done. total spend: $${totalCost.toFixed(3)}. raw: ${aggPath}`);
+  console.log('[realism] report generation lands in Task 4.');
 }
 
 main();
