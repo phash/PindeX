@@ -10,6 +10,7 @@ import { Indexer } from '../../src/indexer/index.js';
 import { TokenLogger } from '../../src/monitoring/token-logger.js';
 import { createMcpServer } from '../../src/server.js';
 import { insertTestSession } from '../helpers/fixtures.js';
+import { makeTestRepoSet } from '../helpers/repo-set.js';
 
 /** Minimal helper to call a registered MCP tool handler directly. */
 async function callTool(
@@ -104,14 +105,14 @@ describe('Tool functions smoke test (via indexed project)', () => {
 
   it('search_symbols finds indexed symbols', async () => {
     const { searchSymbols } = await import('../../src/tools/search_symbols.js');
-    const results = searchSymbols(db, { query: 'AuthService' });
+    const results = searchSymbols(makeTestRepoSet(db), { query: 'AuthService' });
     // Results depend on tree-sitter being available; at minimum no error
     expect(Array.isArray(results)).toBe(true);
   });
 
   it('get_project_overview returns correct file count', async () => {
     const { getProjectOverview } = await import('../../src/tools/get_project_overview.js');
-    const overview = getProjectOverview(db, testDir);
+    const overview = getProjectOverview(makeTestRepoSet(db), testDir);
     expect(overview.stats.totalFiles).toBeGreaterThan(0);
   });
 

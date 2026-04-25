@@ -304,6 +304,14 @@ export function createMcpServer(
 
   const { projectRoot, monitoringPort = 7842, baselineMode = false, federatedDbs = [], sessionId = 'default', observer } = options;
 
+  const primaryName = options.primaryName ?? 'local';
+  const repoSet = RepoSet.fromServerConfig(
+    db,
+    primaryName,
+    federatedDbs.map((f) => ({ name: f.name, path: f.path, db: f.db })),
+    projectRoot,
+  );
+
   // ─── List Tools ────────────────────────────────────────────────────────────
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
@@ -351,7 +359,7 @@ export function createMcpServer(
     try {
       switch (name) {
         case 'search_symbols': {
-          result = searchSymbols(db, args as SearchSymbolsInput, federatedDbs, projectRoot);
+          result = searchSymbols(repoSet, args as SearchSymbolsInput);
           heuristicMultiplier = 10;
           break;
         }
@@ -381,7 +389,7 @@ export function createMcpServer(
           break;
         }
         case 'get_project_overview': {
-          result = getProjectOverview(db, projectRoot, federatedDbs, sessionId, args as GetProjectOverviewInput);
+          result = getProjectOverview(repoSet, projectRoot, sessionId, args as GetProjectOverviewInput);
           heuristicMultiplier = 5;
           break;
         }

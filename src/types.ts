@@ -214,6 +214,7 @@ export interface SymbolSearchResult {
   isAsync?: boolean;
   hasTryCatch?: boolean;
   snippet?: string;
+  project: string;
 }
 
 export interface GetSymbolInput {
@@ -326,17 +327,20 @@ export interface IndexRecommendation {
   breakEvenFiles: number;
 }
 
-export interface GetProjectOverviewOutput {
+export interface ProjectOverviewSnapshot {
+  project: string;
   rootPath: string;
   language: string;
   entryPoints: string[];
   modules: Array<{ path: string; summary: string | null; symbolCount: number }>;
   stats: { totalFiles: number; totalSymbols: number };
-  /** Present when the server is configured with FEDERATION_REPOS */
-  federatedProjects?: Array<{ rootPath: string; stats: { totalFiles: number; totalSymbols: number } }>;
   session_memory?: SessionMemorySummary;
-  /** Cost-benefit analysis: should Claude use index tools or fall back to direct reads? */
   index_recommendation?: IndexRecommendation;
+}
+
+export interface GetProjectOverviewOutput extends ProjectOverviewSnapshot {
+  /** Present when the server is configured with FEDERATION_REPOS */
+  federated_projects?: ProjectOverviewSnapshot[];
 }
 
 export interface ReindexInput {
