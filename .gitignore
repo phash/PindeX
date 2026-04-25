@@ -8,3 +8,8 @@ coverage/
 
 # PindeX index data
 .pindex/
+
+# Realism benchmark artifacts
+.benchmark-mcp-pindex.json
+.benchmark-mcp-baseline.json
+benchmarks/results/raw/

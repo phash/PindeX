@@ -1,0 +1,34 @@
+{
+  "tasks": [
+    {
+      "id": "pindex-1",
+      "prompt": "Where is the RepoSet class defined? List its public methods.",
+      "expected_answer_hint": "src/federation/repo-set.ts; methods: filter, primary, all"
+    },
+    {
+      "id": "pindex-2",
+      "prompt": "Which MCP tools accept the repos parameter? List them.",
+      "expected_answer_hint": "search_symbols, get_symbol, get_context, get_file_summary, find_usages, get_dependencies, get_project_overview, search_docs, get_doc_chunk"
+    },
+    {
+      "id": "pindex-3",
+      "prompt": "How does crash recovery work in LspPythonClient? Describe the state transitions.",
+      "expected_answer_hint": "src/indexer/lsp-python.ts; states idle/starting/ready/failed/closed; one restart attempt; 3 consecutive timeouts treated as crash"
+    },
+    {
+      "id": "pindex-4",
+      "prompt": "Where is the assignName function called from? List all call sites.",
+      "expected_answer_hint": "src/cli/project-detector.ts (read + upsert), src/cli/federate.ts, src/index.ts"
+    },
+    {
+      "id": "pindex-5",
+      "prompt": "What does src/indexer/index.ts import from other PindeX modules? Give the dependency list.",
+      "expected_answer_hint": "parser, queries, ast-diff, summarizer, parse-pool, lsp-python"
+    },
+    {
+      "id": "pindex-6",
+      "prompt": "Explain how processParsedFile interacts with the AST diff engine.",
+      "expected_answer_hint": "Inside the DB transaction, computeAstDiff is called before deleteSymbolsByFileId; the resulting diff is returned alongside the IndexFileResult and used by the SessionObserver."
+    }
+  ]
+}

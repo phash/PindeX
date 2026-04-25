@@ -1,0 +1,34 @@
+{
+  "tasks": [
+    {
+      "id": "tseslint-1",
+      "prompt": "Where is the rule-creator helper (the function used to define an ESLint rule, like RuleCreator or createRule) defined?",
+      "expected_answer_hint": "packages/utils/src/eslint-utils/RuleCreator.ts (in @typescript-eslint/utils)"
+    },
+    {
+      "id": "tseslint-2",
+      "prompt": "How many plugin packages does this monorepo contain? Where do they live?",
+      "expected_answer_hint": "Under packages/, look for eslint-plugin, eslint-plugin-tslint (deprecated), eslint-plugin-internal — count exact under packages/."
+    },
+    {
+      "id": "tseslint-3",
+      "prompt": "What test helpers exist under packages/eslint-plugin/tests? List the top-level classes and exported functions.",
+      "expected_answer_hint": "Look at packages/eslint-plugin/tests/util/* — RuleTester, getFixturesRootDir, etc."
+    },
+    {
+      "id": "tseslint-4",
+      "prompt": "Explain the type-resolver strategy: where is program.getTypeChecker() invoked?",
+      "expected_answer_hint": "Look in packages/typescript-estree/src/parser.ts and create-program/*. Calls to getTypeChecker() trace back to parseAndGenerateServices."
+    },
+    {
+      "id": "tseslint-5",
+      "prompt": "How is the TSConfig consumed by parseAndGenerateServices? Show the relevant call graph.",
+      "expected_answer_hint": "packages/typescript-estree/src/parser.ts → createProjectProgram / createIsolatedProgram / etc., depending on options.project / options.programs."
+    },
+    {
+      "id": "tseslint-6",
+      "prompt": "Where is the AST converted to TSESTree format?",
+      "expected_answer_hint": "packages/typescript-estree/src/ts-estree/* and packages/typescript-estree/src/convert.ts"
+    }
+  ]
+}

@@ -22,6 +22,7 @@
     "test:coverage": "vitest run --coverage",
     "test:integration": "npm run build && vitest run --config vitest.integration.config.ts",
     "bench:index": "npm run build && node scripts/bench-index.mjs",
+    "bench:realism": "node scripts/realism-benchmark.mjs",
     "lint": "tsc --noEmit",
     "prepublishOnly": "npm run build",
     "start": "node dist/index.js",
