@@ -24,6 +24,7 @@ import { getSessionMemory } from './tools/get_session_memory.js';
 import { getApiEndpoints } from './tools/get_api_endpoints.js';
 import type { SessionObserver } from './memory/observer.js';
 import { TOOL_SCHEMAS } from './tools/schemas.js';
+import { RepoSet } from './federation/repo-set.js';
 import type {
   SearchSymbolsInput,
   GetSymbolInput,
@@ -236,6 +237,8 @@ const CORE_TOOL_NAMES = new Set([
 
 /** A secondary project whose index is searched alongside the primary DB (federation). */
 export interface FederatedDb {
+  /** Human-readable name for this repo (populated from GlobalRegistry or assignName()). */
+  name: string;
   /** Absolute path to the federated project root (used for result attribution). */
   path: string;
   /** Open SQLite connection to the federated project's index.db. */
@@ -259,6 +262,9 @@ export interface ServerOptions {
   sessionId?: string;
   /** Passive observer that records tool calls for session memory generation. */
   observer?: SessionObserver;
+  /** Name for the primary (local) repo. Required so RepoSet has a stable
+   *  identity for it in tool results. Provided by index.ts at startup. */
+  primaryName?: string;
 }
 
 /**

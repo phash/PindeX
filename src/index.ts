@@ -12,7 +12,8 @@ import {
   deleteObservationsOlderThan,
   deleteObservationsExceptSession,
 } from './db/queries.js';
-import { getProjectIndexPath } from './cli/project-detector.js';
+import { getProjectIndexPath, GlobalRegistry } from './cli/project-detector.js';
+import { assignName } from './federation/registry-name.js';
 import { SessionObserver } from './memory/observer.js';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -45,17 +46,36 @@ async function main(): Promise<void> {
   const db = openDatabase(INDEX_PATH);
   runMigrations(db);
 
-  // 1b. Open federated repo databases (read-only)
+  // 1b. Open federated repo databases (read-only), resolving names from GlobalRegistry
+  const registry = new GlobalRegistry();
+  const allEntries = registry.list();
+  const usedNames = new Set<string>();
+
+  // Resolve the primary (local) name first so collisions in federated
+  // names don't accidentally shadow it.
+  const primaryEntry = allEntries.find((e) => e.path === PROJECT_ROOT);
+  const primaryName = primaryEntry?.name ?? assignName(PROJECT_ROOT, usedNames);
+  usedNames.add(primaryName);
+
   const federatedDbs = FEDERATION_REPOS.map((repoPath) => {
     const dbPath = getProjectIndexPath(repoPath);
     try {
       const fedDb = openDatabase(dbPath);
-      return { path: repoPath, db: fedDb };
+      const entry = allEntries.find((e) => e.path === repoPath);
+      let name = entry?.name;
+      if (!name) {
+        name = assignName(repoPath, usedNames);
+        process.stderr.write(
+          `[pindex] federated repo '${repoPath}' has no persisted name; using auto-generated '${name}'. Run 'pindex federate add ${repoPath}' to persist.\n`,
+        );
+      }
+      usedNames.add(name);
+      return { name, path: repoPath, db: fedDb };
     } catch {
       process.stderr.write(`[pindex] Warning: could not open federated DB for ${repoPath}\n`);
       return null;
     }
-  }).filter((x): x is { path: string; db: ReturnType<typeof openDatabase> } => x !== null);
+  }).filter((x): x is { name: string; path: string; db: ReturnType<typeof openDatabase> } => x !== null);
 
   // 2. Set up the indexer
   if (GENERATE_SUMMARIES && !SUMMARIZER_API_KEY) {
@@ -114,6 +134,7 @@ async function main(): Promise<void> {
     federatedDbs,
     sessionId,
     observer,
+    primaryName,
   });
 
   const transport = new StdioServerTransport();
