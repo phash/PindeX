@@ -240,6 +240,7 @@ export interface GetSymbolOutput {
   isExported: boolean;
   dependencies: string[];
   memory_context?: MemoryContext;
+  project: string;
 }
 
 export interface GetContextInput {
@@ -281,6 +282,7 @@ export interface UsageResult {
   file: string;
   line: number;
   context: string;
+  project: string;
 }
 
 export interface GetDependenciesInput {

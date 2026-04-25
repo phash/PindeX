@@ -28,6 +28,7 @@ import { RepoSet } from './federation/repo-set.js';
 import type {
   SearchSymbolsInput,
   GetSymbolInput,
+  GetSymbolOutput,
   GetContextInput,
   GetFileSummaryInput,
   FindUsagesInput,
@@ -364,8 +365,8 @@ export function createMcpServer(
           break;
         }
         case 'get_symbol': {
-          result = getSymbol(db, args as GetSymbolInput);
-          heuristicMultiplier = result ? 15 : 0;
+          result = getSymbol(repoSet, args as GetSymbolInput);
+          heuristicMultiplier = (result as GetSymbolOutput[]).length > 0 ? 15 : 0;
           break;
         }
         case 'get_context': {
@@ -379,7 +380,7 @@ export function createMcpServer(
           break;
         }
         case 'find_usages': {
-          result = findUsages(db, args as FindUsagesInput);
+          result = findUsages(repoSet, args as FindUsagesInput);
           heuristicMultiplier = 10;
           break;
         }
