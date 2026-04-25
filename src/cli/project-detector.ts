@@ -79,12 +79,17 @@ function computeDefaultPort(hash: string): number {
 
 // ─── Global Registry ───────────────────────────────────────────────────────
 
+export interface FederatedRegistryEntry {
+  path: string;
+  name: string;
+}
+
 export interface RegistryEntry {
   path: string;
   hash: string;
   name: string;
   monitoringPort: number;
-  federatedRepos: string[];
+  federatedRepos: FederatedRegistryEntry[];
   addedAt: string;
 }
 
@@ -121,6 +126,23 @@ export class GlobalRegistry {
         p.name = assignName(p.path, usedNames);
         usedNames.add(p.name);
         migrated = true;
+      }
+      // Migration: normalise old string[] federatedRepos to FederatedRegistryEntry[]
+      if (Array.isArray(p.federatedRepos)) {
+        const normalised: FederatedRegistryEntry[] = [];
+        for (const item of p.federatedRepos as unknown[]) {
+          if (typeof item === 'string') {
+            // Old shape: just a path. Resolve a name from the global registry,
+            // or auto-name if the target isn't itself registered.
+            const targetEntry = projects.find((q) => q.path === item);
+            const name = targetEntry?.name ?? (item.split('/').pop() || 'federated');
+            normalised.push({ path: item, name });
+            migrated = true;
+          } else if (item && typeof item === 'object' && 'path' in item && 'name' in item) {
+            normalised.push(item as FederatedRegistryEntry);
+          }
+        }
+        p.federatedRepos = normalised;
       }
     }
     if (migrated) {
@@ -162,7 +184,7 @@ export class GlobalRegistry {
       hash,
       name,
       monitoringPort: port,
-      federatedRepos: [],
+      federatedRepos: [] as FederatedRegistryEntry[],
       addedAt: new Date().toISOString(),
       ...extra,
     };
@@ -171,14 +193,27 @@ export class GlobalRegistry {
     return entry;
   }
 
-  /** Update the federated repos list for a project. */
-  setFederatedRepos(projectPath: string, repos: string[]): void {
+  /** Update the federated repos list for a project (structured entries). */
+  setFederatedRepos(projectPath: string, repos: FederatedRegistryEntry[]): void {
     const hash = hashProjectPath(resolve(projectPath));
     const projects = this.read();
     const idx = projects.findIndex((p) => p.hash === hash);
     if (idx !== -1) {
       projects[idx].federatedRepos = repos;
       this.write(projects);
+    }
+  }
+
+  /** Overwrite the registry entry matching entry.path. Inserts if not present. */
+  replace(entry: RegistryEntry): void {
+    const all = this.read();
+    const idx = all.findIndex((e) => e.path === entry.path);
+    if (idx === -1) {
+      this.write([...all, entry]);
+    } else {
+      const next = [...all];
+      next[idx] = entry;
+      this.write(next);
     }
   }
 

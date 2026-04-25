@@ -23,7 +23,7 @@ vi.mock('../../src/cli/project-detector.js', () => {
       hash: string;
       name: string;
       monitoringPort: number;
-      federatedRepos: string[];
+      federatedRepos: Array<{ path: string; name: string }>;
       addedAt: string;
     }> = [];
 
@@ -35,7 +35,7 @@ vi.mock('../../src/cli/project-detector.js', () => {
         hash: 'abc12345',
         name: 'test-project',
         monitoringPort: 7843,
-        federatedRepos: [] as string[],
+        federatedRepos: [] as Array<{ path: string; name: string }>,
         addedAt: new Date().toISOString(),
       };
       this.entries.push(entry);
@@ -50,7 +50,7 @@ vi.mock('../../src/cli/project-detector.js', () => {
       return this.entries.find((e) => e.path === projectPath);
     }
 
-    setFederatedRepos(projectPath: string, repos: string[]) {
+    setFederatedRepos(projectPath: string, repos: Array<{ path: string; name: string }>) {
       const entry = this.entries.find((e) => e.path === projectPath);
       if (entry) entry.federatedRepos = repos;
     }
@@ -97,7 +97,7 @@ describe('writeMcpJson', () => {
       hash: 'abc12345',
       name: 'test-project',
       monitoringPort: 7843,
-      federatedRepos: [] as string[],
+      federatedRepos: [] as Array<{ path: string; name: string }>,
       addedAt: new Date().toISOString(),
     };
 
@@ -121,7 +121,10 @@ describe('writeMcpJson', () => {
       hash: 'abc12345',
       name: 'test-project',
       monitoringPort: 7843,
-      federatedRepos: ['/path/to/repo-a', '/path/to/repo-b'],
+      federatedRepos: [
+        { path: '/path/to/repo-a', name: 'repo-a' },
+        { path: '/path/to/repo-b', name: 'repo-b' },
+      ],
       addedAt: new Date().toISOString(),
     };
 
