@@ -408,10 +408,106 @@ function runBenchmark(opts) {
   return { collected, totalCost: costSoFar.usd };
 }
 
+// ─── Report generator ────────────────────────────────────────────────────────
+
+function aggregateCodebase(rows) {
+  let baseTotal = 0, pindexTotal = 0, baseCacheRead = 0, pindexCacheRead = 0, outputDelta = 0;
+  for (const r of rows) {
+    const b = r.baseline ?? {};
+    const p = r.pindex ?? {};
+    baseTotal += (b.input_tokens ?? 0) + (b.cache_read_input_tokens ?? 0);
+    pindexTotal += (p.input_tokens ?? 0) + (p.cache_read_input_tokens ?? 0);
+    baseCacheRead += b.cache_read_input_tokens ?? 0;
+    pindexCacheRead += p.cache_read_input_tokens ?? 0;
+    outputDelta += (p.output_tokens ?? 0) - (b.output_tokens ?? 0);
+  }
+  return {
+    baseTotal,
+    pindexTotal,
+    ratio: baseTotal > 0 ? pindexTotal / baseTotal : null,
+    baseCacheReadShare: baseTotal > 0 ? baseCacheRead / baseTotal : 0,
+    pindexCacheReadShare: pindexTotal > 0 ? pindexCacheRead / pindexTotal : 0,
+    outputDelta,
+  };
+}
+
+function buildReport({ collected, totalCost, opts, capabilities }) {
+  const byCodebase = new Map();
+  for (const r of collected) {
+    if (!byCodebase.has(r.codebase)) byCodebase.set(r.codebase, []);
+    byCodebase.get(r.codebase).push(r);
+  }
+
+  const date = new Date().toISOString().slice(0, 10);
+  const lines = [];
+  lines.push(`# PindeX Realism Benchmark — ${date}`);
+  lines.push('');
+  lines.push(`- Model: \`${opts.model}\``);
+  lines.push(`- N runs per (task, condition): 1 (warm-up discarded)`);
+  lines.push(`- Order alternation: even-indexed tasks BASELINE→PINDEX, odd-indexed PINDEX→BASELINE`);
+  lines.push(`- Cost rates: input \\$${SONNET46_INPUT_PER_M}/M, cache-read \\$${SONNET46_CACHE_READ_PER_M}/M, output \\$${SONNET46_OUTPUT_PER_M}/M`);
+  lines.push(`- Total measured spend: \\$${totalCost.toFixed(3)}`);
+  lines.push(`- Claude CLI capabilities: ${JSON.stringify(capabilities ?? {})}`);
+  lines.push('');
+  lines.push('**Conditions:** BASELINE = vanilla Claude Code (no PindeX MCP server, only native Read/Grep/Glob/Bash). PINDEX = same Claude Code with the PindeX MCP server registered (14 mcp__pindex__* tools available).');
+  lines.push('');
+
+  for (const [codebase, rows] of byCodebase) {
+    lines.push(`## Codebase: ${codebase}`);
+    lines.push('');
+    lines.push('| Task | Baseline input | PindeX input | Ratio | Cache-read share (PindeX) | Output Δ |');
+    lines.push('|---|---:|---:|---:|---:|---:|');
+    for (const r of rows) {
+      const b = r.baseline ?? {};
+      const p = r.pindex ?? {};
+      const baseTot = (b.input_tokens ?? 0) + (b.cache_read_input_tokens ?? 0);
+      const pinTot = (p.input_tokens ?? 0) + (p.cache_read_input_tokens ?? 0);
+      const ratio = baseTot > 0 ? (pinTot / baseTot).toFixed(3) : 'n/a';
+      const pCacheShare = pinTot > 0 ? `${((p.cache_read_input_tokens ?? 0) / pinTot * 100).toFixed(0)}%` : 'n/a';
+      const outDelta = (p.output_tokens ?? 0) - (b.output_tokens ?? 0);
+      const promptShort = r.prompt.slice(0, 64).replace(/\|/g, '\\|');
+      lines.push(`| **${r.id}** ${promptShort}… | ${baseTot.toLocaleString()} | ${pinTot.toLocaleString()} | ${ratio} | ${pCacheShare} | ${outDelta >= 0 ? '+' : ''}${outDelta} |`);
+    }
+    const agg = aggregateCodebase(rows);
+    const aggRatio = agg.ratio !== null ? agg.ratio.toFixed(3) : 'n/a';
+    lines.push(`| **TOTAL** | ${agg.baseTotal.toLocaleString()} | ${agg.pindexTotal.toLocaleString()} | **${aggRatio}** | ${(agg.pindexCacheReadShare * 100).toFixed(0)}% | ${agg.outputDelta >= 0 ? '+' : ''}${agg.outputDelta} |`);
+    lines.push('');
+  }
+
+  lines.push('## Conclusion');
+  lines.push('');
+  for (const [codebase, rows] of byCodebase) {
+    const agg = aggregateCodebase(rows);
+    if (agg.ratio === null) continue;
+    const pct = ((1 - agg.ratio) * 100).toFixed(0);
+    const direction = agg.ratio < 1 ? 'reduces' : 'increases';
+    const sign = agg.ratio < 1 ? '' : '+';
+    lines.push(`- **${codebase}**: PindeX ${direction} total input tokens by ${sign}${pct}% (ratio ${agg.ratio.toFixed(3)}; cache-read share ${(agg.pindexCacheReadShare * 100).toFixed(0)}%).`);
+  }
+  lines.push('');
+  lines.push('## Appendix: per-task answers (excerpts)');
+  lines.push('');
+  for (const [codebase, rows] of byCodebase) {
+    lines.push(`### ${codebase}`);
+    lines.push('');
+    for (const r of rows) {
+      lines.push(`#### ${r.id}: ${r.prompt}`);
+      lines.push('');
+      lines.push(`**Baseline answer:** ${r.baseline?.result_excerpt ?? '<error>'}`);
+      lines.push('');
+      lines.push(`**PindeX answer:** ${r.pindex?.result_excerpt ?? '<error>'}`);
+      lines.push('');
+    }
+  }
+
+  return lines.join('\n');
+}
+
 // ─── Entry point ──────────────────────────────────────────────────────────────
 
 function main() {
   const opts = parseArgs(argv.slice(2));
+  const capabilities = detectClaudeCapabilities();
   const { collected, totalCost } = runBenchmark(opts);
 
   if (opts.dryRun) {
@@ -420,12 +516,26 @@ function main() {
     exit(0);
   }
 
-  const aggPath = join(cwd(), 'benchmarks', 'results', 'raw', 'aggregate.json');
-  mkdirSync(join(cwd(), 'benchmarks', 'results', 'raw'), { recursive: true });
-  writeFileSync(aggPath, JSON.stringify({ collected, totalCost, opts }, null, 2));
+  const rawDir = join(cwd(), 'benchmarks', 'results', 'raw');
+  mkdirSync(rawDir, { recursive: true });
+  writeFileSync(
+    join(rawDir, 'aggregate.json'),
+    JSON.stringify({ collected, totalCost, opts, capabilities }, null, 2),
+  );
 
-  console.log(`[realism] done. total spend: $${totalCost.toFixed(3)}. raw: ${aggPath}`);
-  console.log('[realism] report generation lands in Task 4.');
+  const md = buildReport({ collected, totalCost, opts, capabilities });
+  const date = new Date().toISOString().slice(0, 10);
+  const outPath = join(cwd(), 'benchmarks', 'results', `${date}-realism.md`);
+  let finalPath = outPath;
+  let suffix = 0;
+  while (existsSync(finalPath)) {
+    suffix++;
+    finalPath = outPath.replace(/\.md$/, `-${suffix}.md`);
+  }
+  writeFileSync(finalPath, md);
+
+  console.log(`[realism] done. total spend: \$${totalCost.toFixed(3)}.`);
+  console.log(`[realism] report: ${finalPath}`);
 }
 
 main();
