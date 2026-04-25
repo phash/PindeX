@@ -104,25 +104,36 @@ function detectClaudeCapabilities() {
 const PINDEX_SERVER_BIN = 'pindex-server';
 
 function writeBenchmarkMcpConfigs(targetProjectRoot, baselineMode, mcpDbPath) {
-  // Builds a minimal .mcp.json that points at the indexed DB for the target
-  // codebase and toggles BASELINE_MODE. Returns the path written to.
-  const cfg = {
-    mcpServers: {
-      pindex: {
-        command: PINDEX_SERVER_BIN,
-        args: [],
-        env: {
-          INDEX_PATH: mcpDbPath,
-          PROJECT_ROOT: targetProjectRoot,
-          LANGUAGES: 'typescript,javascript',
-          AUTO_REINDEX: 'false',
-          BASELINE_MODE: baselineMode ? 'true' : 'false',
-          MONITORING_PORT: '0',
-          MONITORING_AUTO_OPEN: 'false',
+  // BASELINE = vanilla Claude Code, NO PindeX MCP server registered.
+  //   The model has only the built-in tools (Read, Grep, Glob, Edit, Bash, etc.).
+  // PINDEX   = Claude Code with the PindeX MCP server, full 14-tool surface.
+  //
+  // This is the contrast that matters for the realism benchmark: does PindeX
+  // save tokens versus a user who has not installed it? PindeX's own
+  // BASELINE_MODE env var is only a session label, so it cannot serve as the
+  // disable mechanism — we use an empty mcpServers block instead.
+  let cfg;
+  if (baselineMode) {
+    cfg = { mcpServers: {} };
+  } else {
+    cfg = {
+      mcpServers: {
+        pindex: {
+          command: PINDEX_SERVER_BIN,
+          args: [],
+          env: {
+            INDEX_PATH: mcpDbPath,
+            PROJECT_ROOT: targetProjectRoot,
+            LANGUAGES: 'typescript,javascript',
+            AUTO_REINDEX: 'false',
+            BASELINE_MODE: 'false',
+            MONITORING_PORT: '0',
+            MONITORING_AUTO_OPEN: 'false',
+          },
         },
       },
-    },
-  };
+    };
+  }
   const filename = baselineMode ? '.benchmark-mcp-baseline.json' : '.benchmark-mcp-pindex.json';
   const path = join(cwd(), filename);
   writeFileSync(path, JSON.stringify(cfg, null, 2));
