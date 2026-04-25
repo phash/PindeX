@@ -201,6 +201,7 @@ export interface SearchSymbolsInput {
   isAsync?: boolean;
   hasTryCatch?: boolean;
   snippet?: boolean;
+  repos?: string[];
 }
 
 export interface SymbolSearchResult {
@@ -213,11 +214,13 @@ export interface SymbolSearchResult {
   isAsync?: boolean;
   hasTryCatch?: boolean;
   snippet?: string;
+  project: string;
 }
 
 export interface GetSymbolInput {
   name: string;
   file?: string;
+  repos?: string[];
 }
 
 export interface MemoryContext {
@@ -237,12 +240,14 @@ export interface GetSymbolOutput {
   isExported: boolean;
   dependencies: string[];
   memory_context?: MemoryContext;
+  project: string;
 }
 
 export interface GetContextInput {
   file: string;
   line: number;
   range?: number;
+  repos?: string[];
 }
 
 export interface GetContextOutput {
@@ -250,10 +255,12 @@ export interface GetContextOutput {
   language: string;
   startLine: number;
   endLine: number;
+  project: string;
 }
 
 export interface GetFileSummaryInput {
   file: string;
+  repos?: string[];
 }
 
 export interface GetFileSummaryOutput {
@@ -265,24 +272,30 @@ export interface GetFileSummaryOutput {
   lineCount?: number;
   tokenEstimate?: number;
   memory_context?: MemoryContext;
+  project: string;
 }
 
 export interface FindUsagesInput {
   symbol: string;
+  repos?: string[];
 }
 
 export interface UsageResult {
   file: string;
   line: number;
   context: string;
+  project: string;
 }
 
 export interface GetDependenciesInput {
   target: string;
   direction?: 'imports' | 'imported_by' | 'both';
+  repos?: string[];
 }
 
 export interface GetDependenciesOutput {
+  file: string;
+  project: string;
   imports: string[];
   importedBy: string[];
 }
@@ -296,6 +309,7 @@ export interface SessionMemorySummary {
 
 export interface GetProjectOverviewInput {
   mode?: 'brief' | 'full';
+  repos?: string[];
 }
 
 export interface GetApiEndpointsOutput {
@@ -319,17 +333,20 @@ export interface IndexRecommendation {
   breakEvenFiles: number;
 }
 
-export interface GetProjectOverviewOutput {
+export interface ProjectOverviewSnapshot {
+  project: string;
   rootPath: string;
   language: string;
   entryPoints: string[];
   modules: Array<{ path: string; summary: string | null; symbolCount: number }>;
   stats: { totalFiles: number; totalSymbols: number };
-  /** Present when the server is configured with FEDERATION_REPOS */
-  federatedProjects?: Array<{ rootPath: string; stats: { totalFiles: number; totalSymbols: number } }>;
   session_memory?: SessionMemorySummary;
-  /** Cost-benefit analysis: should Claude use index tools or fall back to direct reads? */
   index_recommendation?: IndexRecommendation;
+}
+
+export interface GetProjectOverviewOutput extends ProjectOverviewSnapshot {
+  /** Present when the server is configured with FEDERATION_REPOS */
+  federated_projects?: ProjectOverviewSnapshot[];
 }
 
 export interface ReindexInput {
@@ -376,12 +393,14 @@ export interface SearchDocsInput {
   query: string;
   limit?: number;
   type?: 'docs' | 'context' | 'all';
+  repos?: string[];
 }
 
 export interface DocSearchResult {
   type: 'doc' | 'context';
   id: number;
   content_preview: string;
+  project: string;
   /** Present for type='doc' */
   file?: string;
   /** Present for type='doc' */
@@ -399,6 +418,7 @@ export interface DocSearchResult {
 export interface GetDocChunkInput {
   file: string;
   chunk_index?: number;
+  repos?: string[];
 }
 
 export interface DocChunk {
@@ -413,6 +433,7 @@ export interface GetDocChunkOutput {
   file: string;
   total_chunks: number;
   chunks: DocChunk[];
+  project: string;
 }
 
 export interface SaveContextInput {

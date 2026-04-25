@@ -15,7 +15,7 @@ export function writeMcpJson(
 ): void {
   const federationEnv =
     entry.federatedRepos.length > 0
-      ? { FEDERATION_REPOS: entry.federatedRepos.join(':') }
+      ? { FEDERATION_REPOS: entry.federatedRepos.map((r) => r.path).join(':') }
       : {};
 
   const config = {
@@ -259,7 +259,7 @@ export async function initProject(cwd: string): Promise<void> {
   console.log('  2. Open the dashboard:  pindex-gui');
   if (entry.federatedRepos.length > 0) {
     console.log(`\n  Federated repos (${entry.federatedRepos.length}):`);
-    for (const r of entry.federatedRepos) console.log(`    - ${r}`);
+    for (const r of entry.federatedRepos) console.log(`    - ${r.name}  ${r.path}`);
   }
   console.log('\n  ══════════════════════════════════════════\n');
 }
@@ -350,19 +350,26 @@ export async function addFederatedRepo(cwd: string, repoPath: string): Promise<v
   const currentEntry = registry.upsert(projectRoot);
   const existing = currentEntry.federatedRepos;
 
-  if (existing.includes(resolvedRepo)) {
+  if (existing.some((r) => r.path === resolvedRepo)) {
     console.log(`Already linked: ${resolvedRepo}`);
     return;
   }
 
-  const updated = [...existing, resolvedRepo];
+  // Resolve a name for the newly federated repo
+  const targetEntry = registry.getByPath(resolvedRepo);
+  const usedNames = new Set<string>([currentEntry.name, ...existing.map((r) => r.name)]);
+  const { assignName: _assignName } = await import('../federation/registry-name.js');
+  const repoName = targetEntry?.name && !usedNames.has(targetEntry.name)
+    ? targetEntry.name
+    : _assignName(resolvedRepo, usedNames);
+
+  const updated = [...existing, { path: resolvedRepo, name: repoName }];
   registry.setFederatedRepos(projectRoot, updated);
 
   // Re-read to get the updated entry
   const updatedEntry = registry.getByPath(projectRoot)!;
   writeMcpJson(projectRoot, updatedEntry);
 
-  const repoName = basename(resolvedRepo);
   console.log(`\n  ✓ Linked: ${repoName}  (${resolvedRepo})`);
   console.log('  .mcp.json updated with FEDERATION_REPOS.\n');
   console.log('  Restart Claude Code to activate cross-repo search.\n');
@@ -381,7 +388,7 @@ export async function removeFederatedRepo(cwd: string, repoPath: string): Promis
     process.exit(1);
   }
 
-  const updated = entry.federatedRepos.filter((r) => r !== resolvedRepo);
+  const updated = entry.federatedRepos.filter((r) => r.path !== resolvedRepo);
   registry.setFederatedRepos(projectRoot, updated);
 
   const updatedEntry = registry.getByPath(projectRoot)!;

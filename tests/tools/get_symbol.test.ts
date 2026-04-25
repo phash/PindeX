@@ -3,6 +3,7 @@ import type Database from 'better-sqlite3';
 import { createTestDb } from '../helpers/db.js';
 import { insertTestFile, insertTestSymbol, insertTestDependency } from '../helpers/fixtures.js';
 import { getSymbol } from '../../src/tools/get_symbol.js';
+import { makeFederatedTestRepoSet, makeTestRepoSet } from '../helpers/repo-set.js';
 
 describe('getSymbol', () => {
   let db: Database.Database;
@@ -23,40 +24,69 @@ describe('getSymbol', () => {
   });
 
   it('returns symbol details by name', () => {
-    const result = getSymbol(db, { name: 'AuthService' });
-    expect(result).not.toBeNull();
-    expect(result!.name).toBe('AuthService');
-    expect(result!.kind).toBe('class');
-    expect(result!.file).toBe('src/auth.ts');
-    expect(result!.startLine).toBe(5);
-    expect(result!.endLine).toBe(50);
-    expect(result!.isExported).toBe(true);
+    const results = getSymbol(makeTestRepoSet(db), { name: 'AuthService' });
+    expect(results).toHaveLength(1);
+    expect(results[0].name).toBe('AuthService');
+    expect(results[0].kind).toBe('class');
+    expect(results[0].file).toBe('src/auth.ts');
+    expect(results[0].startLine).toBe(5);
+    expect(results[0].endLine).toBe(50);
+    expect(results[0].isExported).toBe(true);
   });
 
-  it('returns null when symbol is not found', () => {
-    const result = getSymbol(db, { name: 'NonExistent' });
-    expect(result).toBeNull();
+  it('returns empty array when symbol is not found', () => {
+    const results = getSymbol(makeTestRepoSet(db), { name: 'NonExistent' });
+    expect(results).toEqual([]);
   });
 
   it('filters by file when specified', () => {
     const otherFileId = insertTestFile(db, { path: 'src/other.ts' });
     insertTestSymbol(db, { fileId: otherFileId, name: 'AuthService', kind: 'class', signature: 'class AuthService' });
 
-    const result = getSymbol(db, { name: 'AuthService', file: 'src/auth.ts' });
-    expect(result).not.toBeNull();
-    expect(result!.file).toBe('src/auth.ts');
+    const results = getSymbol(makeTestRepoSet(db), { name: 'AuthService', file: 'src/auth.ts' });
+    expect(results).toHaveLength(1);
+    expect(results[0].file).toBe('src/auth.ts');
   });
 
   it('includes dependencies array', () => {
     const depFileId = insertTestFile(db, { path: 'src/utils.ts' });
     insertTestDependency(db, fileId, depFileId, 'Helper');
 
-    const result = getSymbol(db, { name: 'AuthService' });
-    expect(Array.isArray(result!.dependencies)).toBe(true);
+    const results = getSymbol(makeTestRepoSet(db), { name: 'AuthService' });
+    expect(Array.isArray(results[0].dependencies)).toBe(true);
   });
 
   it('returns signature', () => {
-    const result = getSymbol(db, { name: 'AuthService' });
-    expect(result!.signature).toBe('class AuthService');
+    const results = getSymbol(makeTestRepoSet(db), { name: 'AuthService' });
+    expect(results[0].signature).toBe('class AuthService');
+  });
+});
+
+describe('getSymbol — federation', () => {
+  it('returns one entry per repo when the same name exists in multiple repos', () => {
+    const primaryDb = createTestDb();
+    const federatedDb = createTestDb();
+    insertTestSymbol(primaryDb, {
+      fileId: insertTestFile(primaryDb, { path: 'src/auth.ts' }),
+      name: 'AuthService',
+    });
+    insertTestSymbol(federatedDb, {
+      fileId: insertTestFile(federatedDb, { path: 'src/auth.ts' }),
+      name: 'AuthService',
+    });
+
+    const repoSet = makeFederatedTestRepoSet(
+      { db: primaryDb, name: 'main' },
+      [{ db: federatedDb, name: 'auth' }],
+    );
+
+    const results = getSymbol(repoSet, { name: 'AuthService' });
+    expect(results).toHaveLength(2);
+    expect(results.map((r) => r.project).sort()).toEqual(['auth', 'main']);
+  });
+
+  it('returns an empty array when the symbol is in no repo', () => {
+    const repoSet = makeTestRepoSet(createTestDb(), 'main');
+    expect(getSymbol(repoSet, { name: 'Nope' })).toEqual([]);
   });
 });

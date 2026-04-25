@@ -15,6 +15,7 @@ import { EventEmitter } from 'node:events';
 import { v4 as uuidv4 } from 'uuid';
 import type Database from 'better-sqlite3';
 import { createTestDb } from '../helpers/db.js';
+import { makeTestRepoSet } from '../helpers/repo-set.js';
 import { Indexer } from '../../src/indexer/index.js';
 import { TokenLogger } from '../../src/monitoring/token-logger.js';
 import { createMcpServer } from '../../src/server.js';
@@ -219,7 +220,7 @@ describe('Document Indexing Integration', () => {
   it('search_docs finds the relevant markdown section', async () => {
     await indexer.indexAll();
 
-    const results = searchDocs(db, { query: 'JWT authentication', type: 'docs' });
+    const results = searchDocs(makeTestRepoSet(db), { query: 'JWT authentication', type: 'docs' });
     expect(results.length).toBeGreaterThan(0);
 
     const authResult = results.find((r) => r.heading === 'Authentication');
@@ -232,7 +233,7 @@ describe('Document Indexing Integration', () => {
     await indexer.indexAll();
 
     // Use a word unique to architecture.yaml (not in any .md file in the fixture)
-    const results = searchDocs(db, { query: 'express', type: 'docs' });
+    const results = searchDocs(makeTestRepoSet(db), { query: 'express', type: 'docs' });
     expect(results.length).toBeGreaterThan(0);
     expect(results[0].file).toContain('architecture.yaml');
   });
@@ -240,7 +241,7 @@ describe('Document Indexing Integration', () => {
   it('search_docs finds content in TXT decision log', async () => {
     await indexer.indexAll();
 
-    const results = searchDocs(db, { query: 'SQLite PostgreSQL', type: 'docs' });
+    const results = searchDocs(makeTestRepoSet(db), { query: 'SQLite PostgreSQL', type: 'docs' });
     expect(results.length).toBeGreaterThan(0);
     expect(results[0].file).toContain('decisions.txt');
   });
@@ -248,7 +249,7 @@ describe('Document Indexing Integration', () => {
   it('search_docs returns start_line for navigation', async () => {
     await indexer.indexAll();
 
-    const results = searchDocs(db, { query: 'Redis', type: 'docs' });
+    const results = searchDocs(makeTestRepoSet(db), { query: 'Redis', type: 'docs' });
     expect(results.length).toBeGreaterThan(0);
     expect(typeof results[0].start_line).toBe('number');
     expect(results[0].start_line).toBeGreaterThan(0);
@@ -259,31 +260,33 @@ describe('Document Indexing Integration', () => {
   it('get_doc_chunk returns all chunks for a file', async () => {
     await indexer.indexAll();
 
-    const result = getDocChunk(db, { file: 'CLAUDE.md' });
-    expect(result).not.toBeNull();
-    expect(result!.total_chunks).toBeGreaterThan(2);
-    expect(result!.chunks.length).toBe(result!.total_chunks);
+    const results = getDocChunk(makeTestRepoSet(db), { file: 'CLAUDE.md' });
+    expect(results).toHaveLength(1);
+    const result = results[0];
+    expect(result.total_chunks).toBeGreaterThan(2);
+    expect(result.chunks.length).toBe(result.total_chunks);
   });
 
   it('get_doc_chunk returns only the requested chunk', async () => {
     await indexer.indexAll();
 
     // Find the Authentication chunk index
-    const all = getDocChunk(db, { file: 'CLAUDE.md' });
-    const authChunk = all!.chunks.find((c) => c.heading === 'Authentication');
+    const allResults = getDocChunk(makeTestRepoSet(db), { file: 'CLAUDE.md' });
+    expect(allResults).toHaveLength(1);
+    const authChunk = allResults[0].chunks.find((c) => c.heading === 'Authentication');
     expect(authChunk).toBeDefined();
 
     // Fetch only that chunk
-    const single = getDocChunk(db, { file: 'CLAUDE.md', chunk_index: authChunk!.index });
-    expect(single).not.toBeNull();
-    expect(single!.chunks).toHaveLength(1);
-    expect(single!.chunks[0].content).toContain('JWT');
-    expect(single!.chunks[0].content).toContain('Redis');
+    const singleResults = getDocChunk(makeTestRepoSet(db), { file: 'CLAUDE.md', chunk_index: authChunk!.index });
+    expect(singleResults).toHaveLength(1);
+    expect(singleResults[0].chunks).toHaveLength(1);
+    expect(singleResults[0].chunks[0].content).toContain('JWT');
+    expect(singleResults[0].chunks[0].content).toContain('Redis');
   });
 
-  it('get_doc_chunk returns null for an unindexed file', () => {
-    const result = getDocChunk(db, { file: 'nonexistent.md' });
-    expect(result).toBeNull();
+  it('get_doc_chunk returns empty array for an unindexed file', () => {
+    const result = getDocChunk(makeTestRepoSet(db), { file: 'nonexistent.md' });
+    expect(result).toEqual([]);
   });
 
   // ── 4. save_context + search_docs(context) ──────────────────────────────────
@@ -299,7 +302,7 @@ describe('Document Indexing Integration', () => {
     expect(saved.id).toBeGreaterThan(0);
     expect(saved.session_id).toBe(sessionId);
 
-    const results = searchDocs(db, { query: 'JWT token expiry', type: 'context' });
+    const results = searchDocs(makeTestRepoSet(db), { query: 'JWT token expiry', type: 'context' });
     expect(results.length).toBeGreaterThan(0);
     expect(results[0].type).toBe('context');
     expect(results[0].content_preview).toContain('JWT');
@@ -314,7 +317,7 @@ describe('Document Indexing Integration', () => {
     });
 
     // FTS5 tokenizes on hyphens — search by a plain tag word
-    const results = searchDocs(db, { query: 'redis', type: 'context' });
+    const results = searchDocs(makeTestRepoSet(db), { query: 'redis', type: 'context' });
     expect(results.length).toBeGreaterThan(0);
     expect(results[0].tags).toContain('redis');
   });
@@ -331,7 +334,7 @@ describe('Document Indexing Integration', () => {
     const sessionB = uuidv4();
     expect(sessionB).not.toBe(sessionA);
 
-    const results = searchDocs(db, { query: 'deterministic port', type: 'context' });
+    const results = searchDocs(makeTestRepoSet(db), { query: 'deterministic port', type: 'context' });
     expect(results.length).toBeGreaterThan(0);
     // Entry was created by sessionA but is visible to sessionB
     expect(results[0].session_id).toBe(sessionA);
@@ -350,7 +353,7 @@ describe('Document Indexing Integration', () => {
     });
 
     // "authentication" appears in CLAUDE.md AND in the saved context
-    const results = searchDocs(db, { query: 'authentication', type: 'all' });
+    const results = searchDocs(makeTestRepoSet(db), { query: 'authentication', type: 'all' });
     expect(results.length).toBeGreaterThan(0);
 
     const types = results.map((r) => r.type);
@@ -367,7 +370,7 @@ describe('Document Indexing Integration', () => {
       saveContext(db, sessionId, { content: `SQLite configuration note ${i}` });
     }
 
-    const results = searchDocs(db, { query: 'SQLite', limit: 3 });
+    const results = searchDocs(makeTestRepoSet(db), { query: 'SQLite', limit: 3 });
     expect(results.length).toBeLessThanOrEqual(3);
   });
 
@@ -431,9 +434,12 @@ describe('Document Indexing Integration', () => {
     if (!handler) return;
 
     const result = await callTool(server, 'get_doc_chunk', { file: 'CLAUDE.md' }) as any;
-    expect(result.file).toBe('CLAUDE.md');
-    expect(result.total_chunks).toBeGreaterThan(0);
-    expect(Array.isArray(result.chunks)).toBe(true);
+    // Result is now an array of per-repo entries
+    expect(Array.isArray(result)).toBe(true);
+    expect(result.length).toBeGreaterThan(0);
+    expect(result[0].file).toBe('CLAUDE.md');
+    expect(result[0].total_chunks).toBeGreaterThan(0);
+    expect(Array.isArray(result[0].chunks)).toBe(true);
   });
 
   // ── 7. Full Claude workflow simulation ──────────────────────────────────────
@@ -443,20 +449,19 @@ describe('Document Indexing Integration', () => {
     const sessionId = uuidv4();
 
     // Step 1: Claude searches for authentication info
-    const searchResults = searchDocs(db, { query: 'authentication JWT', type: 'docs' });
+    const repoSet = makeTestRepoSet(db);
+    const searchResults = searchDocs(repoSet, { query: 'authentication JWT', type: 'docs' });
     expect(searchResults.length).toBeGreaterThan(0);
     const authSection = searchResults.find((r) => r.heading === 'Authentication');
     expect(authSection).toBeDefined();
 
     // Step 2: Claude reads the specific chunk (token-efficient)
-    const chunkResult = getDocChunk(db, {
+    const chunkResults = getDocChunk(repoSet, {
       file: authSection!.file!,
-      chunk_index: searchResults[0].start_line !== undefined
-        ? undefined  // fetch all to find the right one
-        : undefined,
+      chunk_index: undefined,  // fetch all to find the right one
     });
-    expect(chunkResult).not.toBeNull();
-    const authChunk = chunkResult!.chunks.find((c) => c.heading === 'Authentication');
+    expect(chunkResults).toHaveLength(1);
+    const authChunk = chunkResults[0].chunks.find((c) => c.heading === 'Authentication');
     expect(authChunk!.content).toContain('JWT');
 
     // Step 3: Claude saves a derived decision to context memory
@@ -468,7 +473,7 @@ describe('Document Indexing Integration', () => {
 
     // Step 4: In a later session, Claude retrieves the decision without re-reading CLAUDE.md
     const laterSessionId = uuidv4();
-    const ctxResults = searchDocs(db, { query: 'JWT expiry confirmed', type: 'context' });
+    const ctxResults = searchDocs(repoSet, { query: 'JWT expiry confirmed', type: 'context' });
     expect(ctxResults.length).toBeGreaterThan(0);
     expect(ctxResults[0].content_preview).toContain('JWT');
     // The entry was created by sessionId but found by laterSessionId

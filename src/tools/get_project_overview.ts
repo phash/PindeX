@@ -1,26 +1,32 @@
 import type Database from 'better-sqlite3';
-import type { GetProjectOverviewInput, GetProjectOverviewOutput, IndexRecommendation, SessionMemorySummary } from '../types.js';
+import type {
+  GetProjectOverviewInput,
+  GetProjectOverviewOutput,
+  ProjectOverviewSnapshot,
+  IndexRecommendation,
+  SessionMemorySummary,
+} from '../types.js';
 import {
   getAllFiles,
   countStaleObservations,
   countPriorSessions,
   getAntiPatternEvents,
 } from '../db/queries.js';
-import type { FederatedDb } from '../server.js';
+import type { RepoSet } from '../federation/repo-set.js';
 
-export function getProjectOverview(
+function buildSnapshot(
   db: Database.Database,
-  projectRoot: string,
-  federatedDbs: FederatedDb[] = [],
-  sessionId?: string,
-  input?: GetProjectOverviewInput,
-): GetProjectOverviewOutput {
-  const mode = input?.mode ?? 'full';
+  name: string,
+  sessionId: string,
+  projectRoot?: string,
+  mode: 'brief' | 'full' = 'full',
+): ProjectOverviewSnapshot {
   const files = getAllFiles(db);
 
   if (files.length === 0) {
     return {
-      rootPath: projectRoot,
+      project: name,
+      rootPath: projectRoot ?? '',
       language: 'unknown',
       entryPoints: [],
       modules: [],
@@ -69,15 +75,16 @@ export function getProjectOverview(
     }));
   }
 
-  const primaryResult: GetProjectOverviewOutput = {
-    rootPath: projectRoot,
+  const snapshot: ProjectOverviewSnapshot = {
+    project: name,
+    rootPath: projectRoot ?? '',
     language,
     entryPoints,
     modules,
     stats: { totalFiles: files.length, totalSymbols },
   };
 
-  // Session memory summary (passive surfacing)
+  // Session memory summary (passive surfacing) — only for primary
   if (sessionId) {
     const staleCount = countStaleObservations(db);
     const priorSessions = countPriorSessions(db, sessionId);
@@ -93,21 +100,16 @@ export function getProjectOverview(
       active_anti_patterns: antiPatterns,
       hint: hasContext ? 'call get_session_memory for details' : null,
     };
-    primaryResult.session_memory = session_memory;
+    snapshot.session_memory = session_memory;
   }
 
   // ── Index recommendation ──────────────────────────────────────────────────
-  // Estimate whether using PindeX tools saves tokens vs direct file reads.
-  // Break-even: tool-def overhead (~800 tokens/turn × ~6 turns = ~5K) vs
-  // savings from avoiding full-file reads (avgFileTokens × avoidsPerSession).
-  // Heuristic thresholds tuned against benchmark data.
   const BREAK_EVEN_FILES = 40;
   const BREAK_EVEN_AVG_LINES = 150;
   const tokenRow = db.prepare(
     'SELECT COALESCE(SUM(raw_token_estimate), 0) as total FROM files'
   ).get() as { total: number };
   const avgFileTokens = files.length > 0 ? (tokenRow.total as number) / files.length : 0;
-  // 1 token ≈ 4 chars ≈ 1/50 line (assuming ~200 chars/line avg)
   const avgFileLinesEstimate = Math.round(avgFileTokens * 4 / 50);
   const worthwhile = files.length >= BREAK_EVEN_FILES || avgFileLinesEstimate >= BREAK_EVEN_AVG_LINES;
 
@@ -119,16 +121,36 @@ export function getProjectOverview(
     avgFileLinesEstimate,
     breakEvenFiles: BREAK_EVEN_FILES,
   };
-  primaryResult.index_recommendation = recommendation;
+  snapshot.index_recommendation = recommendation;
 
-  if (federatedDbs.length === 0) return primaryResult;
+  return snapshot;
+}
 
-  // Append per-federated-repo stats
-  const federatedProjects = federatedDbs.map(({ path, db: fedDb }) => {
-    const fedFiles = getAllFiles(fedDb);
-    const fedTotalSymbols = (fedDb.prepare('SELECT COUNT(*) as cnt FROM symbols').get() as { cnt: number }).cnt;
-    return { rootPath: path, stats: { totalFiles: fedFiles.length, totalSymbols: fedTotalSymbols } };
-  });
+export function getProjectOverview(
+  repoSet: RepoSet,
+  primaryProjectRoot: string,
+  sessionId: string = 'default',
+  input?: GetProjectOverviewInput,
+): GetProjectOverviewOutput {
+  const mode = input?.mode ?? 'full';
+  const repos = repoSet.filter(input?.repos);
+  const primary = repoSet.primary;
 
-  return { ...primaryResult, federatedProjects } as GetProjectOverviewOutput;
+  const snapshots = repos.map((repo) =>
+    buildSnapshot(
+      repo.db,
+      repo.name,
+      repo.isPrimary ? sessionId : '',
+      repo.isPrimary ? primaryProjectRoot : repo.path,
+      mode,
+    )
+  );
+
+  const primarySnap = snapshots.find((s) => s.project === primary.name) ?? snapshots[0];
+  const federated = snapshots.filter((s) => s !== primarySnap);
+
+  return {
+    ...primarySnap,
+    federated_projects: federated.length > 0 ? federated : undefined,
+  };
 }

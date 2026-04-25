@@ -14,6 +14,7 @@ export default defineConfig({
       'dist/**',
       'tests/integration/parse-pool-workers.test.ts',
       'tests/integration/lsp-python-live.test.ts',
+      'tests/integration/federation-e2e.test.ts',
     ],
     coverage: {
       provider: 'v8',

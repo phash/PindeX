@@ -24,11 +24,15 @@ import { getSessionMemory } from './tools/get_session_memory.js';
 import { getApiEndpoints } from './tools/get_api_endpoints.js';
 import type { SessionObserver } from './memory/observer.js';
 import { TOOL_SCHEMAS } from './tools/schemas.js';
+import { RepoSet } from './federation/repo-set.js';
 import type {
   SearchSymbolsInput,
   GetSymbolInput,
+  GetSymbolOutput,
   GetContextInput,
+  GetContextOutput,
   GetFileSummaryInput,
+  GetFileSummaryOutput,
   FindUsagesInput,
   GetDependenciesInput,
   GetProjectOverviewInput,
@@ -37,6 +41,7 @@ import type {
   StartComparisonInput,
   SearchDocsInput,
   GetDocChunkInput,
+  GetDocChunkOutput,
   SaveContextInput,
   GetSessionMemoryInput,
 } from './types.js';
@@ -236,6 +241,8 @@ const CORE_TOOL_NAMES = new Set([
 
 /** A secondary project whose index is searched alongside the primary DB (federation). */
 export interface FederatedDb {
+  /** Human-readable name for this repo (populated from GlobalRegistry or assignName()). */
+  name: string;
   /** Absolute path to the federated project root (used for result attribution). */
   path: string;
   /** Open SQLite connection to the federated project's index.db. */
@@ -259,6 +266,9 @@ export interface ServerOptions {
   sessionId?: string;
   /** Passive observer that records tool calls for session memory generation. */
   observer?: SessionObserver;
+  /** Name for the primary (local) repo. Required so RepoSet has a stable
+   *  identity for it in tool results. Provided by index.ts at startup. */
+  primaryName?: string;
 }
 
 /**
@@ -297,6 +307,14 @@ export function createMcpServer(
   );
 
   const { projectRoot, monitoringPort = 7842, baselineMode = false, federatedDbs = [], sessionId = 'default', observer } = options;
+
+  const primaryName = options.primaryName ?? 'local';
+  const repoSet = RepoSet.fromServerConfig(
+    db,
+    primaryName,
+    federatedDbs.map((f) => ({ name: f.name, path: f.path, db: f.db })),
+    projectRoot,
+  );
 
   // ─── List Tools ────────────────────────────────────────────────────────────
 
@@ -345,37 +363,37 @@ export function createMcpServer(
     try {
       switch (name) {
         case 'search_symbols': {
-          result = searchSymbols(db, args as SearchSymbolsInput, federatedDbs, projectRoot);
+          result = searchSymbols(repoSet, args as SearchSymbolsInput);
           heuristicMultiplier = 10;
           break;
         }
         case 'get_symbol': {
-          result = getSymbol(db, args as GetSymbolInput);
-          heuristicMultiplier = result ? 15 : 0;
+          result = getSymbol(repoSet, args as GetSymbolInput);
+          heuristicMultiplier = (result as GetSymbolOutput[]).length > 0 ? 15 : 0;
           break;
         }
         case 'get_context': {
-          result = await getContext(db, projectRoot, args as GetContextInput);
-          heuristicMultiplier = result ? 5 : 0;
+          result = await getContext(repoSet, args as GetContextInput);
+          heuristicMultiplier = (result as GetContextOutput[]).length > 0 ? 5 : 0;
           break;
         }
         case 'get_file_summary': {
-          result = getFileSummary(db, args as GetFileSummaryInput);
-          heuristicMultiplier = result ? 8 : 0;
+          result = getFileSummary(repoSet, args as GetFileSummaryInput);
+          heuristicMultiplier = (result as GetFileSummaryOutput[]).length > 0 ? 8 : 0;
           break;
         }
         case 'find_usages': {
-          result = findUsages(db, args as FindUsagesInput);
+          result = findUsages(repoSet, args as FindUsagesInput);
           heuristicMultiplier = 10;
           break;
         }
         case 'get_dependencies': {
-          result = getDependencies(db, args as GetDependenciesInput);
+          result = getDependencies(repoSet, args as GetDependenciesInput);
           heuristicMultiplier = 10;
           break;
         }
         case 'get_project_overview': {
-          result = getProjectOverview(db, projectRoot, federatedDbs, sessionId, args as GetProjectOverviewInput);
+          result = getProjectOverview(repoSet, projectRoot, sessionId, args as GetProjectOverviewInput);
           heuristicMultiplier = 5;
           break;
         }
@@ -397,13 +415,13 @@ export function createMcpServer(
           break;
         }
         case 'search_docs': {
-          result = searchDocs(db, args as SearchDocsInput);
+          result = searchDocs(repoSet, args as SearchDocsInput);
           heuristicMultiplier = 8;
           break;
         }
         case 'get_doc_chunk': {
-          result = getDocChunk(db, args as GetDocChunkInput);
-          heuristicMultiplier = result ? 3 : 0;
+          result = getDocChunk(repoSet, args as GetDocChunkInput);
+          heuristicMultiplier = (result as GetDocChunkOutput[]).length > 0 ? 3 : 0;
           break;
         }
         case 'save_context': {

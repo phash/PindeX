@@ -358,6 +358,44 @@ describe('GetSessionMemorySchema', () => {
   });
 });
 
+// ─── repos param on federation-aware tool schemas ──────────────────────
+
+describe('repos param on federation-aware tool schemas', () => {
+  it('accepts repos as an optional string[]', async () => {
+    const schemas = await import('../../src/tools/schemas.js');
+    const SCHEMAS = [
+      'SearchSymbolsSchema',
+      'GetSymbolSchema',
+      'GetContextSchema',
+      'GetFileSummarySchema',
+      'FindUsagesSchema',
+      'GetDependenciesSchema',
+      'GetProjectOverviewSchema',
+      'SearchDocsSchema',
+      'GetDocChunkSchema',
+    ] as const;
+
+    const baseValid: Record<string, Record<string, unknown>> = {
+      SearchSymbolsSchema: { query: 'x' },
+      GetSymbolSchema: { name: 'x' },
+      GetContextSchema: { file: 'x.ts', line: 1 },
+      GetFileSummarySchema: { file: 'x.ts' },
+      FindUsagesSchema: { symbol: 'x' },
+      GetDependenciesSchema: { target: 'x.ts' },
+      GetProjectOverviewSchema: {},
+      SearchDocsSchema: { query: 'x' },
+      GetDocChunkSchema: { file: 'docs/x.md', chunk_index: 0 },
+    };
+
+    for (const name of SCHEMAS) {
+      const schema = (schemas as never as Record<string, { safeParse: (v: unknown) => { success: boolean } }>)[name];
+      expect(schema, `${name} export missing`).toBeDefined();
+      const ok = schema.safeParse({ ...baseValid[name], repos: ['a', 'b'] });
+      expect(ok.success, `${name} should accept repos: string[]`).toBe(true);
+    }
+  });
+});
+
 // ─── TOOL_SCHEMAS map ───────────────────────────────────────────────────────
 
 describe('TOOL_SCHEMAS', () => {

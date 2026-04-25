@@ -16,6 +16,7 @@ import {
   hashProjectPath,
 } from './project-detector.js';
 import { initProject, addFederatedRepo, removeFederatedRepo, injectClaudeMdSection, injectClaudeSettings, removeClaudeMdSection, removeClaudeSettings, removeMcpJson, writeMcpJson, injectGitignore } from './init.js';
+import { federateAdd, federateRemove, federateList } from './federate.js';
 import Database from 'better-sqlite3';
 
 const BREAK_EVEN_FILES = 40;
@@ -295,6 +296,45 @@ async function main(): Promise<void> {
         await stopDaemon(p.hash);
       }
       console.log(`Done. You can remove ~/.pindex (registry) and each project's .pindex/ folder manually to wipe all data.`);
+      break;
+    }
+
+    case 'federate': {
+      const sub = args[0];
+      try {
+        switch (sub) {
+          case 'add': {
+            const targetPath = args[1];
+            if (!targetPath) {
+              console.error('Usage: pindex federate add <path> [--name <name>]');
+              process.exit(1);
+            }
+            const nameFlag = args.indexOf('--name');
+            const name = nameFlag !== -1 ? args[nameFlag + 1] : undefined;
+            await federateAdd(process.cwd(), targetPath, { name });
+            break;
+          }
+          case 'remove': {
+            const target = args[1];
+            if (!target) {
+              console.error('Usage: pindex federate remove <name|path>');
+              process.exit(1);
+            }
+            await federateRemove(process.cwd(), target);
+            break;
+          }
+          case 'list': {
+            await federateList(process.cwd());
+            break;
+          }
+          default:
+            console.error(`Unknown federate subcommand: ${sub ?? '(none)'}. Use add | remove | list.`);
+            process.exit(1);
+        }
+      } catch (err: unknown) {
+        console.error('Error:', err instanceof Error ? err.message : err);
+        process.exit(1);
+      }
       break;
     }
 
