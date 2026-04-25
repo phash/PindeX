@@ -255,6 +255,7 @@ export interface GetContextOutput {
   language: string;
   startLine: number;
   endLine: number;
+  project: string;
 }
 
 export interface GetFileSummaryInput {
@@ -271,6 +272,7 @@ export interface GetFileSummaryOutput {
   lineCount?: number;
   tokenEstimate?: number;
   memory_context?: MemoryContext;
+  project: string;
 }
 
 export interface FindUsagesInput {

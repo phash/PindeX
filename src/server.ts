@@ -30,7 +30,9 @@ import type {
   GetSymbolInput,
   GetSymbolOutput,
   GetContextInput,
+  GetContextOutput,
   GetFileSummaryInput,
+  GetFileSummaryOutput,
   FindUsagesInput,
   GetDependenciesInput,
   GetProjectOverviewInput,
@@ -370,13 +372,13 @@ export function createMcpServer(
           break;
         }
         case 'get_context': {
-          result = await getContext(db, projectRoot, args as GetContextInput);
-          heuristicMultiplier = result ? 5 : 0;
+          result = await getContext(repoSet, args as GetContextInput);
+          heuristicMultiplier = (result as GetContextOutput[]).length > 0 ? 5 : 0;
           break;
         }
         case 'get_file_summary': {
-          result = getFileSummary(db, args as GetFileSummaryInput);
-          heuristicMultiplier = result ? 8 : 0;
+          result = getFileSummary(repoSet, args as GetFileSummaryInput);
+          heuristicMultiplier = (result as GetFileSummaryOutput[]).length > 0 ? 8 : 0;
           break;
         }
         case 'find_usages': {
