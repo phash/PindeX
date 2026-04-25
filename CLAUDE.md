@@ -164,6 +164,10 @@ PINDEX_PARSE_WORKERS=                           # parse workers (0=sync, empty=a
 PINDEX_BIND_HOST=127.0.0.1                      # bind host (loopback default)
 PINDEX_LSP=true                                 # opt-in LSP parsing for Python ('false' = force regex)
 FEDERATION_REPOS=/path/a:/path/b               # colon-separated extra repos (optional)
+# Federation CLI: configure via 'pindex federate add/remove/list' (preferred over editing FEDERATION_REPOS by hand).
+# 9 read-only tools (search_symbols, find_usages, get_symbol, get_file_summary, get_context,
+# get_dependencies, get_project_overview, search_docs, get_doc_chunk) accept an optional
+# `repos: string[]` param to scope to specific federated repos.
 ```
 
 ## Claude Code Setup

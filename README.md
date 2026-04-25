@@ -221,31 +221,47 @@ cd /project-b && pindex   # registers project-b, different port + different DB
 
 ### Linking repos (federation)
 
-If you work on a monorepo split into separate repositories, or if one project imports types from another, you can link them:
+Federate other indexed PindeX projects into the current project so all read-only tools can search across them in one query.
+
+**CLI commands:**
 
 ```bash
-cd /project-a
-pindex add /project-b
+cd /my/main-project
+pindex federate add /path/to/other-repo
+pindex federate list
+pindex federate remove other-repo
 ```
 
-This updates `/project-a/.mcp.json` with `FEDERATION_REPOS=/project-b`. After restarting Claude Code in Project A, the MCP tools search **both** codebases:
+Federated repos appear under stable names (the directory basename, with a hash suffix on collision). Every search/lookup tool returns results tagged with `project: <name>`.
 
-- `search_symbols` returns results from both projects (federated results include a `project` field)
-- `get_project_overview` shows stats for all linked projects
+**Scoping queries to federated repos:**
 
-Add more repos at any time:
+To scope a query to a subset of federated repos, use the optional `repos` parameter in any read-only tool:
+
+```jsonc
+// MCP tool call (example)
+search_symbols({ "query": "AuthService", "repos": ["main", "auth-service"] })
+```
+
+The `repos` parameter accepts a list of project names and restricts results to only those repos. Omit the parameter to search all federated repos + the main project.
+
+**Which tools support federation:**
+
+The 9 read-only tools (`search_symbols`, `find_usages`, `get_symbol`, `get_file_summary`, `get_context`, `get_dependencies`, `get_project_overview`, `search_docs`, `get_doc_chunk`) accept an optional `repos: string[]` param to scope to specific federated repos.
+
+The 5 write/session tools (`reindex`, `save_context`, `get_session_memory`, `start_comparison`, `get_token_stats`) stay strictly local and do not accept the `repos` param.
+
+**Legacy env var:**
+
+The `FEDERATION_REPOS` env var (colon-separated paths) is still supported for backward compatibility and is what the CLI writes to `.mcp.json`:
 
 ```bash
-pindex add /project-c   # links a third repo
+FEDERATION_REPOS=/path/to/repo-a:/path/to/repo-b pindex-server
 ```
 
-Remove a link:
+For new setups, prefer the CLI commands (`pindex federate add/remove/list`) over manually editing the env var.
 
-```bash
-pindex remove /project-b
-```
-
-### View all projects
+**View all projects:**
 
 ```bash
 pindex status
