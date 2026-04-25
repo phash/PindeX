@@ -41,6 +41,7 @@ import type {
   StartComparisonInput,
   SearchDocsInput,
   GetDocChunkInput,
+  GetDocChunkOutput,
   SaveContextInput,
   GetSessionMemoryInput,
 } from './types.js';
@@ -414,13 +415,13 @@ export function createMcpServer(
           break;
         }
         case 'search_docs': {
-          result = searchDocs(db, args as SearchDocsInput);
+          result = searchDocs(repoSet, args as SearchDocsInput);
           heuristicMultiplier = 8;
           break;
         }
         case 'get_doc_chunk': {
-          result = getDocChunk(db, args as GetDocChunkInput);
-          heuristicMultiplier = result ? 3 : 0;
+          result = getDocChunk(repoSet, args as GetDocChunkInput);
+          heuristicMultiplier = (result as GetDocChunkOutput[]).length > 0 ? 3 : 0;
           break;
         }
         case 'save_context': {

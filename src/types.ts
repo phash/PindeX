@@ -400,6 +400,7 @@ export interface DocSearchResult {
   type: 'doc' | 'context';
   id: number;
   content_preview: string;
+  project: string;
   /** Present for type='doc' */
   file?: string;
   /** Present for type='doc' */
@@ -432,6 +433,7 @@ export interface GetDocChunkOutput {
   file: string;
   total_chunks: number;
   chunks: DocChunk[];
+  project: string;
 }
 
 export interface SaveContextInput {
