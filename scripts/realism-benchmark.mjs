@@ -483,10 +483,9 @@ function buildReport({ collected, totalCost, opts, capabilities }) {
   for (const [codebase, rows] of byCodebase) {
     const agg = aggregateCodebase(rows);
     if (agg.ratio === null) continue;
-    const pct = ((1 - agg.ratio) * 100).toFixed(0);
+    const pct = (Math.abs(1 - agg.ratio) * 100).toFixed(0);
     const direction = agg.ratio < 1 ? 'reduces' : 'increases';
-    const sign = agg.ratio < 1 ? '' : '+';
-    lines.push(`- **${codebase}**: PindeX ${direction} total input tokens by ${sign}${pct}% (ratio ${agg.ratio.toFixed(3)}; cache-read share ${(agg.pindexCacheReadShare * 100).toFixed(0)}%).`);
+    lines.push(`- **${codebase}**: PindeX ${direction} total input tokens by ${pct}% (ratio ${agg.ratio.toFixed(3)}; cache-read share ${(agg.pindexCacheReadShare * 100).toFixed(0)}%).`);
   }
   lines.push('');
   lines.push('## Appendix: per-task answers (excerpts)');

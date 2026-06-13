@@ -1,8 +1,12 @@
-/* MCP Codebase Indexer – Live Dashboard (Vanilla JS + WebSocket) */
+/* MCP Codebase Indexer – Live Dashboard (Vanilla JS + WebSocket, ESM module) */
+
+import { escHtml } from './esc.js';
 
 // ─── State ────────────────────────────────────────────────────────────────────
 
 const MAX_CHART_POINTS = 20;
+const RECONNECT_BASE_MS = 1000;
+const RECONNECT_MAX_MS = 30000;
 const state = {
   calls: [],
   cumulativeActual: 0,
@@ -10,9 +14,34 @@ const state = {
   chart: null,
   ws: null,
   sessionId: null,
+  reconnectAttempts: 0,
+  reconnectTimer: null,
 };
 
 // ─── WebSocket Connection ─────────────────────────────────────────────────────
+
+/** Reflects connection state in the status dot + accessible text label (UX-06). */
+function setConnState(connected, message) {
+  const dot = document.getElementById('statusDot');
+  const text = document.getElementById('statusText');
+  const label = message || (connected ? 'Verbunden' : 'Getrennt');
+  dot.classList.toggle('connected', connected);
+  dot.setAttribute('aria-label', label);
+  if (text) text.textContent = label;
+}
+
+/** Capped exponential backoff with jitter, instead of a fixed 3s loop (UX-05). */
+function scheduleReconnect() {
+  if (state.reconnectTimer) return;
+  const delay = Math.min(RECONNECT_MAX_MS, RECONNECT_BASE_MS * 2 ** state.reconnectAttempts);
+  const jitter = delay * 0.2 * Math.random();
+  state.reconnectAttempts++;
+  setConnState(false, 'Verbindung verloren – erneuter Versuch …');
+  state.reconnectTimer = setTimeout(() => {
+    state.reconnectTimer = null;
+    connect();
+  }, delay + jitter);
+}
 
 function connect() {
   const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -20,12 +49,17 @@ function connect() {
   state.ws = ws;
 
   ws.addEventListener('open', () => {
-    document.getElementById('statusDot').classList.add('connected');
+    state.reconnectAttempts = 0;
+    setConnState(true, 'Verbunden');
   });
 
   ws.addEventListener('close', () => {
-    document.getElementById('statusDot').classList.remove('connected');
-    setTimeout(connect, 3000); // Reconnect
+    scheduleReconnect();
+  });
+
+  ws.addEventListener('error', () => {
+    // A 'close' normally follows, but reflect the drop immediately.
+    setConnState(false, 'Verbindungsfehler');
   });
 
   ws.addEventListener('message', (event) => {
@@ -42,11 +76,13 @@ function connect() {
 
 function handleEvent(event) {
   if (event.type === 'tool_call') {
-    state.cumulativeActual = event.cumulative_actual;
-    state.cumulativeSavings = event.cumulative_savings;
+    // The broadcast carries per-call figures; accumulate running totals here so
+    // the KPI cards show a session total, not the last call's value (UX-01).
+    state.cumulativeActual += event.tokens_actual || 0;
+    state.cumulativeSavings += event.savings || 0;
     state.sessionId = event.session_id;
 
-    updateStatsCards(event);
+    updateStatsCards();
     updateChart(event);
     appendCallFeedItem(event);
   } else if (event.type === 'session_start' || event.type === 'session_update') {
@@ -62,12 +98,16 @@ function formatNumber(n) {
   return n.toLocaleString('de-DE');
 }
 
-function updateStatsCards(event) {
-  document.getElementById('tokensUsed').textContent = formatNumber(event.cumulative_actual);
-  document.getElementById('tokensSaved').textContent = formatNumber(event.cumulative_savings);
-  document.getElementById('savingsPercent').textContent = event.savings_percent.toFixed(1) + '%';
-  document.getElementById('savingsBar').style.width = Math.min(100, event.savings_percent) + '%';
-  document.getElementById('barTokenCount').textContent = formatNumber(event.cumulative_actual) + ' Token';
+function updateStatsCards() {
+  const actual = state.cumulativeActual;
+  const saved = state.cumulativeSavings;
+  const base = actual + saved;
+  const pct = base > 0 ? (saved / base) * 100 : 0;
+  document.getElementById('tokensUsed').textContent = formatNumber(actual);
+  document.getElementById('tokensSaved').textContent = formatNumber(saved);
+  document.getElementById('savingsPercent').textContent = pct.toFixed(1) + '%';
+  document.getElementById('savingsBar').style.width = Math.min(100, pct) + '%';
+  document.getElementById('barTokenCount').textContent = formatNumber(actual) + ' Token';
 }
 
 // ─── Chart ────────────────────────────────────────────────────────────────────
@@ -98,8 +138,9 @@ function initChart() {
       maintainAspectRatio: false,
       plugins: { legend: { labels: { color: '#9ca3af', font: { size: 11 } } } },
       scales: {
-        x: { ticks: { color: '#6b7280', font: { size: 10 } }, grid: { color: '#1f2937' } },
-        y: { ticks: { color: '#6b7280', font: { size: 10 } }, grid: { color: '#1f2937' } },
+        // #9ca3af matches the legend and clears WCAG AA on the chart bg (UX-02).
+        x: { ticks: { color: '#9ca3af', font: { size: 11 } }, grid: { color: '#1f2937' } },
+        y: { ticks: { color: '#9ca3af', font: { size: 11 } }, grid: { color: '#1f2937' } },
       },
     },
   });
@@ -126,14 +167,19 @@ function updateChart(event) {
 
 function appendCallFeedItem(event) {
   const feed = document.getElementById('callsFeed');
+  // Drop the "no calls yet" placeholder once real data arrives (UX-04).
+  feed.querySelector('.memory-empty')?.remove();
   const time = dayjs(event.timestamp).format('HH:mm:ss');
 
   const item = document.createElement('div');
   item.className = 'call-item';
+  // event.tool and event.query derive from MCP tool arguments — escape both
+  // before they touch innerHTML (SEC-07).
+  const toolLabel = escHtml(event.tool) + (event.query ? `("${escHtml(event.query)}")` : '');
   item.innerHTML = `
-    <span class="call-time">${time}</span>
-    <span class="call-tool">${event.tool}${event.query ? `("${event.query}")` : ''}</span>
-    <span class="call-tokens"><span class="actual">${event.tokens_actual}</span> / ~${event.tokens_estimated}</span>
+    <span class="call-time">${escHtml(time)}</span>
+    <span class="call-tool">${toolLabel}</span>
+    <span class="call-tokens"><span class="actual">${escHtml(event.tokens_actual)}</span> / ~${escHtml(event.tokens_estimated)}</span>
   `;
 
   // Prepend so newest is at top
@@ -147,11 +193,22 @@ function appendCallFeedItem(event) {
 
 // ─── Session History ──────────────────────────────────────────────────────────
 
+/** Renders a single full-width message row + dashes in the totals (UX-04). */
+function setHistoryMessage(msg) {
+  document.getElementById('historyBody').innerHTML =
+    `<tr><td colspan="4" class="memory-empty">${escHtml(msg)}</td></tr>`;
+  document.getElementById('histTotalTokens').textContent = '-';
+  document.getElementById('histTotalSaved').textContent = '-';
+  document.getElementById('histTotalPct').textContent = '-';
+}
+
 async function loadSessionHistory() {
   try {
     const res = await fetch('/api/sessions');
-    if (!res.ok) return;
+    if (!res.ok) { setHistoryMessage('Fehler beim Laden der Session History'); return; }
     const sessions = await res.json();
+
+    if (!sessions.length) { setHistoryMessage('Noch keine Sessions'); return; }
 
     const tbody = document.getElementById('historyBody');
     tbody.innerHTML = '';
@@ -168,11 +225,13 @@ async function loadSessionHistory() {
       totalSaved += s.total_savings;
 
       const row = document.createElement('tr');
+      // s.label is attacker-influenceable (start_comparison tool arg) — escape it
+      // and every other interpolated value before it touches innerHTML (SEC-02).
       row.innerHTML = `
-        <td>${s.label || s.id.substring(0, 8)}</td>
-        <td>${formatNumber(s.total_tokens)}</td>
-        <td>${formatNumber(s.total_savings)}</td>
-        <td>${pct}%</td>
+        <td>${escHtml(s.label || s.id.substring(0, 8))}</td>
+        <td>${escHtml(formatNumber(s.total_tokens))}</td>
+        <td>${escHtml(formatNumber(s.total_savings))}</td>
+        <td>${escHtml(pct)}%</td>
       `;
       tbody.appendChild(row);
     }
@@ -184,6 +243,7 @@ async function loadSessionHistory() {
     document.getElementById('histTotalPct').textContent = grandPct + '%';
   } catch (e) {
     console.error('Failed to load session history:', e);
+    setHistoryMessage('Fehler beim Laden der Session History');
   }
 }
 
@@ -215,14 +275,6 @@ const AP_LABELS = {
   index_blind_spot: 'Index-Blindspot',
   redundant_access: 'Redundanter Zugriff',
 };
-
-function escHtml(str) {
-  return String(str ?? '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-}
 
 function renderAntiPatterns(items) {
   const feed = document.getElementById('antiPatternsFeed');

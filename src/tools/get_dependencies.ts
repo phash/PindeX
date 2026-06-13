@@ -1,6 +1,7 @@
 import type { GetDependenciesInput, GetDependenciesOutput } from '../types.js';
 import { getFileByPath, getDependenciesByFile, getImportedByFile } from '../db/queries.js';
 import type { RepoSet } from '../federation/repo-set.js';
+import { resolveWithinRoot } from '../util/paths.js';
 
 export function getDependencies(
   repoSet: RepoSet,
@@ -11,6 +12,8 @@ export function getDependencies(
   const out: GetDependenciesOutput[] = [];
 
   for (const repo of repos) {
+    if (repo.path && !resolveWithinRoot(repo.path, input.target)) continue;
+
     const file = getFileByPath(repo.db, input.target);
     if (!file) continue;
 

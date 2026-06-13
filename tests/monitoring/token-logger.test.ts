@@ -71,4 +71,49 @@ describe('TokenLogger', () => {
 
     expect(events[0].savings_percent).toBeGreaterThan(0);
   });
+
+  // ─── no-emitter branch: must not throw, still persists ──────────────────────
+  it('persists without throwing when no emitter is provided', () => {
+    const logger = new TokenLogger({ db, sessionId: 'sess-123' });
+    expect(() =>
+      logger.log({ toolName: 'search_symbols', tokensUsed: 50, tokensWithoutIndex: 500 }),
+    ).not.toThrow();
+
+    const stats = getSessionStats(db, 'sess-123');
+    expect(stats.calls).toHaveLength(1);
+    expect(stats.tokens_used).toBe(50);
+  });
+
+  // ─── savings_percent total<=0 guard branch ─────────────────────────────────
+  it('reports savings_percent of 0 when cumulative total is zero', () => {
+    const logger = new TokenLogger({ db, sessionId: 'sess-123', emitter });
+    const events: Array<{ savings_percent: number; cumulative_actual: number; cumulative_savings: number }> = [];
+    emitter.on('token_event', (e) => events.push(e));
+
+    // tokensUsed = 0 and tokensWithoutIndex = 0 → cumulativeActual + cumulativeSavings = 0
+    // → the `total > 0 ? ... : 0` guard takes the else branch.
+    logger.log({ toolName: 'search_symbols', tokensUsed: 0, tokensWithoutIndex: 0 });
+
+    expect(events[0].cumulative_actual).toBe(0);
+    expect(events[0].cumulative_savings).toBe(0);
+    expect(events[0].savings_percent).toBe(0);
+  });
+
+  // ─── filesTouched / query optional fields ──────────────────────────────────
+  it('forwards filesTouched and query through to the emitted event', () => {
+    const logger = new TokenLogger({ db, sessionId: 'sess-123', emitter });
+    const events: Array<{ query?: string; tool: string }> = [];
+    emitter.on('token_event', (e) => events.push(e));
+
+    logger.log({
+      toolName: 'find_usages',
+      tokensUsed: 10,
+      tokensWithoutIndex: 100,
+      filesTouched: ['src/a.ts', 'src/b.ts'],
+      query: 'myQuery',
+    });
+
+    expect(events[0].query).toBe('myQuery');
+    expect(events[0].tool).toBe('find_usages');
+  });
 });

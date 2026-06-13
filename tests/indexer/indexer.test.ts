@@ -128,6 +128,37 @@ describe('Indexer', () => {
     await expect(indexer.resolveDependencies()).resolves.toBeUndefined();
   });
 
+  // ─── SEC-01: path traversal rejection ──────────────────────────────────────
+  describe('rejects path traversal (SEC-01)', () => {
+    it('indexFile rejects a "../"-escaping relative path without reading', async () => {
+      const indexer = new Indexer({ db, projectRoot: testDir, maxParseWorkers: 0 });
+      const result = await indexer.indexFile('../../../../etc/passwd', true);
+      expect(result.status).toBe('error');
+      expect(result.errors.join(' ')).toMatch(/escapes project root/i);
+    });
+
+    it('indexFile rejects an absolute path outside the root', async () => {
+      const indexer = new Indexer({ db, projectRoot: testDir, maxParseWorkers: 0 });
+      const result = await indexer.indexFile('/etc/passwd', true);
+      expect(result.status).toBe('error');
+      expect(result.errors.join(' ')).toMatch(/escapes project root/i);
+    });
+
+    it('indexDocument rejects a "../"-escaping relative path', async () => {
+      const indexer = new Indexer({ db, projectRoot: testDir, maxParseWorkers: 0 });
+      const result = await indexer.indexDocument('../escape.md', true);
+      expect(result.status).toBe('error');
+      expect(result.errors.join(' ')).toMatch(/escapes project root/i);
+    });
+
+    it('indexFile still indexes a legitimate in-root file', async () => {
+      const indexer = new Indexer({ db, projectRoot: testDir, maxParseWorkers: 0 });
+      const result = await indexer.indexFile('src/index.ts', true);
+      expect(result.status).not.toBe('error');
+      expect(result.errors).toHaveLength(0);
+    });
+  });
+
   it('overwrites regex symbols with LSP result when LSP is ready', async () => {
     class FakeLsp extends LspPythonClient {
       async start(): Promise<void> { (this as never as { _state: string })._state = 'ready'; }

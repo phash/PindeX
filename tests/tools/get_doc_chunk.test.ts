@@ -5,6 +5,11 @@ import { insertTestFile } from '../helpers/fixtures.js';
 import { getDocChunk } from '../../src/tools/get_doc_chunk.js';
 import { insertDocumentChunk } from '../../src/db/queries.js';
 import { makeTestRepoSet, makeFederatedTestRepoSet } from '../helpers/repo-set.js';
+import { RepoSet } from '../../src/federation/repo-set.js';
+
+function singleRepoWithPath(db: Database.Database, path: string): RepoSet {
+  return RepoSet.fromServerConfig(db, 'local', [], path);
+}
 
 describe('getDocChunk', () => {
   let db: Database.Database;
@@ -207,5 +212,58 @@ describe('getDocChunk — federation', () => {
     const results = getDocChunk(repoSet, { file: 'only-in-auth.md' });
     expect(results).toHaveLength(1);
     expect(results[0].project).toBe('auth');
+  });
+});
+
+describe('getDocChunk — path traversal guard (SEC-08)', () => {
+  const realRoot = '/home/manuel/claude/PindeX';
+  let db: Database.Database;
+
+  beforeEach(() => {
+    db = createTestDb();
+  });
+
+  it('returns chunks for an in-root doc when repo.path is set', () => {
+    const fileId = insertTestFile(db, { path: 'docs/guide.md', language: 'markdown' });
+    insertDocumentChunk(db, {
+      fileId,
+      chunkIndex: 0,
+      heading: 'Intro',
+      startLine: 1,
+      endLine: 10,
+      content: 'In-root doc content.',
+    });
+    const results = getDocChunk(singleRepoWithPath(db, realRoot), { file: 'docs/guide.md' });
+    expect(results).toHaveLength(1);
+    expect(results[0].chunks).toHaveLength(1);
+    expect(results[0].chunks[0].content).toBe('In-root doc content.');
+  });
+
+  it('returns [] for a relative traversal doc even when chunks exist (../secret.md)', () => {
+    const fileId = insertTestFile(db, { path: '../secret.md', language: 'markdown' });
+    insertDocumentChunk(db, {
+      fileId,
+      chunkIndex: 0,
+      heading: 'Secret',
+      startLine: 1,
+      endLine: 10,
+      content: 'leaked secret content',
+    });
+    const results = getDocChunk(singleRepoWithPath(db, realRoot), { file: '../secret.md' });
+    expect(results).toEqual([]);
+  });
+
+  it('returns [] for an absolute doc path outside root (/etc/passwd)', () => {
+    const fileId = insertTestFile(db, { path: '/etc/passwd', language: 'text' });
+    insertDocumentChunk(db, {
+      fileId,
+      chunkIndex: 0,
+      heading: null,
+      startLine: 1,
+      endLine: 10,
+      content: 'root:x:0:0:root',
+    });
+    const results = getDocChunk(singleRepoWithPath(db, realRoot), { file: '/etc/passwd' });
+    expect(results).toEqual([]);
   });
 });

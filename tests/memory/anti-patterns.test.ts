@@ -4,6 +4,34 @@ import { createTestDb } from '../helpers/db.js';
 import { AntiPatternDetector } from '../../src/memory/anti-patterns.js';
 import { insertSessionEvent, getAntiPatternEvents, getObservationsBySession } from '../../src/db/queries.js';
 
+/**
+ * Insert a file-change event (counts toward thrash) and backdate its timestamp
+ * to a recent ISO instant within the 5-minute window.
+ *
+ * This is required because `getRecentFileChangeEvents` compares the stored
+ * timestamp against `new Date(...).toISOString()` (UTC, `T`/`Z` format). Rows
+ * written with SQLite's default `CURRENT_TIMESTAMP` use the space-separated
+ * format, which sorts *before* the ISO cutoff and is therefore filtered out.
+ * Setting an explicit ISO timestamp makes the row visible to the window query.
+ */
+function insertChange(
+  db: Database.Database,
+  filePath: string,
+  symbolName: string,
+  msAgo: number,
+): void {
+  const id = insertSessionEvent(db, {
+    sessionId: SESSION,
+    eventType: 'sig_changed',
+    filePath,
+    symbolName,
+  });
+  db.prepare('UPDATE session_events SET timestamp = ? WHERE id = ?').run(
+    new Date(Date.now() - msAgo).toISOString(),
+    id,
+  );
+}
+
 const SESSION = 'session-abc';
 const FILE = 'src/auth.ts';
 const SYM = 'parseToken';
@@ -110,6 +138,75 @@ describe('AntiPatternDetector', () => {
       detector.checkRepeatedFailedSearch('parseToken', 3);
       detector.checkRepeatedFailedSearch('parseToken', 4);
       expect(getObservationsBySession(db, SESSION)).toHaveLength(1);
+    });
+  });
+
+  // ─── File thrashing ──────────────────────────────────────────────────────────
+
+  describe('checkThrash', () => {
+    it('emits thrash_detected + observation at 4 changes within the window', () => {
+      for (let i = 0; i < 4; i++) {
+        insertChange(db, FILE, SYM, i * 1000);
+      }
+      detector.checkThrash(FILE);
+
+      const events = getAntiPatternEvents(db, SESSION).filter(
+        (e) => e.event_type === 'thrash_detected',
+      );
+      expect(events).toHaveLength(1);
+      expect(events[0].file_path).toBe(FILE);
+      // change_count reflects the number of recent file-change events (4)
+      expect(JSON.parse(events[0].extra_json!)).toMatchObject({
+        change_count: 4,
+        window_minutes: 5,
+      });
+
+      const obs = getObservationsBySession(db, SESSION);
+      expect(obs).toHaveLength(1);
+      expect(obs[0].type).toBe('anti_pattern');
+      expect(obs[0].observation).toContain(FILE);
+      expect(obs[0].observation).toContain('4×');
+    });
+
+    it('does nothing with only 3 changes (below the threshold)', () => {
+      for (let i = 0; i < 3; i++) {
+        insertChange(db, FILE, SYM, i * 1000);
+      }
+      detector.checkThrash(FILE);
+
+      expect(
+        getAntiPatternEvents(db, SESSION).filter(
+          (e) => e.event_type === 'thrash_detected',
+        ),
+      ).toHaveLength(0);
+      expect(getObservationsBySession(db, SESSION)).toHaveLength(0);
+    });
+
+    it('does not re-emit when a recent thrash_detected already exists (de-dup guard)', () => {
+      for (let i = 0; i < 4; i++) {
+        insertChange(db, FILE, SYM, i * 1000);
+      }
+      // Pre-seed a recent (ISO-timestamped) thrash_detected for this file so the
+      // recency guard (msAgo < 5 min) suppresses a second emission.
+      const tid = insertSessionEvent(db, {
+        sessionId: SESSION,
+        eventType: 'thrash_detected',
+        filePath: FILE,
+      });
+      db.prepare('UPDATE session_events SET timestamp = ? WHERE id = ?').run(
+        new Date(Date.now() - 1000).toISOString(),
+        tid,
+      );
+
+      detector.checkThrash(FILE);
+
+      // Still only the pre-seeded event; no new thrash_detected, no observation.
+      expect(
+        getAntiPatternEvents(db, SESSION).filter(
+          (e) => e.event_type === 'thrash_detected',
+        ),
+      ).toHaveLength(1);
+      expect(getObservationsBySession(db, SESSION)).toHaveLength(0);
     });
   });
 

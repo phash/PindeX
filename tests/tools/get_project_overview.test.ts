@@ -119,3 +119,68 @@ describe('getProjectOverview — federation', () => {
     expect(result.federated_projects).toBeUndefined();
   });
 });
+
+describe('getProjectOverview — index_recommendation (TST-14)', () => {
+  // Constants pinned from src/tools/get_project_overview.ts:
+  //   BREAK_EVEN_FILES = 40, BREAK_EVEN_AVG_LINES = 150
+  //   avgFileTokens = SUM(raw_token_estimate) / files.length
+  //   avgFileLinesEstimate = Math.round(avgFileTokens * 4 / 50)
+  //   worthwhile = files.length >= 40 || avgFileLinesEstimate >= 150
+  const BREAK_EVEN_FILES = 40;
+
+  it('marks a small low-token project as NOT worthwhile with the "Small project" reason', () => {
+    const db = createTestDb();
+    // 3 files, each raw_token_estimate=100 → avgTokens=100 → avgLines=round(100*4/50)=8
+    insertTestFile(db, { path: 'src/a.ts', language: 'typescript', rawTokenEstimate: 100 });
+    insertTestFile(db, { path: 'src/b.ts', language: 'typescript', rawTokenEstimate: 100 });
+    insertTestFile(db, { path: 'src/c.ts', language: 'typescript', rawTokenEstimate: 100 });
+
+    const result = getProjectOverview(makeTestRepoSet(db), '/small');
+    const rec = result.index_recommendation;
+    expect(rec).toBeDefined();
+    expect(rec!.worthwhile).toBe(false);
+    expect(rec!.avgFileLinesEstimate).toBe(8);
+    expect(rec!.breakEvenFiles).toBe(BREAK_EVEN_FILES);
+    expect(rec!.reason).toBe(
+      'Small project (3 files, avg ~8 lines/file) — direct reads may be more efficient than index overhead',
+    );
+  });
+
+  it('marks a project with >=40 files as worthwhile (file-count threshold)', () => {
+    const db = createTestDb();
+    for (let i = 0; i < 40; i++) {
+      insertTestFile(db, { path: `src/file${i}.ts`, language: 'typescript', rawTokenEstimate: 100 });
+    }
+    const result = getProjectOverview(makeTestRepoSet(db), '/big');
+    const rec = result.index_recommendation;
+    expect(rec).toBeDefined();
+    expect(rec!.worthwhile).toBe(true);
+    // avgTokens=100 → avgLines=8, still below 150, so worthwhile is driven by file count.
+    expect(rec!.avgFileLinesEstimate).toBe(8);
+    expect(rec!.breakEvenFiles).toBe(BREAK_EVEN_FILES);
+    expect(rec!.reason).toBe('40 files, avg ~8 lines/file — index tools save tokens');
+  });
+
+  it('marks a small project worthwhile when avg lines/file >= 150 (avg-lines threshold)', () => {
+    const db = createTestDb();
+    // 2 files, raw_token_estimate=2000 → avgTokens=2000 → avgLines=round(2000*4/50)=160 (>=150)
+    insertTestFile(db, { path: 'src/big1.ts', language: 'typescript', rawTokenEstimate: 2000 });
+    insertTestFile(db, { path: 'src/big2.ts', language: 'typescript', rawTokenEstimate: 2000 });
+
+    const result = getProjectOverview(makeTestRepoSet(db), '/dense');
+    const rec = result.index_recommendation;
+    expect(rec).toBeDefined();
+    expect(rec!.worthwhile).toBe(true);
+    expect(rec!.avgFileLinesEstimate).toBe(160);
+    expect(rec!.breakEvenFiles).toBe(BREAK_EVEN_FILES);
+    expect(rec!.reason).toBe('2 files, avg ~160 lines/file — index tools save tokens');
+  });
+
+  it('pins the avgFileLinesEstimate arithmetic: round(avgTokens * 4 / 50)', () => {
+    const db = createTestDb();
+    // single file, raw_token_estimate=625 → 625*4/50 = 50 exactly
+    insertTestFile(db, { path: 'src/calc.ts', language: 'typescript', rawTokenEstimate: 625 });
+    const result = getProjectOverview(makeTestRepoSet(db), '/calc');
+    expect(result.index_recommendation!.avgFileLinesEstimate).toBe(50);
+  });
+});

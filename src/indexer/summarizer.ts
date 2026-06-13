@@ -125,6 +125,9 @@ export class Summarizer {
           max_tokens: 150,
           temperature: 0.3,
         }),
+        // Bound the request so a hung/black-holed endpoint cannot hold a
+        // concurrency-semaphore slot indefinitely and wedge indexing (SEC-10).
+        signal: AbortSignal.timeout(15000),
       });
 
       if (!response.ok) {

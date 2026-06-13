@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { resolve, join, dirname } from 'node:path';
 import { homedir } from 'node:os';
-import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync, chmodSync } from 'node:fs';
 import { assignName } from '../federation/registry-name.js';
 
 /** Returns the global ~/.pindex directory (migrates from ~/.mcp-indexer if present). */
@@ -26,6 +26,26 @@ export function getMcpIndexerHome(): string {
 /** Returns the projects directory within ~/.pindex. */
 export function getProjectsDir(): string {
   return join(getPindexHome(), 'projects');
+}
+
+/** Creates ~/.pindex with owner-only (0700) perms and tightens it if it already
+ *  exists, so registry/config/PID files are not world-readable on a shared host
+ *  (SEC-13). Best-effort: chmod failures (e.g. on Windows) are ignored. */
+export function ensurePindexHome(): string {
+  const home = getPindexHome();
+  if (!existsSync(home)) {
+    mkdirSync(home, { recursive: true, mode: 0o700 });
+  } else {
+    try { chmodSync(home, 0o700); } catch { /* best-effort */ }
+  }
+  return home;
+}
+
+/** Writes a file with owner-only (0600) permissions, tightening any pre-existing
+ *  file too (writeFileSync's `mode` only applies on creation). SEC-13/SEC-14. */
+export function writeFileSecure(path: string, data: string): void {
+  writeFileSync(path, data, { encoding: 'utf-8', mode: 0o600 });
+  try { chmodSync(path, 0o600); } catch { /* best-effort */ }
 }
 
 /** Returns a deterministic hash for a project path (used as its directory name). */
@@ -152,10 +172,9 @@ export class GlobalRegistry {
   }
 
   private write(entries: RegistryEntry[]): void {
-    const home = getPindexHome();
-    if (!existsSync(home)) mkdirSync(home, { recursive: true });
+    ensurePindexHome();
     const data: RegistryFile = { version: 1, projects: entries };
-    writeFileSync(this.registryPath, JSON.stringify(data, null, 2), 'utf-8');
+    writeFileSecure(this.registryPath, JSON.stringify(data, null, 2));
   }
 
   /** Add or update a project entry. Returns the (possibly newly assigned) entry. */

@@ -1,12 +1,15 @@
 import type { GetDocChunkInput, GetDocChunkOutput, DocChunk } from '../types.js';
 import { getFileByPath, getDocumentChunksByFileId } from '../db/queries.js';
 import type { RepoSet } from '../federation/repo-set.js';
+import { resolveWithinRoot } from '../util/paths.js';
 
 export function getDocChunk(repoSet: RepoSet, input: GetDocChunkInput): GetDocChunkOutput[] {
   const repos = repoSet.filter(input.repos);
   const out: GetDocChunkOutput[] = [];
 
   for (const repo of repos) {
+    if (repo.path && !resolveWithinRoot(repo.path, input.file)) continue;
+
     const fileRecord = getFileByPath(repo.db, input.file);
     if (!fileRecord) continue;
 

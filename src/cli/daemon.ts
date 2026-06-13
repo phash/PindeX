@@ -1,15 +1,21 @@
-import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync } from 'node:fs';
+import { existsSync, readFileSync, unlinkSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { getPindexHome, getProjectsDir, hashProjectPath } from './project-detector.js';
+import {
+  getPindexHome,
+  getProjectsDir,
+  hashProjectPath,
+  ensurePindexHome,
+  writeFileSecure,
+} from './project-detector.js';
 
 /** Returns the PID file path for a given project (or the global fallback). */
 function getPidFilePath(projectHash?: string): string {
   if (projectHash) {
     const dir = join(getProjectsDir(), projectHash);
-    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
     return join(dir, 'daemon.pid');
   }
-  return join(getPindexHome(), 'daemon.pid');
+  return join(ensurePindexHome(), 'daemon.pid');
 }
 
 /** Returns the PID of the running daemon for the given project, or null. */
@@ -30,9 +36,22 @@ export function isDaemonRunning(projectHash?: string): boolean {
   return getDaemonPid(projectHash) !== null;
 }
 
-/** Writes the PID file for the given project. */
+/** Best-effort check that a PID belongs to a pindex/node process before we signal
+ *  it, guarding against PID reuse killing an unrelated process (SEC-14). On
+ *  platforms without /proc (macOS/Windows) the check is skipped (returns true). */
+function isLikelyPindexProcess(pid: number): boolean {
+  try {
+    const cmdline = readFileSync(`/proc/${pid}/cmdline`, 'utf-8');
+    if (!cmdline) return true; // empty — cannot tell, do not block
+    return /pindex|node/i.test(cmdline);
+  } catch {
+    return true; // /proc unavailable or unreadable — do not block stop
+  }
+}
+
+/** Writes the PID file for the given project (owner-only, SEC-14). */
 export function writePidFile(pid: number, projectHash?: string): void {
-  writeFileSync(getPidFilePath(projectHash), String(pid), 'utf-8');
+  writeFileSecure(getPidFilePath(projectHash), String(pid));
 }
 
 /** Removes the PID file. */
@@ -46,6 +65,12 @@ export async function stopDaemon(projectHash?: string): Promise<void> {
   const pid = getDaemonPid(projectHash);
   if (!pid) {
     console.log('No running daemon found.');
+    return;
+  }
+
+  if (!isLikelyPindexProcess(pid)) {
+    console.error('Refusing to stop: PID does not look like a pindex daemon (stale PID file?).');
+    removePidFile(projectHash);
     return;
   }
 

@@ -4,6 +4,11 @@ import { createTestDb } from '../helpers/db.js';
 import { insertTestFile, insertTestDependency } from '../helpers/fixtures.js';
 import { getDependencies } from '../../src/tools/get_dependencies.js';
 import { makeFederatedTestRepoSet, makeTestRepoSet } from '../helpers/repo-set.js';
+import { RepoSet } from '../../src/federation/repo-set.js';
+
+function singleRepoWithPath(db: Database.Database, path: string): RepoSet {
+  return RepoSet.fromServerConfig(db, 'local', [], path);
+}
 
 describe('getDependencies', () => {
   let db: Database.Database;
@@ -86,5 +91,35 @@ describe('getDependencies — federation', () => {
     const results = getDependencies(repoSet, { target: 'src/x.ts', direction: 'imports', repos: ['main'] });
     expect(results).toHaveLength(1);
     expect(results[0].project).toBe('main');
+  });
+});
+
+describe('getDependencies — path traversal guard (SEC-08)', () => {
+  const realRoot = '/home/manuel/claude/PindeX';
+  let db: Database.Database;
+
+  beforeEach(() => {
+    db = createTestDb();
+  });
+
+  it('returns a result for an in-root target when repo.path is set', () => {
+    const target = insertTestFile(db, { path: 'src/inroot.ts' });
+    const dep = insertTestFile(db, { path: 'src/dep.ts' });
+    insertTestDependency(db, target, dep, 'helper');
+    const results = getDependencies(singleRepoWithPath(db, realRoot), { target: 'src/inroot.ts', direction: 'imports' });
+    expect(results).toHaveLength(1);
+    expect(results[0]?.imports).toContain('src/dep.ts');
+  });
+
+  it('returns [] for a relative traversal target even when a DB row exists (../escape.ts)', () => {
+    insertTestFile(db, { path: '../escape.ts' });
+    const results = getDependencies(singleRepoWithPath(db, realRoot), { target: '../escape.ts' });
+    expect(results).toEqual([]);
+  });
+
+  it('returns [] for an absolute target outside root (/etc/passwd)', () => {
+    insertTestFile(db, { path: '/etc/passwd' });
+    const results = getDependencies(singleRepoWithPath(db, realRoot), { target: '/etc/passwd' });
+    expect(results).toEqual([]);
   });
 });

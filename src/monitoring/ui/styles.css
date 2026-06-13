@@ -7,7 +7,9 @@
   --bg3: #242838;
   --border: #2e3348;
   --text: #e2e8f0;
-  --text-muted: #6b7280;
+  /* #9ca3af clears WCAG AA (>=4.5:1) on every dashboard surface; the previous
+     #6b7280 failed contrast on all three backgrounds (UX-02). */
+  --text-muted: #9ca3af;
   --accent: #6366f1;
   --green: #22c55e;
   --blue: #3b82f6;
@@ -29,6 +31,8 @@ body {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 16px;
   padding: 16px 24px;
   border-bottom: 1px solid var(--border);
   background: var(--bg2);
@@ -37,8 +41,14 @@ body {
   z-index: 10;
 }
 
+@media (max-width: 768px) {
+  .header { flex-direction: column; align-items: flex-start; }
+}
+
 .header-title { display: flex; align-items: center; gap: 10px; }
-.header-title h1 { font-size: 1rem; font-weight: 600; }
+.header-title h1 { font-size: 1rem; font-weight: 600; white-space: nowrap; }
+.conn-status { display: inline-flex; align-items: center; gap: 5px; }
+.conn-text { font-size: 11px; color: var(--text-muted); }
 .dot { font-size: 10px; color: var(--gray); }
 .dot.connected { color: var(--green); }
 .session-label {
@@ -69,6 +79,11 @@ body {
   border-radius: 2px;
   outline: none;
   cursor: pointer;
+}
+/* Restore a visible keyboard-focus indicator on the page's only control (UX-07). */
+.refresh-control input[type="range"]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
 }
 .refresh-control input[type="range"]::-webkit-slider-thumb {
   -webkit-appearance: none;
@@ -157,11 +172,12 @@ body {
 }
 .call-item:last-child { border-bottom: none; }
 .call-time { color: var(--text-muted); font-variant-numeric: tabular-nums; }
-.call-tool { color: var(--blue); font-family: monospace; }
+.call-tool { color: var(--blue); font-family: monospace; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .call-tokens { color: var(--text-muted); text-align: right; white-space: nowrap; }
 .call-tokens .actual { color: var(--text); font-weight: 600; }
 
 /* ─── History Table ───────────────────────────────────────────────────────── */
+.table-wrap { overflow-x: auto; }
 #historyTable { width: 100%; border-collapse: collapse; font-size: 13px; }
 #historyTable th, #historyTable td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--border); }
 #historyTable th { color: var(--text-muted); font-weight: 500; font-size: 11px; text-transform: uppercase; }
@@ -224,7 +240,11 @@ body {
 
 /* Observations */
 .obs-item { border-left-color: var(--accent); }
-.memory-item.stale { opacity: 0.55; }
+/* Signal staleness with a dashed border + muted text rather than a blanket
+   opacity that pushed already-muted children below the contrast floor (UX-09).
+   The explicit "veraltet" badge already communicates the state. */
+.memory-item.stale { border-left-style: dashed; }
+.memory-item.stale .memory-text { color: var(--text-muted); }
 
 .memory-item-header {
   display: flex;

@@ -6,6 +6,7 @@ import {
   getObservationsByFile,
 } from '../db/queries.js';
 import type { RepoSet } from '../federation/repo-set.js';
+import { resolveWithinRoot } from '../util/paths.js';
 
 export function getFileSummary(
   repoSet: RepoSet,
@@ -15,6 +16,10 @@ export function getFileSummary(
   const out: GetFileSummaryOutput[] = [];
 
   for (const repo of repos) {
+    // Defense-in-depth: reject paths that escape the repo root before serving
+    // any metadata (mirrors get_context.ts; closes the SEC-08 read-back surface).
+    if (repo.path && !resolveWithinRoot(repo.path, input.file)) continue;
+
     const file = getFileByPath(repo.db, input.file);
     if (!file) continue;
 

@@ -219,10 +219,14 @@ async function main(): Promise<void> {
           break;
         }
         const { spawn } = await import('node:child_process');
-        spawn('pindex-gui', ['--port', String(port)], {
+        const os = await import('node:os');
+        // Spawn without shell:true to avoid a latent shell-injection sink if the
+        // arg list ever grows (SEC-15). On Windows the bin is a .cmd shim, which
+        // requires the explicit extension when not going through a shell.
+        const guiBin = os.platform() === 'win32' ? 'pindex-gui.cmd' : 'pindex-gui';
+        spawn(guiBin, ['--port', String(port)], {
           detached: true,
           stdio: 'ignore',
-          shell: true,
         }).unref();
 
         // Wait for server to be ready (max 3s)

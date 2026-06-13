@@ -436,7 +436,11 @@ export function createMcpServer(
           result = { error: `Unknown tool: ${name}` };
       }
     } catch (err) {
-      result = { error: `Tool error: ${String(err)}` };
+      // Log the full error to stderr for debugging, but return only a generic
+      // message to the client: raw errors leak absolute host paths, file
+      // existence, and federated repo names into the LLM context (SEC-09).
+      process.stderr.write(`[pindex] Tool '${name}' failed: ${String(err)}\n`);
+      result = { error: `Tool '${name}' failed` };
       toolIsError = true;
     }
 

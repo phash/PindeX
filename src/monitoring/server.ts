@@ -7,6 +7,7 @@ import { WebSocketServer } from 'ws';
 import type Database from 'better-sqlite3';
 import type { MonitoringEvent } from '../types.js';
 import { listSessions, getSession, getSessionStats, getAllAntiPatternEvents, getAllObservations } from '../db/queries.js';
+import { isAllowedHost, isAllowedOrigin } from '../util/net.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const UI_DIR = join(__dirname, 'ui');
@@ -25,6 +26,16 @@ export interface MonitoringServer {
 export function createMonitoringApp(db: Database.Database): express.Application {
   const app = express();
   app.use(express.json());
+
+  // Block DNS-rebinding: only accept loopback Host headers (unless the operator
+  // opted into a non-loopback bind via PINDEX_BIND_HOST). SEC-03.
+  app.use((req, res, next) => {
+    if (!isAllowedHost(req.headers.host)) {
+      res.status(403).json({ error: 'Forbidden' });
+      return;
+    }
+    next();
+  });
 
   // Serve static UI files
   app.use(express.static(UI_DIR));
@@ -76,7 +87,18 @@ export function startMonitoringServer(
 ): MonitoringServer {
   const app = createMonitoringApp(db);
   const httpServer = createServer(app);
-  const wss = new WebSocketServer({ server: httpServer });
+  const wss = new WebSocketServer({
+    server: httpServer,
+    // Reject Cross-Site WebSocket Hijacking: browsers attach an Origin header to
+    // WS handshakes from page context, so a foreign origin is refused while
+    // same-loopback-origin and non-browser clients (no Origin) are allowed. The
+    // Host check mirrors the HTTP DNS-rebinding guard. SEC-03.
+    verifyClient: (info: { origin?: string; req: { headers: Record<string, string | string[] | undefined> } }) => {
+      const host = info.req.headers.host;
+      const origin = info.origin ?? (info.req.headers.origin as string | undefined);
+      return isAllowedHost(typeof host === 'string' ? host : undefined) && isAllowedOrigin(origin);
+    },
+  });
   wss.on('error', () => { /* suppressed — httpServer error handler covers this */ });
 
   // Per-client error handler to prevent single client crashes from killing the server
