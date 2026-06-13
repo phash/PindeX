@@ -57,16 +57,16 @@ MCP server that structurally indexes codebases (TypeScript, JavaScript, Java, Ko
 | Paket | Version | Zweck |
 |---|---|---|
 | `@modelcontextprotocol/sdk` | ^1.0.0 | MCP-Protokoll (stdio transport) |
-| `better-sqlite3` | ^9.0.0 | SQLite mit nativen Bindings, FTS5 |
+| `better-sqlite3` | ^12.10.0 | SQLite mit nativen Bindings, FTS5 (≥12.10 für Node ≥24/26-Prebuilds nötig) |
 | `chokidar` | ^3.6.0 | Datei-Watcher (auto-reindex) |
 | `express` | ^4.18.0 | HTTP-Server (Monitoring + GUI) |
 | `glob` | ^10.0.0 | Datei-Pattern-Matching |
 | `tree-sitter` | ^0.21.0 | AST-Parser (Basis) |
 | `tree-sitter-typescript` | ^0.21.0 | TypeScript/JavaScript Grammatik |
 | `uuid` | ^9.0.0 | Eindeutige IDs |
-| `ws` | ^8.16.0 | WebSocket-Server |
+| `ws` | ^8.21.0 | WebSocket-Server |
 | `open` | ^9.1.0 | Browser öffnen |
-| `zod` | ^3.24.0 | Runtime Input-Validierung (MCP Tool-Argumente) |
+| `zod` | ^4.3.6 | Runtime Input-Validierung (MCP Tool-Argumente) |
 
 ### Dev-Tools
 | Tool | Zweck |
@@ -99,6 +99,7 @@ npm run test:watch       # watch mode
 npm run test:coverage    # coverage report (threshold: >80%)
 npm run test:integration # echte tree-sitter-Bindings; nutzt vitest.integration.config.ts
 npm run bench:index      # synth-Projekt + Timing (Envs: BENCH_FILES, BENCH_FUNCS_PER_FILE, PINDEX_PARSE_WORKERS)
+npm run bench:realism    # echte A/B Claude-Calls (PindeX on/off) → benchmarks/results/*.md (--codebases/--tasks-limit/--budget; braucht 'claude' CLI)
 npm run lint             # TypeScript type-check only (tsc --noEmit)
 npm run build            # compile src/ → dist/
 ```
@@ -108,7 +109,7 @@ npm run build            # compile src/ → dist/
 - **DB**: SQLite via `better-sqlite3` — FTS5 virtual table with triggers for symbol search
 - **Parser**: `tree-sitter` + `tree-sitter-typescript` — AST-based symbol/import extraction
 - **Indexer**: MD5-hash-based incremental reindexing, glob file discovery
-- **MCP Tools**: 14 tools registered via `@modelcontextprotocol/sdk` (Zod-validierte Inputs)
+- **MCP Tools**: 15 tools registered via `@modelcontextprotocol/sdk` (Zod-validierte Inputs)
 - **Monitoring**: per-project Express + WebSocket server, per-project deterministic port
 - **GUI**: `pindex-gui` binary — aggregated Express dashboard reading all project DBs directly
 - **CLI**: `pindex` (init/add/remove/status), per-project daemon management
@@ -124,6 +125,7 @@ npm run build            # compile src/ → dist/
 | `get_file_summary` | File overview: symbols, imports, exports + memory context |
 | `find_usages` | All locations where a symbol is used |
 | `get_dependencies` | Import graph for a file (imports / imported_by / both) |
+| `get_api_endpoints` | Extracted HTTP/REST endpoints (Express-style route symbols) in the codebase |
 | `get_project_overview` | Project-level stats, entry points, module list + session memory summary |
 | `reindex` | Rebuild index for one file or the entire project |
 | `get_token_stats` | Token usage statistics for a session |
@@ -285,7 +287,10 @@ Passive memory that requires **zero cooperation from Claude** — no `save_conte
   (`7842 + (parseInt(hash.slice(0,4), 16) % 2000)`) and stored to stay stable
 - Migration from `~/.mcp-indexer` to `~/.pindex` runs automatically on first call to
   `getPindexHome()` if the old directory exists
-- Pflicht für jeden Tool-Input mit User-Pfad: `resolveWithinRoot(projectRoot, userPath)` aus `src/util/paths.ts` — verhindert Path-Traversal via `..`. Rückgabe `null` heißt „escapet Root, verwerfen". Schon verdrahtet in `get_context.ts` und `search_symbols.ts`.
+- Pflicht für jeden Tool-Input mit User-Pfad: `resolveWithinRoot(projectRoot, userPath)` aus `src/util/paths.ts` — verhindert Path-Traversal via `..`. Rückgabe `null` heißt „escapet Root, verwerfen". Verdrahtet in `get_context.ts`, `search_symbols.ts`, `get_file_summary.ts`, `get_dependencies.ts`, `get_doc_chunk.ts` und an allen Indexer-Sinks (`Indexer.indexFile/indexDocument/indexAll/resolveDependencies`). Dashboard-Schutz (CSWSH/DNS-Rebinding/CSRF) in `src/util/net.ts`.
+- CI: `.github/workflows/ci.yml` gated lint + build + `npm test` + `npm run test:integration` + `npm audit --omit=dev --audit-level=high` bei push/PR auf main; `publish.yml` macht den npm-Release.
+- Native Module (`better-sqlite3`, `tree-sitter`) brauchen ein Prebuilt passend zur laufenden Node-ABI. Auf brandneuem Node (z.B. v26) muss `better-sqlite3` ≥12.10 sein (11.x kompiliert nicht); `tests/integration/parse-pool-workers.test.ts` ist dort flaky (tree-sitter `Napi`-Crash in worker_threads) und ist vom Default-`npm test` ausgeschlossen.
+- Monitoring-Dashboard (`src/monitoring/ui/`): JEDER dynamische Wert, der per `innerHTML` ins DOM geht, MUSS durch `escHtml` aus `esc.js` (ESM-Modul; `dashboard.js` lädt als `<script type="module">`). Tool-Argument-abgeleitete Felder (Session-Labels, Queries) sind angreiferbeeinflussbar.
 
 ## PindeX – Codebase Navigation
 
