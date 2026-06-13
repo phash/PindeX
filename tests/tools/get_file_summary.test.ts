@@ -4,6 +4,11 @@ import { createTestDb } from '../helpers/db.js';
 import { insertTestFile, insertTestSymbol, insertTestDependency } from '../helpers/fixtures.js';
 import { getFileSummary } from '../../src/tools/get_file_summary.js';
 import { makeFederatedTestRepoSet, makeTestRepoSet } from '../helpers/repo-set.js';
+import { RepoSet } from '../../src/federation/repo-set.js';
+
+function singleRepoWithPath(db: Database.Database, path: string): RepoSet {
+  return RepoSet.fromServerConfig(db, 'local', [], path);
+}
 
 describe('getFileSummary', () => {
   let db: Database.Database;
@@ -85,5 +90,34 @@ describe('getFileSummary — federation', () => {
 
     const results = getFileSummary(repoSet, { file: 'src/x.ts', repos: ['remote'] });
     expect(results.map((r) => r.project)).toEqual(['remote']);
+  });
+});
+
+describe('getFileSummary — path traversal guard (SEC-08)', () => {
+  const realRoot = '/home/manuel/claude/PindeX';
+  let db: Database.Database;
+
+  beforeEach(() => {
+    db = createTestDb();
+  });
+
+  it('returns a summary for an in-root file when repo.path is set', () => {
+    const fileId = insertTestFile(db, { path: 'src/inroot.ts', language: 'typescript', summary: 'in root' });
+    insertTestSymbol(db, { fileId, name: 'inRootSym', kind: 'function' });
+    const results = getFileSummary(singleRepoWithPath(db, realRoot), { file: 'src/inroot.ts' });
+    expect(results).toHaveLength(1);
+    expect(results[0]?.summary).toBe('in root');
+  });
+
+  it('returns [] for a relative traversal path even when a DB row exists (../escape.ts)', () => {
+    insertTestFile(db, { path: '../escape.ts', language: 'typescript', summary: 'escaped' });
+    const results = getFileSummary(singleRepoWithPath(db, realRoot), { file: '../escape.ts' });
+    expect(results).toEqual([]);
+  });
+
+  it('returns [] for an absolute path outside root (/etc/passwd)', () => {
+    insertTestFile(db, { path: '/etc/passwd', language: 'typescript', summary: 'passwd' });
+    const results = getFileSummary(singleRepoWithPath(db, realRoot), { file: '/etc/passwd' });
+    expect(results).toEqual([]);
   });
 });

@@ -1,4 +1,7 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type Database from 'better-sqlite3';
 import { createTestDb } from '../helpers/db.js';
 import { SessionObserver } from '../../src/memory/observer.js';
@@ -261,6 +264,79 @@ describe('SessionObserver', () => {
 
       const obs = getObservationsBySession(db, 'old-session');
       expect(obs[0].stale).toBe(1);
+    });
+  });
+
+  // ─── index_blind_spot (file exists on disk but is not indexed) ─────────────────
+  // node:fs is NOT mocked, so these tests use a REAL temp dir as the observer's
+  // projectRoot and write real files into it.
+
+  describe('index_blind_spot', () => {
+    let tmpRoot: string;
+    let diskObserver: SessionObserver;
+
+    beforeEach(() => {
+      tmpRoot = mkdtempSync(join(tmpdir(), 'pindex-observer-'));
+      mkdirSync(join(tmpRoot, 'src'));
+      writeFileSync(join(tmpRoot, 'src', 'real.ts'), 'export const x = 1;\n');
+      diskObserver = new SessionObserver({ db, sessionId: SESSION, projectRoot: tmpRoot });
+    });
+
+    afterEach(() => {
+      rmSync(tmpRoot, { recursive: true, force: true });
+    });
+
+    it('get_file_summary: emits index_blind_spot event + environment observation when the file exists on disk', () => {
+      diskObserver.onToolCall('get_file_summary', { file: 'src/real.ts' }, null, false);
+
+      const events = getSessionEvents(db, SESSION, ['index_blind_spot']);
+      expect(events).toHaveLength(1);
+      expect(events[0].file_path).toBe('src/real.ts');
+      expect(JSON.parse(events[0].extra_json!)).toMatchObject({ tool: 'get_file_summary' });
+
+      const obs = getObservationsBySession(db, SESSION);
+      expect(obs).toHaveLength(1);
+      expect(obs[0].type).toBe('environment');
+      expect(obs[0].file_path).toBe('src/real.ts');
+      expect(obs[0].observation).toContain('exists on disk');
+      expect(obs[0].observation).toContain('not indexed');
+    });
+
+    it('get_symbol: emits index_blind_spot event (no observation) when the file exists on disk', () => {
+      diskObserver.onToolCall(
+        'get_symbol',
+        { name: 'Missing', file: 'src/real.ts' },
+        null,
+        false,
+      );
+
+      const events = getSessionEvents(db, SESSION, ['index_blind_spot']);
+      expect(events).toHaveLength(1);
+      expect(events[0].file_path).toBe('src/real.ts');
+      expect(events[0].symbol_name).toBe('Missing');
+      expect(JSON.parse(events[0].extra_json!)).toMatchObject({ tool: 'get_symbol' });
+
+      // get_symbol records only the event, not an environment observation.
+      expect(getObservationsBySession(db, SESSION)).toHaveLength(0);
+    });
+
+    it('get_file_summary: emits nothing when the file does NOT exist on disk', () => {
+      diskObserver.onToolCall('get_file_summary', { file: 'src/ghost.ts' }, null, false);
+
+      expect(getSessionEvents(db, SESSION, ['index_blind_spot'])).toHaveLength(0);
+      expect(getObservationsBySession(db, SESSION)).toHaveLength(0);
+    });
+
+    it('get_symbol: emits nothing when the file does NOT exist on disk', () => {
+      diskObserver.onToolCall(
+        'get_symbol',
+        { name: 'Missing', file: 'src/ghost.ts' },
+        null,
+        false,
+      );
+
+      expect(getSessionEvents(db, SESSION, ['index_blind_spot'])).toHaveLength(0);
+      expect(getObservationsBySession(db, SESSION)).toHaveLength(0);
     });
   });
 });

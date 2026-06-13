@@ -21,6 +21,25 @@ function toForwardSlash(p: string): string {
   return p.replace(/\\/g, '/');
 }
 
+/**
+ * Sanitizes a user query for safe use as an FTS5 MATCH expression.
+ *
+ * FTS5 has its own query grammar (AND/OR/NOT/NEAR, `column:term`, `*`, `^`,
+ * parentheses, `+`, phrases). Common code-search tokens such as `parse()`,
+ * `foo:bar`, `C++` or `@decorator` would otherwise be parsed as FTS5 syntax and
+ * either raise a syntax error (silently swallowed as "no results" by the callers'
+ * try/catch) or leak FTS column names via "no such column" errors. We tokenize on
+ * whitespace and wrap each token as a double-quote-escaped phrase, so every term
+ * is matched literally and the MATCH expression is always well-formed.
+ *
+ * Returns an empty-phrase expression when the query has no usable tokens.
+ */
+export function sanitizeFtsQuery(query: string): string {
+  const tokens = query.split(/\s+/).filter((t) => t.length > 0);
+  if (tokens.length === 0) return '""';
+  return tokens.map((t) => `"${t.replace(/"/g, '""')}"`).join(' ');
+}
+
 // ─── File Queries ─────────────────────────────────────────────────────────────
 
 export interface UpsertFileInput {
@@ -164,7 +183,7 @@ export function searchSymbolsFts(
                JOIN symbols s ON s.id = fts.rowid
                JOIN files f ON s.file_id = f.id
                WHERE symbols_fts MATCH ?`;
-    const params: unknown[] = [query];
+    const params: unknown[] = [sanitizeFtsQuery(query)];
 
     if (filters?.isAsync !== undefined) {
       sql += ` AND s.is_async = ?`;
@@ -474,7 +493,7 @@ export function searchDocumentsFts(
          ORDER BY fts.rank
          LIMIT ?`,
       )
-      .all(query, limit) as DocFtsResult[];
+      .all(sanitizeFtsQuery(query), limit) as DocFtsResult[];
   } catch (err) {
     process.stderr.write(`[pindex] FTS document search error: ${err}\n`);
     return [];
@@ -523,7 +542,7 @@ export function searchContextEntriesFts(
          ORDER BY fts.rank
          LIMIT ?`,
       )
-      .all(query, limit) as ContextFtsResult[];
+      .all(sanitizeFtsQuery(query), limit) as ContextFtsResult[];
   } catch (err) {
     process.stderr.write(`[pindex] FTS context search error: ${err}\n`);
     return [];

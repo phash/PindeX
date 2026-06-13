@@ -24,6 +24,10 @@ export default defineConfig({
         'src/monitoring/ui/**',
         'src/index.ts',
         'src/cli/index.ts',
+        // Entry-point bootstraps that only execute on import/spawn (not unit-testable),
+        // consistent with the index.ts exclusions above.
+        'src/gui/index.ts',
+        'src/indexer/parse-worker.ts',
       ],
       thresholds: {
         lines: 80,

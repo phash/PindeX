@@ -7,14 +7,11 @@ import { FileWatcher } from './indexer/watcher.js';
 import { startMonitoringServer } from './monitoring/server.js';
 import { TokenLogger } from './monitoring/token-logger.js';
 import { createMcpServer } from './server.js';
-import {
-  createSession,
-  deleteObservationsOlderThan,
-  deleteObservationsExceptSession,
-} from './db/queries.js';
+import { createSession } from './db/queries.js';
 import { getProjectIndexPath, GlobalRegistry } from './cli/project-detector.js';
 import { assignName } from './federation/registry-name.js';
 import { SessionObserver } from './memory/observer.js';
+import { applyObservationRetention } from './memory/retention.js';
 import { v4 as uuidv4 } from 'uuid';
 
 // ─── Configuration (from environment variables) ───────────────────────────────
@@ -176,32 +173,3 @@ main().catch((err) => {
   process.exit(1);
 });
 
-/**
- * Applies the OBSERVATION_RETENTION policy on startup.
- * Supported values: 'permanent' (default), 'session', or '<N>d' (e.g. '30d').
- */
-function applyObservationRetention(
-  db: import('better-sqlite3').Database,
-  currentSessionId: string,
-  policy: string,
-): void {
-  if (policy === 'permanent') return;
-
-  if (policy === 'session') {
-    deleteObservationsExceptSession(db, currentSessionId);
-    return;
-  }
-
-  const match = /^(\d+)d$/.exec(policy);
-  if (match) {
-    const days = parseInt(match[1], 10);
-    const cutoff = new Date();
-    cutoff.setDate(cutoff.getDate() - days);
-    deleteObservationsOlderThan(db, cutoff.toISOString());
-    return;
-  }
-
-  process.stderr.write(
-    `[pindex] Unknown OBSERVATION_RETENTION value: "${policy}" — defaulting to permanent\n`,
-  );
-}

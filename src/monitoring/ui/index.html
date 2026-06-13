@@ -9,22 +9,26 @@
   <script src="https://cdn.jsdelivr.net/npm/dayjs@1/dayjs.min.js"></script>
 </head>
 <body>
-  <div class="header">
+  <header class="header">
     <div class="header-title">
-      <span class="dot" id="statusDot">●</span>
+      <span class="conn-status" role="status" aria-live="polite">
+        <span class="dot" id="statusDot" aria-hidden="true">●</span>
+        <span id="statusText" class="conn-text">Verbinde…</span>
+      </span>
       <h1>MCP Codebase Indexer</h1>
       <span id="sessionLabel" class="session-label"></span>
     </div>
     <div class="header-meta">
       <label class="refresh-control" title="Aktualisierungsintervall der Session History">
         <span id="refreshLabel">30s</span>
-        <input type="range" id="refreshSlider" min="1" max="60" value="30" step="1">
+        <input type="range" id="refreshSlider" min="1" max="60" value="30" step="1"
+               aria-label="Aktualisierungsintervall in Sekunden">
       </label>
       <span id="sessionTime"></span>
     </div>
-  </div>
+  </header>
 
-  <div class="grid">
+  <main class="grid">
     <!-- Stats Cards -->
     <div class="card stats-card">
       <div class="stat">
@@ -54,12 +58,13 @@
     <!-- Recent Calls -->
     <div class="card calls-card">
       <h2>Letzte Aufrufe</h2>
-      <div id="callsFeed"></div>
+      <div id="callsFeed"><div class="memory-empty">Noch keine Aufrufe</div></div>
     </div>
 
     <!-- Session History -->
     <div class="card history-card">
       <h2>Session History</h2>
+      <div class="table-wrap">
       <table id="historyTable">
         <thead>
           <tr>
@@ -69,7 +74,7 @@
             <th>%</th>
           </tr>
         </thead>
-        <tbody id="historyBody"></tbody>
+        <tbody id="historyBody"><tr><td colspan="4" class="memory-empty">Wird geladen…</td></tr></tbody>
         <tfoot>
           <tr id="historyTotal">
             <td><strong>Gesamt</strong></td>
@@ -79,11 +84,12 @@
           </tr>
         </tfoot>
       </table>
+      </div>
     </div>
-  </div>
+  </main>
 
   <!-- Session Memory: Anti-Patterns & Observations -->
-  <div class="memory-section">
+  <section class="memory-section" aria-label="Session-Speicher">
     <div class="memory-panel">
       <h2>Anti-Patterns <span class="memory-count" id="apCount"></span></h2>
       <div id="antiPatternsFeed" class="memory-feed">
@@ -96,8 +102,8 @@
         <div class="memory-empty">Wird geladen…</div>
       </div>
     </div>
-  </div>
+  </section>
 
-  <script src="/dashboard.js"></script>
+  <script type="module" src="/dashboard.js"></script>
 </body>
 </html>

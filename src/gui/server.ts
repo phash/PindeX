@@ -14,6 +14,7 @@ import {
   getProjectIndexPath,
   type RegistryEntry,
 } from '../cli/project-detector.js';
+import { isAllowedHost, isAllowedOrigin } from '../util/net.js';
 
 // ─── Per-project stats ─────────────────────────────────────────────────────
 
@@ -104,6 +105,16 @@ export function loadProjectStats(entry: RegistryEntry): Omit<ProjectStats, 'serv
 export function createGuiApp(): express.Application {
   const app = express();
   app.use(express.json());
+
+  // Block DNS-rebinding: only accept loopback Host headers (unless the operator
+  // opted into a non-loopback bind via PINDEX_BIND_HOST). SEC-03/SEC-04.
+  app.use((req, res, next) => {
+    if (!isAllowedHost(req.headers.host)) {
+      res.status(403).json({ error: 'Forbidden' });
+      return;
+    }
+    next();
+  });
 
   // Cache registry reads with a 5-second TTL to avoid re-reading the file on every request
   let registryCache: ReturnType<GlobalRegistry['list']> | null = null;
@@ -247,7 +258,13 @@ export function createGuiApp(): express.Application {
     return res.json(result);
   });
 
-  app.get('/api/projects/:hash/open', async (req, res) => {
+  // POST (not GET) + Origin check so a cross-site page cannot trigger the
+  // open() side effect via a navigation/<img>/<iframe>. A forged cross-origin
+  // form POST carries the attacker's Origin and is rejected. SEC-04 (CSRF).
+  app.post('/api/projects/:hash/open', async (req, res) => {
+    if (!isAllowedOrigin(req.headers.origin)) {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
     const registry = { list: getCachedRegistry };
     const entry = registry.list().find((p) => p.hash === req.params.hash);
     if (!entry) return res.status(404).json({ error: 'project not found' });
@@ -306,9 +323,10 @@ export function startGuiServer(port: number): Promise<GuiServerWithPort> {
 
 // ─── Inline Dashboard HTML ─────────────────────────────────────────────────
 
-// NOTE: innerHTML assignments below use data sourced exclusively from our own
-// SQLite databases (project names, paths, symbol names). No user-supplied web
-// input is ever rendered — XSS risk is not applicable in this context.
+// NOTE: data rendered below comes from our own SQLite DBs, but several fields
+// (session labels, tool queries, paths) are derived from MCP tool arguments and
+// are therefore attacker-influenceable. All dynamic values interpolated into the
+// DOM MUST be escaped via esc() before being assigned to innerHTML.
 function buildDashboardHtml(): string {
   return `<!DOCTYPE html>
 <html lang="en">
@@ -358,8 +376,9 @@ function buildDashboardHtml(): string {
     .srv-dot{width:9px;height:9px;border-radius:50%;flex-shrink:0}
     .srv-dot.on{background:var(--green);box-shadow:0 0 6px var(--green)}
     .srv-dot.off{background:var(--border)}
-    .project-name{font-weight:600}
-    .project-path{font-size:.75rem;color:var(--muted);margin-top:2px}
+    .project-info{min-width:0}
+    .project-name{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .project-path{font-size:.75rem;color:var(--muted);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
     .badge{background:var(--border);border-radius:4px;padding:2px 8px;font-size:.75rem;white-space:nowrap}
     .badge.green{background:#1c3829;color:var(--green)}
     .badge.blue{background:#1c2a3e;color:var(--accent)}
@@ -385,7 +404,7 @@ function buildDashboardHtml(): string {
     .detail-table tr:hover td{background:#1c2128}
     .kind-badge{display:inline-block;padding:1px 6px;border-radius:3px;font-size:.7rem;background:var(--border);color:var(--muted)}
     .info-box{background:#0d1117;border:1px solid var(--border);border-radius:8px;padding:16px;margin-bottom:16px;font-size:.85rem;line-height:1.7}
-    .info-box .formula{color:var(--accent);font-family:monospace;font-size:.8rem;margin-top:8px;padding:8px;background:var(--surface);border-radius:4px}
+    .info-box .formula{color:var(--accent);font-family:monospace;font-size:.8rem;margin-top:8px;padding:8px;background:var(--surface);border-radius:4px;white-space:pre}
     .stat-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:16px}
     .stat-box{background:#0d1117;border:1px solid var(--border);border-radius:6px;padding:12px}
     .stat-box .v{font-size:1.4rem;font-weight:700;color:var(--accent)}
@@ -459,6 +478,22 @@ let chart = null, currentProjects = [];
 let _modalSessions = [], _sessPage = 0;
 const SESS_PER_PAGE = 6;
 
+// Opens a project folder via POST (CSRF-safe) and surfaces failures on the button
+// instead of swallowing them silently.
+async function openFolder(hash, btn) {
+  try {
+    const r = await fetch('/api/projects/' + encodeURIComponent(hash) + '/open', { method: 'POST' });
+    if (!r.ok) throw new Error(String(r.status));
+  } catch (e) {
+    if (btn) {
+      const pTitle = btn.title, pColor = btn.style.color, pBorder = btn.style.borderColor;
+      btn.style.color = 'var(--red)'; btn.style.borderColor = 'var(--red)';
+      btn.title = 'Failed to open folder';
+      setTimeout(() => { btn.title = pTitle; btn.style.color = pColor; btn.style.borderColor = pBorder; }, 1800);
+    }
+  }
+}
+
 function updateChart(projects) {
   if (typeof Chart === 'undefined') return;
   try {
@@ -491,10 +526,22 @@ function updateChart(projects) {
 }
 
 async function load() {
-  const [{ overview, projects }, sessions] = await Promise.all([
-    fetch('/api/overview').then(r => r.json()),
-    fetch('/api/sessions/recent').then(r => r.json()).catch(() => []),
-  ]);
+  let overview, projects, sessions;
+  try {
+    [{ overview, projects }, sessions] = await Promise.all([
+      fetch('/api/overview').then(r => { if (!r.ok) throw new Error(String(r.status)); return r.json(); }),
+      fetch('/api/sessions/recent').then(r => r.ok ? r.json() : []).catch(() => []),
+    ]);
+  } catch (e) {
+    console.error('Failed to load overview:', e);
+    const list = document.getElementById('project-list');
+    list.textContent = '';
+    const msg = document.createElement('div');
+    msg.className = 'no-data';
+    msg.textContent = 'Failed to load dashboard data — retrying…';
+    list.appendChild(msg);
+    return;
+  }
   currentProjects = projects;
   renderSessionGrid(sessions);
   document.getElementById('ov-projects').textContent = overview.totalProjects;
@@ -522,12 +569,15 @@ async function load() {
     dot.className = 'srv-dot ' + (p.serverRunning ? 'on' : 'off');
     dot.title = p.serverRunning ? 'MCP server running (port ' + p.entry.monitoringPort + ')' : 'MCP server not running';
     const info = document.createElement('div');
+    info.className = 'project-info';
     const name = document.createElement('div');
     name.className = 'project-name';
     name.textContent = p.entry.name;
+    name.title = p.entry.name;
     const path = document.createElement('div');
     path.className = 'project-path';
     path.textContent = p.entry.path;
+    path.title = p.entry.path;
     info.appendChild(name);
     info.appendChild(path);
     const mkBadge = (text, cls) => { const b = document.createElement('span'); b.className = 'badge' + (cls ? ' ' + cls : ''); b.textContent = text; return b; };
@@ -535,7 +585,7 @@ async function load() {
     openBtn.className = 'open-btn';
     openBtn.title = 'Open project folder in explorer';
     openBtn.textContent = '\\u{1F4C2}';
-    openBtn.onclick = (e) => { e.stopPropagation(); fetch('/api/projects/' + p.entry.hash + '/open').catch(() => {}); };
+    openBtn.onclick = (e) => { e.stopPropagation(); openFolder(p.entry.hash, openBtn); };
     row.appendChild(dot);
     row.appendChild(info);
     row.appendChild(mkBadge(fmt(p.fileCount) + ' files', 'blue'));
@@ -597,6 +647,7 @@ async function openDetail(hash, name) {
   document.getElementById('tab-ov').classList.add('active');
 
   const proj = currentProjects.find(p => p.entry.hash === hash);
+  if (!proj) { closeModal(); return; }
   const srvEl = document.getElementById('modal-srv');
   srvEl.textContent = proj.serverRunning ? '\u25cf MCP running' : '\u25cb MCP stopped';
   srvEl.className = 'modal-srv ' + (proj.serverRunning ? 'on' : 'off');
@@ -675,7 +726,7 @@ function renderOv(proj, detail) {
   openLink.style.cssText = 'margin-top:8px;background:none;border:1px solid var(--border);border-radius:4px;padding:4px 10px;color:var(--muted);cursor:pointer;font-size:.8rem;transition:border-color .15s,color .15s';
   openLink.onmouseover = () => { openLink.style.borderColor = 'var(--accent)'; openLink.style.color = 'var(--text)'; };
   openLink.onmouseout  = () => { openLink.style.borderColor = 'var(--border)';  openLink.style.color = 'var(--muted)'; };
-  openLink.onclick = () => fetch('/api/projects/' + proj.entry.hash + '/open').catch(() => {});
+  openLink.onclick = () => openFolder(proj.entry.hash, openLink);
   infoB.appendChild(openLink);
   panel.appendChild(infoB);
 }
@@ -703,16 +754,6 @@ function buildTable(cols, rows) {
   }
   tbl.appendChild(tbody);
   return tbl;
-}
-
-function makeSearchPanel(tabId, placeholder, allItems, renderFn) {
-  const panel = document.getElementById(tabId);
-  panel.textContent = '';
-  const inp = el('input', 'search-input');
-  inp.placeholder = placeholder;
-  inp.oninput = () => renderFn(inp.value, panel.querySelector('tbody'));
-  panel.appendChild(inp);
-  return panel;
 }
 
 function renderFiles(files) {

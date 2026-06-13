@@ -16,47 +16,51 @@ vi.mock('../../src/cli/project-detector.js', () => {
   );
   const mockFindProjectRoot = vi.fn((dir: string) => dir);
 
-  // Mock GlobalRegistry
-  class MockGlobalRegistry {
-    private entries: Array<{
-      path: string;
-      hash: string;
-      name: string;
-      monitoringPort: number;
-      federatedRepos: Array<{ path: string; name: string }>;
-      addedAt: string;
-    }> = [];
+  // Module-level shared store so every `new GlobalRegistry()` instance sees the
+  // same data (mirrors the real registry which is backed by a single JSON file).
+  type Entry = {
+    path: string;
+    hash: string;
+    name: string;
+    monitoringPort: number;
+    federatedRepos: Array<{ path: string; name: string }>;
+    addedAt: string;
+  };
+  const __store: Entry[] = [];
 
+  // Mock GlobalRegistry — derives a per-path hash so distinct paths are distinct
+  // entries, but keeps the legacy 'abc12345' for the canonical single-path case.
+  class MockGlobalRegistry {
     upsert(projectPath: string) {
-      const existing = this.entries.find((e) => e.path === projectPath);
+      const existing = __store.find((e) => e.path === projectPath);
       if (existing) return existing;
-      const entry = {
+      const entry: Entry = {
         path: projectPath,
-        hash: 'abc12345',
+        hash: 'h' + String(__store.length),
         name: 'test-project',
         monitoringPort: 7843,
-        federatedRepos: [] as Array<{ path: string; name: string }>,
+        federatedRepos: [],
         addedAt: new Date().toISOString(),
       };
-      this.entries.push(entry);
+      __store.push(entry);
       return entry;
     }
 
     list() {
-      return this.entries;
+      return __store;
     }
 
     getByPath(projectPath: string) {
-      return this.entries.find((e) => e.path === projectPath);
+      return __store.find((e) => e.path === projectPath);
     }
 
     setFederatedRepos(projectPath: string, repos: Array<{ path: string; name: string }>) {
-      const entry = this.entries.find((e) => e.path === projectPath);
+      const entry = __store.find((e) => e.path === projectPath);
       if (entry) entry.federatedRepos = repos;
     }
 
     read() {
-      return this.entries;
+      return __store;
     }
   }
 
@@ -64,7 +68,8 @@ vi.mock('../../src/cli/project-detector.js', () => {
     getProjectIndexPath: mockGetProjectIndexPath,
     findProjectRoot: mockFindProjectRoot,
     GlobalRegistry: MockGlobalRegistry,
-    hashProjectPath: vi.fn(() => 'abc12345'),
+    hashProjectPath: vi.fn((p: string) => 'h' + p),
+    __resetStore: () => { __store.length = 0; },
   };
 });
 
@@ -77,7 +82,17 @@ const {
   removeClaudeMdSection,
   removeClaudeSettings,
   removeMcpJson,
+  initProject,
+  addFederatedRepo,
+  removeFederatedRepo,
 } = await import('../../src/cli/init.js');
+
+// Reset the shared in-memory registry store between every test so federation
+// state from one test cannot leak into another.
+const __detectorMock = await import('../../src/cli/project-detector.js');
+beforeEach(() => {
+  (__detectorMock as unknown as { __resetStore: () => void }).__resetStore();
+});
 
 describe('writeMcpJson', () => {
   let tempDir: string;
@@ -453,5 +468,195 @@ describe('removeMcpJson', () => {
     const result = removeMcpJson(tempDir);
     expect(result).toBe('removed');
     expect(existsSync(join(tempDir, '.mcp.json'))).toBe(false);
+  });
+});
+
+describe('initProject', () => {
+  let tempDir: string;
+  let logSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    tempDir = join(tmpdir(), `pindex-initproj-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    mkdirSync(tempDir, { recursive: true });
+    logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    rmSync(tempDir, { recursive: true, force: true });
+    logSpy.mockRestore();
+  });
+
+  it('creates .pindex dir, .mcp.json, CLAUDE.md, hooks and .gitignore', async () => {
+    await initProject(tempDir);
+
+    // .pindex/ directory created
+    expect(existsSync(join(tempDir, '.pindex'))).toBe(true);
+
+    // .mcp.json written with correct shape
+    const mcpPath = join(tempDir, '.mcp.json');
+    expect(existsSync(mcpPath)).toBe(true);
+    const config = JSON.parse(readFileSync(mcpPath, 'utf-8'));
+    expect(config.mcpServers.pindex.command).toBe('pindex-server');
+    expect(config.mcpServers.pindex.env.PROJECT_ROOT).toBe(tempDir);
+    // index path uses absolute path inside the project's .pindex/
+    expect(config.mcpServers.pindex.env.INDEX_PATH).toContain('.pindex');
+    expect(config.mcpServers.pindex.env.MONITORING_PORT).toBe('7843');
+    expect(config.mcpServers.pindex.env.AUTO_REINDEX).toBe('true');
+
+    // side-effect files
+    expect(existsSync(join(tempDir, 'CLAUDE.md'))).toBe(true);
+    expect(existsSync(join(tempDir, '.claude', 'settings.json'))).toBe(true);
+    expect(existsSync(join(tempDir, '.gitignore'))).toBe(true);
+
+    // banner printed
+    expect(logSpy).toHaveBeenCalled();
+  });
+
+  it('is idempotent on re-init (already registered) and reuses .pindex dir', async () => {
+    await initProject(tempDir);
+    // second run must not throw and should leave files in place
+    await initProject(tempDir);
+
+    const config = JSON.parse(readFileSync(join(tempDir, '.mcp.json'), 'utf-8'));
+    expect(config.mcpServers.pindex.env.PROJECT_ROOT).toBe(tempDir);
+    expect(existsSync(join(tempDir, '.pindex'))).toBe(true);
+  });
+
+  it('prints federated repos in the banner when present', async () => {
+    // First init to register the project, then federate a sibling repo.
+    await initProject(tempDir);
+
+    const repoDir = join(tmpdir(), `pindex-fed-repo-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    mkdirSync(repoDir, { recursive: true });
+    try {
+      await addFederatedRepo(tempDir, repoDir);
+      logSpy.mockClear();
+      await initProject(tempDir);
+      const printed = logSpy.mock.calls.map((c) => String(c[0])).join('\n');
+      expect(printed).toContain('Federated repos');
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('addFederatedRepo', () => {
+  let tempDir: string;
+  let repoDir: string;
+  let logSpy: ReturnType<typeof vi.spyOn>;
+  let errSpy: ReturnType<typeof vi.spyOn>;
+  let exitSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    const suffix = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    tempDir = join(tmpdir(), `pindex-addfed-proj-${suffix}`);
+    repoDir = join(tmpdir(), `pindex-addfed-repo-${suffix}`);
+    mkdirSync(tempDir, { recursive: true });
+    mkdirSync(repoDir, { recursive: true });
+    logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    exitSpy = vi.spyOn(process, 'exit').mockImplementation(((): never => {
+      throw new Error('process.exit called');
+    }) as never);
+  });
+
+  afterEach(() => {
+    rmSync(tempDir, { recursive: true, force: true });
+    rmSync(repoDir, { recursive: true, force: true });
+    logSpy.mockRestore();
+    errSpy.mockRestore();
+    exitSpy.mockRestore();
+  });
+
+  it('links a repo and writes FEDERATION_REPOS into .mcp.json', async () => {
+    await initProject(tempDir);
+    logSpy.mockClear();
+
+    await addFederatedRepo(tempDir, repoDir);
+
+    const config = JSON.parse(readFileSync(join(tempDir, '.mcp.json'), 'utf-8'));
+    expect(config.mcpServers.pindex.env.FEDERATION_REPOS).toContain(repoDir);
+
+    const printed = logSpy.mock.calls.map((c) => String(c[0])).join('\n');
+    expect(printed).toContain('Linked');
+  });
+
+  it('is idempotent — linking the same repo twice prints "Already linked"', async () => {
+    await initProject(tempDir);
+    await addFederatedRepo(tempDir, repoDir);
+    logSpy.mockClear();
+
+    await addFederatedRepo(tempDir, repoDir);
+    const printed = logSpy.mock.calls.map((c) => String(c[0])).join('\n');
+    expect(printed).toContain('Already linked');
+  });
+
+  it('errors and exits when the repo path does not exist', async () => {
+    await initProject(tempDir);
+    const missing = join(tmpdir(), `pindex-missing-${Date.now()}`);
+
+    await expect(addFederatedRepo(tempDir, missing)).rejects.toThrow('process.exit called');
+    expect(errSpy).toHaveBeenCalled();
+    expect(exitSpy).toHaveBeenCalledWith(1);
+  });
+
+  it('errors and exits when trying to federate the current project itself', async () => {
+    await initProject(tempDir);
+
+    await expect(addFederatedRepo(tempDir, tempDir)).rejects.toThrow('process.exit called');
+    expect(errSpy).toHaveBeenCalled();
+    expect(exitSpy).toHaveBeenCalledWith(1);
+  });
+});
+
+describe('removeFederatedRepo', () => {
+  let tempDir: string;
+  let repoDir: string;
+  let logSpy: ReturnType<typeof vi.spyOn>;
+  let errSpy: ReturnType<typeof vi.spyOn>;
+  let exitSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    const suffix = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    tempDir = join(tmpdir(), `pindex-rmfed-proj-${suffix}`);
+    repoDir = join(tmpdir(), `pindex-rmfed-repo-${suffix}`);
+    mkdirSync(tempDir, { recursive: true });
+    mkdirSync(repoDir, { recursive: true });
+    logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    exitSpy = vi.spyOn(process, 'exit').mockImplementation(((): never => {
+      throw new Error('process.exit called');
+    }) as never);
+  });
+
+  afterEach(() => {
+    rmSync(tempDir, { recursive: true, force: true });
+    rmSync(repoDir, { recursive: true, force: true });
+    logSpy.mockRestore();
+    errSpy.mockRestore();
+    exitSpy.mockRestore();
+  });
+
+  it('unlinks a previously federated repo and updates .mcp.json', async () => {
+    await initProject(tempDir);
+    await addFederatedRepo(tempDir, repoDir);
+    // sanity: it was linked
+    let config = JSON.parse(readFileSync(join(tempDir, '.mcp.json'), 'utf-8'));
+    expect(config.mcpServers.pindex.env.FEDERATION_REPOS).toContain(repoDir);
+
+    logSpy.mockClear();
+    await removeFederatedRepo(tempDir, repoDir);
+
+    config = JSON.parse(readFileSync(join(tempDir, '.mcp.json'), 'utf-8'));
+    expect(config.mcpServers.pindex.env.FEDERATION_REPOS).toBeUndefined();
+    const printed = logSpy.mock.calls.map((c) => String(c[0])).join('\n');
+    expect(printed).toContain('Unlinked');
+  });
+
+  it('errors and exits when the project is not registered', async () => {
+    // tempDir was never initialised → not in registry
+    await expect(removeFederatedRepo(tempDir, repoDir)).rejects.toThrow('process.exit called');
+    expect(errSpy).toHaveBeenCalled();
+    expect(exitSpy).toHaveBeenCalledWith(1);
   });
 });

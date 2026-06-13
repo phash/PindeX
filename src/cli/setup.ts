@@ -1,7 +1,7 @@
 import { mkdirSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir, platform } from 'node:os';
 import { join } from 'node:path';
-import { getPindexHome } from './project-detector.js';
+import { getPindexHome, ensurePindexHome, writeFileSecure } from './project-detector.js';
 
 const DEFAULT_CONFIG = {
   version: '1.0.0',
@@ -22,12 +22,11 @@ const DEFAULT_CONFIG = {
 
 /** Writes the default global config file. */
 export function writeGlobalConfig(): void {
-  const home = getPindexHome();
-  if (!existsSync(home)) mkdirSync(home, { recursive: true });
+  const home = ensurePindexHome();
 
   const configPath = join(home, 'config.json');
   if (!existsSync(configPath)) {
-    writeFileSync(configPath, JSON.stringify(DEFAULT_CONFIG, null, 2), 'utf-8');
+    writeFileSecure(configPath, JSON.stringify(DEFAULT_CONFIG, null, 2));
   }
 }
 

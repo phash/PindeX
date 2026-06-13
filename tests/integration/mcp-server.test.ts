@@ -9,7 +9,7 @@ import { createTestDb } from '../helpers/db.js';
 import { Indexer } from '../../src/indexer/index.js';
 import { TokenLogger } from '../../src/monitoring/token-logger.js';
 import { createMcpServer } from '../../src/server.js';
-import { insertTestSession } from '../helpers/fixtures.js';
+import { insertTestSession, insertTestFile, insertTestSymbol } from '../helpers/fixtures.js';
 import { makeTestRepoSet } from '../helpers/repo-set.js';
 
 /** Minimal helper to call a registered MCP tool handler directly. */
@@ -17,12 +17,13 @@ async function callTool(
   server: ReturnType<typeof createMcpServer>,
   toolName: string,
   args: Record<string, unknown>,
-): Promise<unknown> {
+): Promise<any> {
   // Access the internal handler by sending a mock request
   // We test the tool functions directly in unit tests;
-  // here we verify the server wires them up correctly.
+  // here we verify the server wires them up correctly. A missing handler is
+  // an SDK regression, so fail loudly rather than silently skipping.
   const handler = (server as any)._requestHandlers?.get('tools/call');
-  if (!handler) throw new Error('No call handler registered');
+  expect(handler).toBeDefined();
   const result = await handler({ method: 'tools/call', params: { name: toolName, arguments: args } });
   return JSON.parse(result.content[0].text);
 }
@@ -70,14 +71,8 @@ describe('MCP Server Integration', () => {
     const tokenLogger = new TokenLogger({ db, sessionId, emitter });
     const server = createMcpServer(db, indexer, tokenLogger, null, { projectRoot: testDir });
 
-    // Call via the handler
-    const handler = (server as any)._requestHandlers?.get('tools/call');
-    if (!handler) {
-      // If the private API isn't accessible, skip this test
-      return;
-    }
-    const result = await handler({ method: 'tools/call', params: { name: 'get_project_overview', arguments: {} } });
-    const overview = JSON.parse(result.content[0].text);
+    // Call via the shared callTool helper (asserts the handler is wired up).
+    const overview = await callTool(server, 'get_project_overview', {});
     expect(overview.rootPath).toBe(testDir);
   });
 });
@@ -103,11 +98,28 @@ describe('Tool functions smoke test (via indexed project)', () => {
     rmSync(testDir, { recursive: true, force: true });
   });
 
-  it('search_symbols finds indexed symbols', async () => {
+  it('search_symbols finds a known symbol', async () => {
+    // This suite runs under the global tree-sitter mock (empty AST), so the
+    // real indexAll() above extracts 0 symbols. Insert a symbol directly via
+    // fixtures so the FTS5 path has something concrete to find — then assert
+    // the search actually returns that symbol, not merely that it returns an
+    // array.
+    const fileId = insertTestFile(db, { path: 'src/known.ts' });
+    insertTestSymbol(db, {
+      fileId,
+      name: 'KnownWidget',
+      kind: 'class',
+      signature: 'class KnownWidget {}',
+      isExported: true,
+    });
+
     const { searchSymbols } = await import('../../src/tools/search_symbols.js');
-    const results = searchSymbols(makeTestRepoSet(db), { query: 'AuthService' });
-    // Results depend on tree-sitter being available; at minimum no error
+    const results = searchSymbols(makeTestRepoSet(db), { query: 'KnownWidget' });
     expect(Array.isArray(results)).toBe(true);
+    expect(results.map((r) => r.name)).toContain('KnownWidget');
+    const hit = results.find((r) => r.name === 'KnownWidget');
+    expect(hit?.kind).toBe('class');
+    expect(hit?.file).toBe('src/known.ts');
   });
 
   it('get_project_overview returns correct file count', async () => {

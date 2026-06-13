@@ -48,9 +48,20 @@ describe('RepoSet', () => {
   });
 
   it('throws when an unknown name is provided', () => {
-    expect(() => makeRepos().filter(['nope'])).toThrow(
-      /Unknown repo name: 'nope'\. Known: \[local, auth, web\]/,
-    );
+    expect(() => makeRepos().filter(['nope'])).toThrow(/Unknown repo name: 'nope'/);
+  });
+
+  it('does not enumerate known repo names in the error (SEC-09)', () => {
+    // The error must not leak the list of federated project names into the
+    // caller / LLM transcript.
+    let message = '';
+    try {
+      makeRepos().filter(['nope']);
+    } catch (err) {
+      message = (err as Error).message;
+    }
+    expect(message).not.toMatch(/local|auth|web/);
+    expect(message).not.toContain('Known');
   });
 
   it('marks the primary repo with isPrimary=true and federated repos with isPrimary=false', () => {

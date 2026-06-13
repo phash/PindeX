@@ -1,0 +1,28 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm ci
+      - name: Type-check
+        run: npm run lint
+      - name: Build
+        run: npm run build
+      - name: Unit tests
+        run: npm test
+      - name: Integration tests (real tree-sitter bindings)
+        run: npm run test:integration
+      - name: Production dependency audit
+        run: npm audit --omit=dev --audit-level=high

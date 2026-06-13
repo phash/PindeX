@@ -309,19 +309,41 @@ export function extractImports(rootNode: AstNode): ParsedImport[] {
 // Used for languages without a tree-sitter grammar. Each extractor returns
 // symbols and imports parsed from the raw source text via regular expressions.
 
+/** Returns the 1-based line number containing the given character offset, using
+ *  a precomputed array of line-start offsets and binary search (O(log n)). */
+function lineForOffset(lineStarts: number[], offset: number): number {
+  let lo = 0;
+  let hi = lineStarts.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (lineStarts[mid] <= offset) lo = mid;
+    else hi = mid - 1;
+  }
+  return lo + 1;
+}
+
 function regexSymbols(
   content: string,
   patterns: Array<{ re: RegExp; kind: SymbolKind }>,
 ): ParsedSymbol[] {
   const symbols: ParsedSymbol[] = [];
   const lines = content.split('\n');
+  // Precompute line-start offsets once. Per-match line numbers are then an
+  // O(log n) binary search instead of an O(n) slice+split, avoiding the
+  // O(n*matches) blow-up on files with many symbols (SEC-11).
+  const lineStarts = new Array<number>(lines.length);
+  let acc = 0;
+  for (let i = 0; i < lines.length; i++) {
+    lineStarts[i] = acc;
+    acc += lines[i].length + 1; // +1 for the '\n' that split() consumed
+  }
   for (const { re, kind } of patterns) {
     let m: RegExpExecArray | null;
     re.lastIndex = 0;
     while ((m = re.exec(content)) !== null) {
       const name = m[1] ?? m[2];
       if (!name) continue;
-      const lineNum = content.slice(0, m.index).split('\n').length;
+      const lineNum = lineForOffset(lineStarts, m.index);
       const rawLine = lines[lineNum - 1] ?? '';
       const sig = rawLine.trim().replace(/\s+/g, ' ').substring(0, 80);
       symbols.push({ name, kind, signature: sig, startLine: lineNum, endLine: lineNum, isExported: true, isAsync: false, hasTryCatch: false });
@@ -414,7 +436,7 @@ function parseRuby(content: string): { symbols: ParsedSymbol[]; imports: ParsedI
 function parseCsharp(content: string): { symbols: ParsedSymbol[]; imports: ParsedImport[] } {
   const symbols = regexSymbols(content, [
     { re: /^[ \t]*(?:(?:public|private|protected|internal|static|abstract|sealed|partial|readonly)\s+)*(?:class|interface|struct|enum|record)\s+(\w+)/gm, kind: 'class' },
-    { re: /^[ \t]*(?:(?:public|private|protected|internal|static|abstract|virtual|override|async|extern|sealed|new)\s+)*(?:<[^>]+>\s+)?[\w\[\]<>?,\s]+\s+(\w+)\s*\(/gm, kind: 'method' },
+    { re: /^[ \t]*(?:(?:public|private|protected|internal|static|abstract|virtual|override|async|extern|sealed|new)\s+)*(?:<[^>]+>\s+)?[\w\[\]<>?,]+(?:\s+[\w\[\]<>?,]+)*\s+(\w+)\s*\(/gm, kind: 'method' },
   ]);
   const imports: ParsedImport[] = [];
   const usingRe = /^using(?:\s+static)?\s+([\w.]+);/gm;

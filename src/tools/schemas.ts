@@ -4,6 +4,19 @@ import { z } from 'zod';
 
 const reposField = z.array(z.string()).optional();
 
+/** A project-relative path that may not be absolute or contain ".." traversal
+ *  segments. Defense-in-depth on top of the runtime resolveWithinRoot guard. */
+const safeRelPath = z
+  .string()
+  .min(1)
+  .refine(
+    (p) =>
+      !p.startsWith('/') &&
+      !/^[A-Za-z]:[\\/]/.test(p) &&
+      !p.split(/[\\/]/).includes('..'),
+    { message: 'Path must be project-relative and contain no ".." segments' },
+  );
+
 export const SearchSymbolsSchema = z.object({
   query: z.string().min(1),
   limit: z.number().int().positive().optional(),
@@ -48,7 +61,7 @@ export const GetProjectOverviewSchema = z.object({
 });
 
 export const ReindexSchema = z.object({
-  target: z.string().optional(),
+  target: safeRelPath.optional(),
 });
 
 export const GetTokenStatsSchema = z.object({
@@ -56,7 +69,7 @@ export const GetTokenStatsSchema = z.object({
 });
 
 export const StartComparisonSchema = z.object({
-  label: z.string().min(1),
+  label: z.string().min(1).max(200),
   mode: z.enum(['indexed', 'baseline']),
 });
 

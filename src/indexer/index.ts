@@ -19,6 +19,7 @@ import {
 import { computeAstDiff, type AstDiffResult } from '../memory/ast-diff.js';
 import { Summarizer, type SummarizerOptions } from './summarizer.js';
 import { LspPythonClient } from './lsp-python.js';
+import { resolveWithinRoot } from '../util/paths.js';
 
 // ─── Default Configuration ────────────────────────────────────────────────────
 
@@ -150,10 +151,17 @@ export class Indexer {
 
     const allCodePaths = [...codePaths, ...(options.additionalPaths ?? [])];
 
-    const jobs = allCodePaths.map((rel) => ({
-      absolutePath: join(this.projectRoot, rel),
-      relativePath: rel,
-    }));
+    // Guard against path traversal: additionalPaths are caller-supplied and could
+    // contain '..' segments or absolute paths that escape the project root. glob
+    // results are already root-relative, but resolveWithinRoot is cheap insurance.
+    const jobs = allCodePaths
+      .map((rel) => ({
+        absolutePath: resolveWithinRoot(this.projectRoot, rel),
+        relativePath: rel,
+      }))
+      .filter(
+        (j): j is { absolutePath: string; relativePath: string } => j.absolutePath !== null,
+      );
 
     const importsCache = new Map<string, ParsedImport[]>();
 
@@ -206,7 +214,10 @@ export class Indexer {
 
   /** Indexes (or re-indexes) a single file given its project-relative path. */
   async indexFile(relativePath: string, force = false): Promise<IndexFileResult> {
-    const absolutePath = join(this.projectRoot, relativePath);
+    const absolutePath = resolveWithinRoot(this.projectRoot, relativePath);
+    if (!absolutePath) {
+      return { status: 'error', errors: ['Path escapes project root'] };
+    }
 
     if (!existsSync(absolutePath)) {
       return { status: 'error', errors: [`File not found: ${relativePath}`] };
@@ -335,7 +346,10 @@ export class Indexer {
 
   /** Indexes (or re-indexes) a single document file given its project-relative path. */
   async indexDocument(relativePath: string, force = false): Promise<IndexFileResult> {
-    const absolutePath = join(this.projectRoot, relativePath);
+    const absolutePath = resolveWithinRoot(this.projectRoot, relativePath);
+    if (!absolutePath) {
+      return { status: 'error', errors: ['Path escapes project root'] };
+    }
 
     if (!existsSync(absolutePath)) {
       return { status: 'error', errors: [`File not found: ${relativePath}`] };
@@ -415,8 +429,8 @@ export class Indexer {
       if (cache && cache.has(file.path)) {
         imports = cache.get(file.path);
       } else {
-        const absolutePath = join(this.projectRoot, file.path);
-        if (!existsSync(absolutePath)) continue;
+        const absolutePath = resolveWithinRoot(this.projectRoot, file.path);
+        if (!absolutePath || !existsSync(absolutePath)) continue;
         try {
           const content = readFileSync(absolutePath, 'utf-8');
           imports = parseFile(absolutePath, content).imports;

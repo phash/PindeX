@@ -45,9 +45,9 @@ export class RepoSet {
     const known = this.repos.map((r) => r.name);
     for (const name of wanted) {
       if (!known.includes(name)) {
-        throw new Error(
-          `Unknown repo name: '${name}'. Known: [${known.join(', ')}]`,
-        );
+        // Do not enumerate known repo names in the error: that list leaks every
+        // federated project name into the LLM context / shared transcripts (SEC-09).
+        throw new Error(`Unknown repo name: '${name}'`);
       }
     }
     return this.repos.filter((r) => wanted.has(r.name));

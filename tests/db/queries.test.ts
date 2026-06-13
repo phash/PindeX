@@ -18,6 +18,7 @@ import {
   getSymbolsByFileId,
   getSymbolByName,
   searchSymbolsFts,
+  sanitizeFtsQuery,
   getDependenciesByFile,
   getImportedByFile,
   getUsagesBySymbol,
@@ -343,5 +344,69 @@ describe('Session queries', () => {
       const sessions = listSessions(db);
       expect(sessions).toHaveLength(2);
     });
+  });
+});
+
+describe('sanitizeFtsQuery', () => {
+  it('wraps a single token as a quoted FTS5 phrase', () => {
+    expect(sanitizeFtsQuery('createUser')).toBe('"createUser"');
+  });
+
+  it('wraps each of multiple tokens as a separate quoted phrase', () => {
+    expect(sanitizeFtsQuery('create user service')).toBe(
+      '"create" "user" "service"',
+    );
+  });
+
+  it('collapses runs of whitespace between tokens', () => {
+    expect(sanitizeFtsQuery('  foo \t bar  ')).toBe('"foo" "bar"');
+  });
+
+  it('escapes embedded double quotes by doubling them', () => {
+    expect(sanitizeFtsQuery('say"hi')).toBe('"say""hi"');
+  });
+
+  it('returns the empty-phrase expression for an empty query', () => {
+    expect(sanitizeFtsQuery('')).toBe('""');
+  });
+
+  it('returns the empty-phrase expression for a whitespace-only query', () => {
+    expect(sanitizeFtsQuery('   \t  ')).toBe('""');
+  });
+
+  it('treats FTS5 operators / code tokens as literal phrases, not syntax', () => {
+    expect(sanitizeFtsQuery('parse()')).toBe('"parse()"');
+    expect(sanitizeFtsQuery('foo:bar')).toBe('"foo:bar"');
+    expect(sanitizeFtsQuery('a OR b')).toBe('"a" "OR" "b"');
+    expect(sanitizeFtsQuery('"unclosed')).toBe('"""unclosed"');
+  });
+});
+
+describe('FTS robustness (SEC-05/TST-15)', () => {
+  let db: Database.Database;
+  let fileId: number;
+
+  beforeEach(() => {
+    db = createTestDb();
+    fileId = insertTestFile(db, { path: 'src/parser.ts' });
+    insertTestSymbol(db, { fileId, name: 'parseExpression' });
+  });
+
+  const malformed = ['"unclosed', 'parse()', 'foo:bar', 'a OR', 'C++', '* (', ''];
+
+  for (const query of malformed) {
+    it(`does not throw and returns an array for query ${JSON.stringify(query)}`, () => {
+      let results: unknown;
+      expect(() => {
+        results = searchSymbolsFts(db, query, 10);
+      }).not.toThrow();
+      expect(Array.isArray(results)).toBe(true);
+    });
+  }
+
+  it('still matches a normal token against an inserted symbol', () => {
+    const results = searchSymbolsFts(db, 'parseExpression', 10);
+    expect(results.length).toBeGreaterThan(0);
+    expect(results[0].name).toBe('parseExpression');
   });
 });
