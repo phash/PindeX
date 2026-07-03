@@ -62,6 +62,22 @@ describe('getProjectMetaPath', () => {
 });
 
 describe('GlobalRegistry — name field', () => {
+  // Sandboxed: mock homedir to a temp dir so these tests never touch the real
+  // ~/.pindex/registry.json (the migration test below writes a registry file).
+  let tempHome: string;
+
+  beforeEach(async () => {
+    tempHome = join(tmpdir(), `pindex-name-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    mkdirSync(tempHome, { recursive: true });
+    const { homedir } = await import('node:os');
+    vi.mocked(homedir).mockReturnValue(tempHome);
+  });
+
+  afterEach(() => {
+    rmSync(tempHome, { recursive: true, force: true });
+    vi.restoreAllMocks();
+  });
+
   it('assigns a name on upsert when missing', () => {
     const reg = new GlobalRegistry();
     const entry = reg.upsert('/tmp/some-test-project-' + Date.now());
