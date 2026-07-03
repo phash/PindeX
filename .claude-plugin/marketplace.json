@@ -1,0 +1,35 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "phash",
+  "owner": {
+    "name": "phash",
+    "email": "projekt@phash.de"
+  },
+  "metadata": {
+    "description": "PindeX — structural codebase indexer for token-efficient AI coding.",
+    "version": "1.6.0"
+  },
+  "plugins": [
+    {
+      "name": "pindex",
+      "source": "./",
+      "description": "Structural codebase indexer (MCP): search_symbols, get_file_summary, find_usages, get_dependencies + passive session memory. Cuts token usage on medium-to-large codebases (break-even ~40+ files). Self-configuring, no per-project setup.",
+      "version": "1.6.0",
+      "author": {
+        "name": "phash",
+        "url": "https://github.com/phash"
+      },
+      "category": "development",
+      "keywords": [
+        "mcp",
+        "codebase-indexer",
+        "navigation",
+        "token-reduction",
+        "tree-sitter",
+        "code-intelligence"
+      ],
+      "homepage": "https://github.com/phash/PindeX",
+      "repository": "https://github.com/phash/PindeX"
+    }
+  ]
+}

@@ -1,0 +1,30 @@
+{
+  "name": "pindex",
+  "version": "1.6.0",
+  "description": "Structural codebase indexer (MCP): targeted navigation tools (search_symbols, get_file_summary, find_usages, get_dependencies, session memory) that cut token usage in AI coding sessions. Self-configuring — no per-project setup.",
+  "author": {
+    "name": "phash",
+    "url": "https://github.com/phash"
+  },
+  "homepage": "https://github.com/phash/PindeX",
+  "repository": "https://github.com/phash/PindeX",
+  "license": "MIT",
+  "keywords": [
+    "mcp",
+    "codebase-indexer",
+    "navigation",
+    "token-reduction",
+    "tree-sitter",
+    "code-intelligence",
+    "claude"
+  ],
+  "mcpServers": {
+    "pindex": {
+      "command": "npx",
+      "args": ["-y", "-p", "pindex", "pindex-server"],
+      "env": {
+        "PROJECT_ROOT": "${CLAUDE_PROJECT_DIR}"
+      }
+    }
+  }
+}

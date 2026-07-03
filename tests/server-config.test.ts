@@ -60,4 +60,14 @@ describe('resolveServerConfig', () => {
     // Self-registered so the CLI / aggregated GUI can discover the project.
     expect(new GlobalRegistry().getByPath(proj)?.path).toBe(resolve(proj));
   });
+
+  it('ignores an unsubstituted ${...} PROJECT_ROOT literal and falls back to cwd', async () => {
+    writeFileSync(join(proj, 'main.py'), 'x = 1');
+    const cfg = await resolveServerConfig(
+      { PROJECT_ROOT: '${CLAUDE_PROJECT_DIR}' } as unknown as NodeJS.ProcessEnv,
+      proj,
+    );
+    expect(cfg.projectRoot).toBe(resolve(proj));
+    expect(cfg.languages).toEqual(['python']);
+  });
 });

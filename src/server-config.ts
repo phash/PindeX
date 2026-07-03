@@ -28,7 +28,13 @@ export async function resolveServerConfig(
   env: NodeJS.ProcessEnv,
   cwd: string,
 ): Promise<ServerConfig> {
-  const projectRoot = env.PROJECT_ROOT ?? findProjectRoot(cwd);
+  // A plugin passes PROJECT_ROOT="${CLAUDE_PROJECT_DIR}" so the server anchors to
+  // the real project even when Claude Code is launched from a parent directory.
+  // If the token was left unsubstituted (a literal "${...}"), ignore it and fall
+  // back to cwd, which defaults to the project root.
+  const explicitRoot = env.PROJECT_ROOT;
+  const projectRoot =
+    explicitRoot && !explicitRoot.includes('${') ? explicitRoot : findProjectRoot(cwd);
 
   let entry: RegistryEntry | undefined;
   try {
