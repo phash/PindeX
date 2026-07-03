@@ -10,18 +10,18 @@ import { createMcpServer } from './server.js';
 import { createSession } from './db/queries.js';
 import { getProjectIndexPath, GlobalRegistry } from './cli/project-detector.js';
 import { assignName } from './federation/registry-name.js';
-import { parseFederationRepos } from './federation/repos-env.js';
+import { resolveServerConfig } from './server-config.js';
 import { SessionObserver } from './memory/observer.js';
 import { applyObservationRetention } from './memory/retention.js';
 import { v4 as uuidv4 } from 'uuid';
 
 // ─── Configuration (from environment variables) ───────────────────────────────
 
-const INDEX_PATH = process.env.INDEX_PATH ?? './.codebase-index/index.db';
-const PROJECT_ROOT = process.env.PROJECT_ROOT ?? process.cwd();
-const LANGUAGES = (process.env.LANGUAGES ?? 'typescript,javascript').split(',');
+// PROJECT_ROOT, INDEX_PATH, MONITORING_PORT, LANGUAGES and FEDERATION_REPOS are
+// resolved at startup by resolveServerConfig() (explicit env wins, otherwise
+// derived from the project root + self-registered), so the server also works as
+// a zero-config plugin. The remaining knobs are plain env reads.
 const AUTO_REINDEX = process.env.AUTO_REINDEX !== 'false';
-const MONITORING_PORT = parseInt(process.env.MONITORING_PORT ?? '7842', 10);
 const MONITORING_AUTO_OPEN = process.env.MONITORING_AUTO_OPEN === 'true';
 const BASELINE_MODE = process.env.BASELINE_MODE === 'true';
 const GENERATE_SUMMARIES = process.env.GENERATE_SUMMARIES === 'true';
@@ -33,10 +33,19 @@ const SUMMARIZER_API_KEY = process.env.SUMMARIZER_API_KEY ?? '';
 const SUMMARIZER_BASE_URL = process.env.SUMMARIZER_BASE_URL ?? 'https://api.openai.com/v1';
 const SUMMARIZER_MODEL = process.env.SUMMARIZER_MODEL ?? 'gpt-4o-mini';
 
-// Federated repos: OS-path-delimiter-separated absolute paths (see repos-env.ts)
-const FEDERATION_REPOS: string[] = parseFederationRepos(process.env.FEDERATION_REPOS);
-
 async function main(): Promise<void> {
+  // Resolve config: explicit env wins, otherwise derive from the project root
+  // and self-register in the global registry (see server-config.ts).
+  const cfg = await resolveServerConfig(process.env, process.cwd());
+  const INDEX_PATH = cfg.indexPath;
+  const PROJECT_ROOT = cfg.projectRoot;
+  const LANGUAGES = cfg.languages;
+  const MONITORING_PORT = cfg.monitoringPort;
+  const FEDERATION_REPOS = cfg.federationRepos;
+  process.stderr.write(
+    `[pindex] project=${PROJECT_ROOT} languages=${LANGUAGES.join(',')} port=${MONITORING_PORT} index=${INDEX_PATH}\n`,
+  );
+
   // 1. Open / create the SQLite database
   const db = openDatabase(INDEX_PATH);
   runMigrations(db);
