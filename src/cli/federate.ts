@@ -7,6 +7,7 @@ import {
   type FederatedRegistryEntry,
 } from './project-detector.js';
 import { assignName } from '../federation/registry-name.js';
+import { parseFederationRepos, joinFederationRepos } from '../federation/repos-env.js';
 
 interface McpServerConfig {
   command?: string;
@@ -41,14 +42,6 @@ function ensurePindexEnv(mcp: McpJson): Record<string, string> {
     mcp.mcpServers.pindex.env = {};
   }
   return mcp.mcpServers.pindex.env;
-}
-
-function parseFederationEnvList(value: string | undefined): string[] {
-  if (!value) return [];
-  return value
-    .split(/[:,]/)
-    .map((s) => s.trim())
-    .filter(Boolean);
 }
 
 export async function federateAdd(
@@ -108,9 +101,9 @@ export async function federateAdd(
 
   const mcp = readMcpJson(projectRoot);
   const env = ensurePindexEnv(mcp);
-  const list = parseFederationEnvList(env.FEDERATION_REPOS);
+  const list = parseFederationRepos(env.FEDERATION_REPOS);
   if (!list.includes(targetRoot)) list.push(targetRoot);
-  env.FEDERATION_REPOS = list.join(':');
+  env.FEDERATION_REPOS = joinFederationRepos(list);
   writeMcpJson(projectRoot, mcp);
 
   console.log(
@@ -145,9 +138,9 @@ export async function federateRemove(cwd: string, nameOrPath: string): Promise<v
 
   const mcp = readMcpJson(projectRoot);
   const env = ensurePindexEnv(mcp);
-  const list = parseFederationEnvList(env.FEDERATION_REPOS).filter((p) => p !== match.path);
+  const list = parseFederationRepos(env.FEDERATION_REPOS).filter((p) => p !== match.path);
   if (list.length > 0) {
-    env.FEDERATION_REPOS = list.join(':');
+    env.FEDERATION_REPOS = joinFederationRepos(list);
   } else {
     delete env.FEDERATION_REPOS;
   }

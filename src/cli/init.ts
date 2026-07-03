@@ -6,6 +6,7 @@ import {
   GlobalRegistry,
   type RegistryEntry,
 } from './project-detector.js';
+import { joinFederationRepos } from '../federation/repos-env.js';
 
 // ─── .mcp.json generation ─────────────────────────────────────────────────
 
@@ -15,7 +16,7 @@ export function writeMcpJson(
 ): void {
   const federationEnv =
     entry.federatedRepos.length > 0
-      ? { FEDERATION_REPOS: entry.federatedRepos.map((r) => r.path).join(':') }
+      ? { FEDERATION_REPOS: joinFederationRepos(entry.federatedRepos.map((r) => r.path)) }
       : {};
 
   const config = {

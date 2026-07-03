@@ -165,7 +165,7 @@ TOKEN_PRICE_PER_MILLION=3.00                    # for cost estimates
 PINDEX_PARSE_WORKERS=                           # parse workers (0=sync, empty=auto)
 PINDEX_BIND_HOST=127.0.0.1                      # bind host (loopback default)
 PINDEX_LSP=true                                 # opt-in LSP parsing for Python ('false' = force regex)
-FEDERATION_REPOS=/path/a:/path/b               # colon-separated extra repos (optional)
+FEDERATION_REPOS=/path/a:/path/b               # extra repos, OS path delimiter (: on POSIX, ; on Windows) (optional)
 # Federation CLI: configure via 'pindex federate add/remove/list' (preferred over editing FEDERATION_REPOS by hand).
 # 9 read-only tools (search_symbols, find_usages, get_symbol, get_file_summary, get_context,
 # get_dependencies, get_project_overview, search_docs, get_doc_chunk) accept an optional

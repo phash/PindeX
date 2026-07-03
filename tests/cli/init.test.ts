@@ -7,7 +7,7 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs';
-import { join } from 'node:path';
+import { join, delimiter } from 'node:path';
 
 // Mock the project-detector module to avoid touching ~/.pindex
 vi.mock('../../src/cli/project-detector.js', () => {
@@ -146,8 +146,9 @@ describe('writeMcpJson', () => {
     writeMcpJson(tempDir, entry);
 
     const config = JSON.parse(readFileSync(join(tempDir, '.mcp.json'), 'utf-8'));
+    // FEDERATION_REPOS joins with the OS path delimiter (':' POSIX, ';' Windows).
     expect(config.mcpServers.pindex.env.FEDERATION_REPOS).toBe(
-      '/path/to/repo-a:/path/to/repo-b',
+      ['/path/to/repo-a', '/path/to/repo-b'].join(delimiter),
     );
   });
 });

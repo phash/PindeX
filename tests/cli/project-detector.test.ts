@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 
 // Mock node:os so the isolated suites below can point ~/.pindex at a temp dir.
 // homedir defaults to the real one so the legacy suites keep their behaviour.
@@ -187,12 +187,13 @@ describe('GlobalRegistry — CRUD & port assignment (sandboxed)', () => {
     const reg = new Reg();
 
     const entry = reg.upsert('/tmp/proj-a');
-    expect(entry.path).toBe('/tmp/proj-a');
+    // upsert() normalises via resolve(); on Windows '/tmp/proj-a' -> 'E:\tmp\proj-a'.
+    expect(entry.path).toBe(resolve('/tmp/proj-a'));
     expect(entry.monitoringPort).toBeGreaterThanOrEqual(7842);
     expect(entry.federatedRepos).toEqual([]);
 
     expect(reg.list()).toHaveLength(1);
-    expect(reg.getByPath('/tmp/proj-a')?.path).toBe('/tmp/proj-a');
+    expect(reg.getByPath('/tmp/proj-a')?.path).toBe(resolve('/tmp/proj-a'));
     // registry.json was persisted (0600 on POSIX)
     const regPath = join(tempHome, '.pindex', 'registry.json');
     expect(existsSync(regPath)).toBe(true);

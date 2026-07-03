@@ -10,6 +10,7 @@ import { createMcpServer } from './server.js';
 import { createSession } from './db/queries.js';
 import { getProjectIndexPath, GlobalRegistry } from './cli/project-detector.js';
 import { assignName } from './federation/registry-name.js';
+import { parseFederationRepos } from './federation/repos-env.js';
 import { SessionObserver } from './memory/observer.js';
 import { applyObservationRetention } from './memory/retention.js';
 import { v4 as uuidv4 } from 'uuid';
@@ -32,11 +33,8 @@ const SUMMARIZER_API_KEY = process.env.SUMMARIZER_API_KEY ?? '';
 const SUMMARIZER_BASE_URL = process.env.SUMMARIZER_BASE_URL ?? 'https://api.openai.com/v1';
 const SUMMARIZER_MODEL = process.env.SUMMARIZER_MODEL ?? 'gpt-4o-mini';
 
-// Federated repos: colon- or comma-separated absolute paths
-const FEDERATION_REPOS: string[] = (process.env.FEDERATION_REPOS ?? '')
-  .split(/[:，,]/)
-  .map((p) => p.trim())
-  .filter(Boolean);
+// Federated repos: OS-path-delimiter-separated absolute paths (see repos-env.ts)
+const FEDERATION_REPOS: string[] = parseFederationRepos(process.env.FEDERATION_REPOS);
 
 async function main(): Promise<void> {
   // 1. Open / create the SQLite database

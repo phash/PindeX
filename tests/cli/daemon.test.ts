@@ -163,7 +163,10 @@ describe('daemon (TST-12)', () => {
     expect(existsSync(pidFile)).toBe(false);
   });
 
-  it('SEC-14: stopDaemon refuses to SIGTERM a PID that is not a pindex/node process', async () => {
+  // POSIX-only: the SEC-14 guard verifies the PID via /proc/<pid>/cmdline and
+  // deliberately fails open on platforms without /proc (see daemon.ts). On
+  // Windows isLikelyPindexProcess() returns true, so there is no refusal to assert.
+  it.skipIf(process.platform === 'win32')('SEC-14: stopDaemon refuses to SIGTERM a PID that is not a pindex/node process', async () => {
     const { writePidFile, stopDaemon } = await import('../../src/cli/daemon.js');
     const { getProjectsDir } = await import('../../src/cli/project-detector.js');
 

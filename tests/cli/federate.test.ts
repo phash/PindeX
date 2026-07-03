@@ -1,22 +1,36 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, delimiter } from 'node:path';
 import { federateAdd, federateRemove, federateList } from '../../src/cli/federate.js';
+
+// getPindexHome() resolves the registry via os.homedir(). Mock node:os so the
+// suite can point ~/.pindex at a temp dir cross-platform — Windows os.homedir()
+// ignores process.env.HOME (it uses USERPROFILE). tmpdir() stays real via the
+// actual spread. Mirrors tests/cli/project-detector.test.ts.
+vi.mock('node:os', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:os')>();
+  return { ...actual, homedir: vi.fn(actual.homedir) };
+});
 
 describe('pindex federate CLI', () => {
   let homeDir: string;
   let projectDir: string;
   let targetDir: string;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     homeDir = mkdtempSync(join(tmpdir(), 'pindex-fed-cli-'));
-    process.env.HOME = homeDir;
+    const { homedir } = await import('node:os');
+    vi.mocked(homedir).mockReturnValue(homeDir);
 
     projectDir = join(homeDir, 'project');
     targetDir = join(homeDir, 'target');
     mkdirSync(join(projectDir, '.pindex'), { recursive: true });
     mkdirSync(join(targetDir, '.pindex'), { recursive: true });
+    // findProjectRoot() walks up for a root marker; give projectDir one so it
+    // resolves to projectDir deterministically instead of climbing to a marker
+    // in a real ancestor dir (e.g. the user's home on Windows).
+    writeFileSync(join(projectDir, 'package.json'), '{}');
     writeFileSync(
       join(projectDir, '.mcp.json'),
       JSON.stringify({ mcpServers: { pindex: { env: {} } } }),
@@ -40,6 +54,7 @@ describe('pindex federate CLI', () => {
 
   afterEach(() => {
     rmSync(homeDir, { recursive: true, force: true });
+    vi.restoreAllMocks();
   });
 
   it('add appends path to FEDERATION_REPOS and updates registry', async () => {
@@ -185,7 +200,7 @@ describe('pindex federate CLI', () => {
     };
     // Should still contain it exactly once.
     const occurrences = (mcp.mcpServers.pindex.env.FEDERATION_REPOS ?? '')
-      .split(':')
+      .split(delimiter)
       .filter((p) => p === targetDir).length;
     expect(occurrences).toBe(1);
   });
