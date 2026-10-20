@@ -15,33 +15,39 @@ describe('getTokenStats', () => {
   });
 
   it('returns stats for a given session ID', () => {
-    const result = getTokenStats(db, { session_id: 'sess-abc' });
+    const result = getTokenStats(db, { session_id: 'sess-abc' }, 'current');
     expect(result.session_id).toBe('sess-abc');
     expect(result.tokens_used).toBe(130);
     expect(result.tokens_saved).toBe(1170);
   });
 
   it('returns savings_percent between 0 and 100', () => {
-    const result = getTokenStats(db, { session_id: 'sess-abc' });
+    const result = getTokenStats(db, { session_id: 'sess-abc' }, 'current');
     expect(result.savings_percent).toBeGreaterThan(0);
     expect(result.savings_percent).toBeLessThanOrEqual(100);
   });
 
   it('returns calls array with individual tool calls', () => {
-    const result = getTokenStats(db, { session_id: 'sess-abc' });
+    const result = getTokenStats(db, { session_id: 'sess-abc' }, 'current');
     expect(result.calls).toHaveLength(2);
     expect(result.calls[0].tool).toBe('search_symbols');
   });
 
   it('returns empty calls for session with no logs', () => {
     insertTestSession(db, 'empty-sess', 'indexed', null);
-    const result = getTokenStats(db, { session_id: 'empty-sess' });
+    const result = getTokenStats(db, { session_id: 'empty-sess' }, 'current');
     expect(result.calls).toHaveLength(0);
     expect(result.tokens_used).toBe(0);
   });
 
   it('includes started_at timestamp', () => {
-    const result = getTokenStats(db, { session_id: 'sess-abc' });
+    const result = getTokenStats(db, { session_id: 'sess-abc' }, 'current');
     expect(result.started_at).toBeTruthy();
+  });
+
+  it('defaults to the current session when session_id is omitted', () => {
+    const result = getTokenStats(db, {}, 'sess-abc');
+    expect(result.session_id).toBe('sess-abc');
+    expect(result.calls).toHaveLength(2);
   });
 });

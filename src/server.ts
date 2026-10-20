@@ -159,11 +159,11 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'get_token_stats',
-    description: 'Token usage stats for this session.',
+    description: 'Token usage stats for the current logging session (or a given session_id).',
     inputSchema: {
       type: 'object',
       properties: {
-        session_id: { type: 'string', description: 'Session ID (omit for current)' },
+        session_id: { type: 'string', description: 'Session ID (omit for the current logging session)' },
       },
       required: [],
     },
@@ -306,7 +306,9 @@ export function createMcpServer(
     { capabilities: { tools: {} } },
   );
 
-  const { projectRoot, monitoringPort = 7842, baselineMode = false, federatedDbs = [], sessionId = 'default', observer } = options;
+  const { projectRoot, monitoringPort = 7842, federatedDbs = [], sessionId = 'default', observer } = options;
+  // Mutable: start_comparison toggles baseline mode at runtime.
+  const state = { baselineMode: options.baselineMode ?? false };
 
   const primaryName = options.primaryName ?? 'local';
   const repoSet = RepoSet.fromServerConfig(
@@ -330,7 +332,7 @@ export function createMcpServer(
     const { name, arguments: rawArgs = {} } = request.params;
 
     // Baseline mode: all query tools return an error message
-    if (baselineMode && name !== 'get_token_stats' && name !== 'start_comparison') {
+    if (state.baselineMode && name !== 'get_token_stats' && name !== 'start_comparison') {
       return {
         content: [{ type: 'text', text: JSON.stringify({ error: 'Index disabled for baseline measurement' }) }],
       };
@@ -407,11 +409,15 @@ export function createMcpServer(
           break;
         }
         case 'get_token_stats': {
-          result = getTokenStats(db, args as GetTokenStatsInput);
+          result = getTokenStats(db, args as GetTokenStatsInput, tokenLogger?.getCurrentSessionId() ?? sessionId);
           break;
         }
         case 'start_comparison': {
-          result = startComparison(db, args as StartComparisonInput, monitoringPort);
+          const cmpInput = args as StartComparisonInput;
+          const cmp = startComparison(db, cmpInput, monitoringPort);
+          result = cmp;
+          tokenLogger?.setSessionId(cmp.session_id);
+          state.baselineMode = cmpInput.mode === 'baseline';
           break;
         }
         case 'search_docs': {

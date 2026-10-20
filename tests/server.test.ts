@@ -441,3 +441,65 @@ describe('createMcpServer – error & edge-case paths', () => {
     expect(res.error).toContain('Unknown tool');
   });
 });
+
+describe('createMcpServer – token stats and comparison sessions', () => {
+  let db: Database.Database;
+  let indexer: Indexer;
+  let testDir: string;
+  let sessionId: string;
+  let server: McpServer;
+
+  beforeEach(() => {
+    db = createTestDb();
+    testDir = join(tmpdir(), `pindex-srv-cmp-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    mkdirSync(testDir, { recursive: true });
+    indexer = new Indexer({ db, projectRoot: testDir, maxParseWorkers: 0, lspEnabled: false });
+    sessionId = uuidv4();
+    insertTestSession(db, sessionId, 'indexed', 'Real');
+    const tokenLogger = new TokenLogger({ db, sessionId, emitter: new EventEmitter() });
+    server = createMcpServer(db, indexer, tokenLogger, null, { projectRoot: testDir, sessionId });
+  });
+
+  afterEach(() => {
+    rmSync(testDir, { recursive: true, force: true });
+  });
+
+  it('get_token_stats without session_id reports the current logging session', async () => {
+    await callTool(server, 'search_symbols', { query: 'greet' });
+    const stats = await callTool(server, 'get_token_stats', {});
+    expect(stats.session_id).toBe(sessionId);
+    expect(stats.calls.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('start_comparison switches logging to the new session and enables baseline mode', async () => {
+    const cmp = await callTool(server, 'start_comparison', { label: 'b', mode: 'baseline' });
+    const res = await callTool(server, 'search_symbols', { query: 'greet' });
+    expect(res.error).toBe('Index disabled for baseline measurement');
+
+    const rows = db.prepare('SELECT session_id FROM token_log WHERE tool_name = ?').all('start_comparison') as Array<{ session_id: string }>;
+    expect(rows.map((r) => r.session_id)).toContain(cmp.session_id);
+
+    const stats = await callTool(server, 'get_token_stats', {});
+    expect(stats.session_id).toBe(cmp.session_id);
+  });
+
+  it('start_comparison indexed turns baseline mode off again and logs to the new session', async () => {
+    await callTool(server, 'start_comparison', { label: 'b', mode: 'baseline' });
+    const cmp = await callTool(server, 'start_comparison', { label: 'i', mode: 'indexed' });
+    const res = await callTool(server, 'search_symbols', { query: 'greet' });
+    expect(res.error).toBeUndefined();
+
+    const row = db.prepare('SELECT session_id FROM token_log WHERE tool_name = ? ORDER BY id DESC').get('search_symbols') as { session_id: string };
+    expect(row.session_id).toBe(cmp.session_id);
+  });
+
+  it('works without a token logger and falls back to the configured session id', async () => {
+    const bare = createMcpServer(db, indexer, null, null, { projectRoot: testDir, sessionId });
+    const cmp = await callTool(bare, 'start_comparison', { label: 'b', mode: 'baseline' });
+    expect(cmp.session_id).toBeTruthy();
+    const res = await callTool(bare, 'search_symbols', { query: 'greet' });
+    expect(res.error).toBe('Index disabled for baseline measurement');
+    const stats = await callTool(bare, 'get_token_stats', {});
+    expect(stats.session_id).toBe(sessionId);
+  });
+});

@@ -19,7 +19,7 @@ export interface LogInput {
 
 export class TokenLogger {
   private readonly db: Database.Database;
-  private readonly sessionId: string;
+  private sessionId: string;
   private readonly emitter?: EventEmitter;
   private cumulativeActual = 0;
   private cumulativeSavings = 0;
@@ -63,6 +63,11 @@ export class TokenLogger {
     };
 
     this.emitter?.emit('token_event', event);
+  }
+
+  /** Switches the session that subsequent log() calls are attributed to. */
+  setSessionId(id: string): void {
+    this.sessionId = id;
   }
 
   getCurrentSessionId(): string {
