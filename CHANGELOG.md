@@ -1,0 +1,32 @@
+# Changelog
+
+## Unreleased
+
+User-visible changes from the 2026-10-20 review-fix branch.
+
+### MCP tool output (smaller responses; tool names and required inputs unchanged)
+
+- All tool results are compact JSON (no pretty-printing).
+- `get_project_overview`: `mode: "brief"` returns counts only; `mode: "full"` (default) returns directory groups (top two path segments, max 50) with file/symbol counts instead of one entry per file.
+- `search_symbols`: fields with default values are omitted (`summary` only when present, `isAsync`/`hasTryCatch` only when true, `project` only with more than one repository).
+- `find_usages`: entries are `{ file, line, project }`; the `context` field is gone.
+- `get_api_endpoints`: the `handler` field is gone.
+- Inputs are bounded (e.g. `limit` ≤ 100, `get_context` `range` ≤ 200, label ≤ 200 chars); out-of-range values return a validation error.
+- Calls rejected in baseline mode now set `isError: true` (message unchanged). `get_token_stats` without `session_id` reports the current logging session; `start_comparison` switches logging (and baseline mode) to the new session, and the cumulative totals in live `token_event`s restart for it.
+
+### Setup / CLI
+
+- `.mcp.json` uses absolute paths (`command` = the `node` that ran `pindex`, `args` = absolute `dist/index.js`) and is merged instead of overwritten: other servers and keys are kept, invalid JSON is left untouched and reported.
+- Re-running `pindex` keeps user-set env keys of the `pindex` server (e.g. `LANGUAGES`, `PINDEX_LSP`); only `PROJECT_ROOT`, `INDEX_PATH`, `MONITORING_PORT` and `FEDERATION_REPOS` are rewritten.
+- The PindeX repo's own `.mcp.json` is no longer tracked. Maintainers: run `pindex` in the repo once to regenerate it.
+- The `SessionStart` hook (absolute node/script paths, `gui --no-open`) now lives in `.claude/settings.local.json`; a pindex entry in `.claude/settings.json` is moved there on the next `pindex` / `pindex reinit`. The `PreToolUse` hook stays in `.claude/settings.json`. `pindex remove` cleans both files.
+- The GUI dashboard uses port 7841 by default (outside the per-project range 7842+); when busy it falls back to 7840…7836.
+- `pindex add <path>` registers the target repo automatically if needed (alias of `pindex federate add`).
+- `FEDERATION_REPOS` is split on the OS path delimiter (`:` POSIX, `;` Windows) or may be a JSON array.
+- A shutting-down server no longer deletes a PID file that a newer session has written.
+
+### Indexing
+
+- `PINDEX_LSP` is now **off by default**: only `PINDEX_LSP=true` enables Pyright for Python. Pyright reads the project's config and may run its configured interpreter, so enable it only for trusted repos.
+- Arrow-function constants (`export const f = () => …`) are indexed with kind `function`. The first re-index after upgrading records `sig_changed` session observations for these symbols once.
+- A newly added file now resolves imports of already indexed files that previously pointed at the missing file.

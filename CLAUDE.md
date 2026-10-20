@@ -165,7 +165,9 @@ PINDEX_PARSE_WORKERS=                           # parse workers (0=sync, empty=a
 PINDEX_BIND_HOST=127.0.0.1                      # bind host (loopback default)
 GUI_PORT=7841                                   # pindex gui / pindex-gui dashboard port (default 7841; `pindex gui --no-open` = background only)
 EXPOSE_CORE_TOOLS_ONLY=false                    # 'true' = register only core tools (omits analytics/memory/doc tools)
-PINDEX_LSP=true                                 # opt-in LSP parsing for Python ('false' = force regex)
+PINDEX_LSP=                                     # opt-in Pyright LSP for Python: only 'true' enables it (default off = regex)
+# Trust: with PINDEX_LSP=true pyright reads the project's pyrightconfig.json and may run the configured
+# Python interpreter — enable only for trusted repos. Pyright is spawned with cwd=os.tmpdir().
 FEDERATION_REPOS=/path/a:/path/b               # OS path delimiter (":" posix, ";" Windows) or a JSON array
 # Federation CLI: configure via 'pindex federate add/remove/list' (preferred over editing FEDERATION_REPOS by hand).
 # 9 read-only tools (search_symbols, find_usages, get_symbol, get_file_summary, get_context,
@@ -185,7 +187,9 @@ pindex
 # → restart Claude Code to activate
 ```
 
-The `.mcp.json` in the PindeX repo itself is pre-configured for working on PindeX.
+The repo's `.mcp.json` is not tracked (it contains machine-specific absolute paths): run `pindex` in the repo to generate it. Re-running keeps user-set env keys (e.g. `LANGUAGES`, `PINDEX_LSP`); only `PROJECT_ROOT`, `INDEX_PATH`, `MONITORING_PORT`, `FEDERATION_REPOS` are rewritten.
+
+Hooks: `PreToolUse` goes into `.claude/settings.json`, `SessionStart` (absolute node/script paths) into `.claude/settings.local.json`.
 
 ## Goose Setup
 
@@ -239,8 +243,7 @@ src/
 ├── tools/                # one file per MCP tool + schemas.ts (Zod-Validierung)
 ├── monitoring/
 │   ├── server.ts         # Express + WebSocket (per-project)
-│   ├── token-logger.ts   # per-call token logging
-│   ├── estimator.ts      # "without index" heuristic
+│   ├── token-logger.ts   # per-call token logging ("without index" = per-tool multiplier in src/server.ts)
 │   └── ui/               # dashboard (Chart.js, dark theme)
 ├── gui/
 │   ├── index.ts          # pindex-gui entry point
@@ -257,7 +260,7 @@ tests/
 ├── db/                   # schema, migrations, queries tests
 ├── indexer/              # parser, indexer, watcher tests
 ├── tools/                # one test file per tool
-├── monitoring/           # estimator, token-logger, server tests
+├── monitoring/           # token-logger, server tests
 ├── cli/                  # project-detector, setup, daemon tests
 └── integration/          # end-to-end MCP server tests
 ```

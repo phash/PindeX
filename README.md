@@ -171,7 +171,9 @@ PindeX will:
 3. Merge a `pindex` server entry into `.mcp.json` in the project root (other servers and keys in an existing file are preserved; an invalid-JSON file is left untouched and reported). `command` is the absolute path of the `node` that ran `pindex`, `args` the absolute path of `dist/index.js` — no PATH lookup needed
 4. Register the project in `~/.pindex/registry.json`
 5. Inject a PindeX workflow section into `CLAUDE.md` (created if missing)
-6. Add a `PreToolUse` hook to `.claude/settings.json` to remind Claude to prefer PindeX tools
+6. Install two Claude Code hooks (both marked with `"_pindex": "pindex-hook"`; your own hooks are kept):
+   - `PreToolUse` in the shared `.claude/settings.json` — reminds Claude to prefer PindeX tools over `Read`/`Glob`/`Grep` (portable command, safe to commit)
+   - `SessionStart` in `.claude/settings.local.json` — starts the dashboard in the background (`gui --no-open`). It contains machine-specific absolute paths (`node` + `dist/cli/index.js`), so it lives in the local, uncommitted settings file. A pindex `SessionStart` entry left in `settings.json` by older versions is moved there automatically
 
 Output:
 ```
@@ -282,16 +284,15 @@ pindex status
 ```
 
 ```
-  3 registered project(s):
+  2 registered project(s):
 
-  [idle]  project-a  + 1 federated repo
+  [idle]  project-a  + 1 federated repo(s)
            /home/user/project-a
-           port: 7856  index: ~/.pindex/projects/a3f8b2c1/
+           port: 9304  index: /home/user/project-a/.pindex/
 
-  [idle]  project-b
+  [running (PID 48213)]  project-b
            /home/user/project-b
-           port: 7901  index: ~/.pindex/projects/f1e2d3c4/
-  ...
+           port: 8219  index: /home/user/project-b/.pindex/
 ```
 
 ---
@@ -363,7 +364,7 @@ All locations in the codebase where a symbol is referenced.
 |---|---|---|---|
 | `symbol` | string | ✓ | Symbol name to look up |
 
-**Returns:** List of `{ file, line, context }` entries.
+**Returns:** List of `{ file, line, project }` entries.
 
 ---
 
@@ -407,7 +408,7 @@ Token usage and savings statistics for a session.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `session_id` | string | | Defaults to `"default"` |
+| `session_id` | string | | Defaults to the session currently being logged (the server's session, or the one opened by the last `start_comparison`) |
 
 **Returns:** Total tokens used, estimated tokens without the index, net savings, and savings percentage.
 
@@ -423,6 +424,8 @@ Create a labelled A/B testing session to compare indexed vs. baseline token usag
 | `mode` | `"indexed"` \| `"baseline"` | ✓ | Tracking mode |
 
 **Returns:** `session_id` and the monitoring dashboard URL.
+
+Side effects: all following tool calls are logged to the new session (so `get_token_stats` without `session_id` reports it). With `mode: "baseline"` every query tool returns the error `Index disabled for baseline measurement` (with `isError: true`) until the next `start_comparison` with `mode: "indexed"`; `get_token_stats` and `start_comparison` keep working.
 
 ---
 
@@ -552,7 +555,7 @@ These are set automatically in the generated `.mcp.json` — you rarely need to 
 | `SUMMARIZER_MODEL` | `gpt-4o-mini` | Model name for summarization requests |
 | `PINDEX_PARSE_WORKERS` | _(empty)_ | Parse workers (0=sync, empty=auto) |
 | `PINDEX_BIND_HOST` | `127.0.0.1` | Bind host for monitoring/GUI (default loopback) |
-| `PINDEX_LSP` | `true` | opt-in LSP parsing for Python (set to `false` to force regex) |
+| `PINDEX_LSP` | _(off)_ | Opt-in LSP parsing for Python: only `true` enables Pyright, anything else uses the regex parser. See [Python (LSP)](#python-lsp) for the trust note |
 | `FEDERATION_REPOS` | _(empty)_ | Absolute paths separated by the OS path delimiter (`:` posix, `;` Windows) or a JSON array to linked repositories |
 | `DOCUMENT_PATTERNS` | `**/*.md,**/*.markdown,**/*.yaml,**/*.yml,**/*.txt` | Glob patterns for document files to index alongside code |
 | `OBSERVATION_RETENTION` | `permanent` | How long passive session observations are kept: `permanent`, `session`, or `Nd` (e.g. `30d`) |
@@ -653,7 +656,7 @@ extensions:
     timeout: 300
 ```
 
-Replace `{hash}` and `{port}` with the values shown by `pindex`. A ready-to-copy template is available in [`goose-extension.yaml`](./goose-extension.yaml).
+Replace the paths and `{port}` with the values shown by `pindex`. A ready-to-copy template is available in [`goose-extension.yaml`](./goose-extension.yaml).
 
 **Step 4 — Restart Goose:**
 
@@ -665,7 +668,9 @@ goose session start
 
 ### Python (LSP)
 
-PindeX ships with Pyright as an optional dependency. When installed, Pyright's LSP server produces the precise symbol tree instead of the fallback regex extractor. Set `PINDEX_LSP=false` to opt out. If Pyright is missing (for example when installed with `--no-optional`), PindeX logs a one-time warning and falls back to the regex path.
+PindeX ships with Pyright as an optional dependency. LSP parsing is **opt-in**: set `PINDEX_LSP=true` (e.g. in the `env` of the `pindex` entry in `.mcp.json`; re-running `pindex` keeps it) and Pyright's LSP server produces the precise symbol tree instead of the default regex extractor. If Pyright is missing (for example when installed with `--no-optional`), PindeX logs a one-time warning and falls back to the regex path.
+
+**Trust note:** with `PINDEX_LSP=true`, Pyright reads the indexed project's `pyrightconfig.json` (and `pyproject.toml` settings) and may run the Python interpreter configured there. Enable it only for repositories you trust. PindeX resolves Pyright from its own installation or `PATH` (never from inside the project) and starts it with a working directory outside the project.
 
 ---
 
@@ -678,7 +683,7 @@ pindex [command] [options]
 | Command | Description |
 |---|---|
 | _(no args)_ / `init` | Set up this project: write `.mcp.json`, inject `CLAUDE.md` section + hooks, register globally |
-| `reinit` | Re-inject PindeX section into `CLAUDE.md` and `.claude/settings.json` (e.g. after an update) |
+| `reinit` | Re-inject PindeX section into `CLAUDE.md` and the hooks into `.claude/settings.json` / `.claude/settings.local.json` (e.g. after an update) |
 | `reinit --force` | Replace the existing section with the current template |
 | `add <path>` | Link another repo for cross-repo search (federation) |
 | `remove` | Fully unregister project: remove `.mcp.json`, `CLAUDE.md` section, hooks, stop daemon |
@@ -803,7 +808,7 @@ tests/
 ├── db/                   # schema, migrations, queries
 ├── indexer/              # parser, indexer, watcher
 ├── tools/                # one file per MCP tool + validation tests
-├── monitoring/           # estimator, token-logger, Express server
+├── monitoring/           # token-logger, Express server
 ├── cli/                  # project-detector, setup, daemon
 └── integration/
     ├── mcp-server.test.ts   # MCP server wiring smoke tests
@@ -856,8 +861,7 @@ src/
 │
 ├── monitoring/
 │   ├── server.ts             # Express + WebSocket (per-project instance)
-│   ├── token-logger.ts       # Per-call token logging
-│   ├── estimator.ts          # "without index" heuristic
+│   ├── token-logger.ts       # Per-call token logging ("without index" = per-tool multiplier in src/server.ts)
 │   └── ui/                   # Dashboard HTML / CSS / Chart.js
 │
 ├── gui/
