@@ -90,10 +90,25 @@ describe('summarizeCommunities', () => {
     ]);
   });
 
-  it('falls back to top file basename when there is no common directory', () => {
+  it('falls back to the top file path when there is no common directory', () => {
     const assignment = new Map([['src/a.ts', 0], ['lib/b.ts', 0]]);
     const degree = new Map([['src/a.ts', 1], ['lib/b.ts', 5]]);
-    expect(summarizeCommunities(assignment, degree, 8)[0].label).toBe('b.ts');
+    expect(summarizeCommunities(assignment, degree, 8)[0].label).toBe('lib/b.ts');
+  });
+
+  it('a one-segment common prefix is too vague: labels by the top non-test file path', () => {
+    const files = ['src/server.ts', 'src/tools/a.ts', 'src/a.test.ts', 'src/util/b.spec.ts'];
+    const assignment = new Map(files.map((f) => [f, 0]));
+    const degree = new Map([['src/a.test.ts', 9], ['src/util/b.spec.ts', 8], ['src/tools/a.ts', 3], ['src/server.ts', 1]]);
+    expect(summarizeCommunities(assignment, degree, 8)[0].label).toBe('src/tools/a.ts');
+  });
+
+  it('skips tests/ and test/ members for the fallback label, unless all members are tests', () => {
+    const assignment = new Map([['tests/x.ts', 0], ['test/y.ts', 0], ['src/z.ts', 0]]);
+    const degree = new Map([['tests/x.ts', 5], ['test/y.ts', 4], ['src/z.ts', 1]]);
+    expect(summarizeCommunities(assignment, degree, 8)[0].label).toBe('src/z.ts');
+    const onlyTests = new Map([['tests/x.ts', 0], ['test/y.ts', 0]]);
+    expect(summarizeCommunities(onlyTests, degree, 8)[0].label).toBe('tests/x.ts');
   });
 
   it('caps communities, sorts by size desc, and caps topFiles at 3', () => {

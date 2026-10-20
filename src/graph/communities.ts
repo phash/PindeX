@@ -97,7 +97,9 @@ function dirSegments(path: string): string[] {
   return parts;
 }
 
-function commonDirPrefix(paths: string[]): string {
+const isTestPath = (p: string): boolean => /^tests?\//.test(p) || /\.(test|spec)\./.test(p);
+
+function commonDirPrefix(paths: string[]): string[] {
   let prefix = dirSegments(paths[0]);
   for (const p of paths.slice(1)) {
     const segs = dirSegments(p);
@@ -105,10 +107,18 @@ function commonDirPrefix(paths: string[]): string {
     while (n < prefix.length && n < segs.length && prefix[n] === segs[n]) n++;
     prefix = prefix.slice(0, n);
   }
-  return prefix.join('/');
+  return prefix;
 }
 
-/** Largest communities first (ties by id); label = common directory prefix or top file's basename. */
+/** Common directory prefix when it is specific (≥ 2 segments, e.g. `src/db`); otherwise the
+ *  repo-relative path of the top-degree non-test member (`ranked` is degree-sorted). */
+function communityLabel(files: string[], ranked: string[]): string {
+  const prefix = commonDirPrefix(files);
+  if (prefix.length >= 2) return prefix.join('/');
+  return ranked.find((f) => !isTestPath(f)) ?? ranked[0];
+}
+
+/** Largest communities first (ties by id); label per communityLabel. */
 export function summarizeCommunities(
   assignment: Map<string, number>,
   degree: Map<string, number>,
@@ -124,7 +134,7 @@ export function summarizeCommunities(
   return [...members.entries()]
     .map(([id, files]) => {
       const ranked = files.slice().sort((a, b) => deg(b) - deg(a) || (a < b ? -1 : a > b ? 1 : 0));
-      const label = commonDirPrefix(files) || ranked[0].split('/').pop()!;
+      const label = communityLabel(files, ranked);
       return { id, label, size: files.length, topFiles: ranked.slice(0, MAX_TOP_FILES) };
     })
     .sort((a, b) => b.size - a.size || a.id - b.id)
