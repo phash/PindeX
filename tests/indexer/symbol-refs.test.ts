@@ -84,3 +84,44 @@ describe('Indexer symbol_refs persistence', () => {
     expect(getAllRefs(db)).toHaveLength(1);
   });
 });
+
+describe('Indexer summary reuse after the v6 forced re-parse (hash NULL)', () => {
+  it('reuses file and same-name symbol summaries instead of re-summarizing', async () => {
+    const { Summarizer } = await import('../../src/indexer/summarizer.js');
+    const fileSpy = vi.spyOn(Summarizer.prototype, 'summarizeFile').mockResolvedValue('file summary');
+    const symSpy = vi.spyOn(Summarizer.prototype, 'summarizeSymbol')
+      .mockImplementation(async (signature: string) => `sum ${signature}`);
+    try {
+      const db = createTestDb();
+      const dir = mkdtempSync(join(tmpdir(), 'pindex-reuse-'));
+      mkdirSync(join(dir, 'src'), { recursive: true });
+      writeFileSync(join(dir, 'src', 'a.ts'), 'v1');
+      const indexer = new Indexer({ db, projectRoot: dir, generateSummaries: true });
+
+      vi.mocked(parseFile).mockReturnValue(parsed({ symbols: [sym('keep', 1, 2)] }));
+      await indexer.indexFile('src/a.ts');
+      expect(fileSpy).toHaveBeenCalledTimes(1);
+      expect(symSpy).toHaveBeenCalledTimes(1);
+      db.prepare("UPDATE symbols SET summary = 'old keep'").run();
+
+      db.prepare('UPDATE files SET hash = NULL').run();
+      vi.mocked(parseFile).mockReturnValue(parsed({ symbols: [sym('keep', 1, 2), sym('fresh', 4, 5)] }));
+      await indexer.indexFile('src/a.ts');
+
+      expect(fileSpy).toHaveBeenCalledTimes(1);
+      expect(symSpy).toHaveBeenCalledTimes(2);
+      expect(symSpy).toHaveBeenLastCalledWith('fresh()', expect.any(String));
+      const rows = db.prepare('SELECT name, summary FROM symbols ORDER BY start_line').all();
+      expect(rows).toEqual([{ name: 'keep', summary: 'old keep' }, { name: 'fresh', summary: 'sum fresh()' }]);
+      expect(db.prepare('SELECT summary, hash FROM files').get()).toEqual({ summary: 'file summary', hash: expect.any(String) });
+
+      // A real content change (non-null hash) re-summarizes as before.
+      writeFileSync(join(dir, 'src', 'a.ts'), 'v2');
+      await indexer.indexFile('src/a.ts');
+      expect(fileSpy).toHaveBeenCalledTimes(2);
+    } finally {
+      fileSpy.mockRestore();
+      symSpy.mockRestore();
+    }
+  });
+});

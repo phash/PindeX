@@ -6,7 +6,8 @@ export interface FileRecord {
   language: string;
   summary: string | null;
   last_indexed: string;
-  hash: string;
+  /** NULL forces a re-parse on the next indexAll (set by the v6 migration for code files). */
+  hash: string | null;
   raw_token_estimate: number;
 }
 

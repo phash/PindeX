@@ -71,9 +71,11 @@ const migrations: Migration[] = [
       // Call graph: symbol_refs replaces the never-populated usages table.
       initSchema(db); // creates symbol_refs + indexes (IF NOT EXISTS)
       db.exec('DROP TABLE IF EXISTS usages');
-      // Force a full re-parse on the next indexAll so existing installs fill
-      // symbol_refs (the indexer skips files whose hash is unchanged).
-      db.exec('UPDATE files SET hash = NULL');
+      // Force a re-parse on the next indexAll so existing installs fill symbol_refs
+      // (the indexer skips files whose hash is unchanged). Only tree-sitter languages
+      // produce refs; docs and regex-parsed files keep their hash (and LLM summaries).
+      db.exec(`UPDATE files SET hash = NULL
+               WHERE language IN ('typescript', 'tsx', 'javascript', 'jsx', 'vue', 'svelte')`);
     },
   },
 ];

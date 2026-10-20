@@ -94,6 +94,52 @@ describe('schema v6 (symbol_refs)', () => {
     expect((db.prepare('SELECT hash FROM files WHERE id = 1').get() as { hash: string | null }).hash).toBeNull();
   });
 
+  it('v5 DB: only tree-sitter code files are reset; docs and other languages keep their hash', () => {
+    const db = makeV5Db();
+    db.exec(`
+      INSERT INTO files (id, path, language, hash) VALUES
+        (2, 'README.md', 'markdown', 'm'), (3, 'x.py', 'python', 'p'),
+        (4, 'c.vue', 'vue', 'v'), (5, 'd.jsx', 'jsx', 'j');
+    `);
+    runMigrations(db);
+    const rows = db.prepare('SELECT path, hash FROM files ORDER BY id').all();
+    expect(rows).toEqual([
+      { path: 'a.ts', hash: null },
+      { path: 'README.md', hash: 'm' },
+      { path: 'x.py', hash: 'p' },
+      { path: 'c.vue', hash: null },
+      { path: 'd.jsx', hash: null },
+    ]);
+  });
+
+  it('v4 DB (usages without idx_usages_unique) migrates through v5 to v6', () => {
+    const db = new Database(':memory:');
+    db.pragma('foreign_keys = ON');
+    db.exec(`
+      CREATE TABLE files (id INTEGER PRIMARY KEY, path TEXT UNIQUE NOT NULL, language TEXT NOT NULL,
+        summary TEXT, last_indexed DATETIME, hash TEXT, raw_token_estimate INTEGER);
+      CREATE TABLE symbols (id INTEGER PRIMARY KEY, file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+        name TEXT NOT NULL, kind TEXT NOT NULL, signature TEXT NOT NULL, summary TEXT, start_line INTEGER,
+        end_line INTEGER, is_exported INTEGER DEFAULT 0, is_async INTEGER DEFAULT 0, has_try_catch INTEGER DEFAULT 0);
+      CREATE TABLE usages (id INTEGER PRIMARY KEY, symbol_id INTEGER NOT NULL REFERENCES symbols(id) ON DELETE CASCADE,
+        used_in_file INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE, used_at_line INTEGER);
+      CREATE TABLE dependencies (id INTEGER PRIMARY KEY, from_file INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+        to_file INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE, symbol_name TEXT);
+      CREATE TABLE session_events (id INTEGER PRIMARY KEY, session_id TEXT NOT NULL, event_type TEXT NOT NULL,
+        file_path TEXT, symbol_name TEXT, extra_json TEXT, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP);
+      INSERT INTO files (id, path, language, hash) VALUES (1, 'a.ts', 'typescript', 'x');
+      INSERT INTO symbols (id, file_id, name, kind, signature) VALUES (1, 1, 's', 'function', 's()');
+      INSERT INTO usages (symbol_id, used_in_file, used_at_line) VALUES (1, 1, 3);
+    `);
+    db.pragma('user_version = 4');
+    runMigrations(db);
+    expect(getCurrentVersion(db)).toBe(6);
+    expect(tables(db)).toContain('symbol_refs');
+    expect(tables(db)).not.toContain('usages');
+    expect(indexes(db, 'dependencies')).toContain('idx_dependencies_unique');
+    expect((db.prepare('SELECT hash FROM files WHERE id = 1').get() as { hash: string | null }).hash).toBeNull();
+  });
+
   it('fresh and upgraded DBs have identical symbol_refs definition and indexes', () => {
     const fresh = new Database(':memory:');
     runMigrations(fresh);
