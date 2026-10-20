@@ -1138,12 +1138,10 @@ describe('extractSymbols: class methods, exported const, routes', () => {
     const ctor = makeFieldedNode('method_definition', 'constructor() {}', {
       name: makeIdentifier('constructor'),
     });
+    const classBody = makeNode('class_body', '{}', 0, 6, { namedChildren: [ctor, methodA] });
     const classNode = makeNode('class_declaration', 'class Svc {}', 0, 6, {
-      childForFieldName: (f: string) => (f === 'name' ? makeIdentifier('Svc') : null),
-      descendantsOfType: (type: string | string[]) => {
-        const types = Array.isArray(type) ? type : [type];
-        return types.includes('method_definition') ? [ctor, methodA] : [];
-      },
+      childForFieldName: (f: string) =>
+        f === 'name' ? makeIdentifier('Svc') : f === 'body' ? classBody : null,
     });
     const root = makeProgramNode([classNode]);
     const symbols = extractSymbols(root, '');
@@ -1160,12 +1158,10 @@ describe('extractSymbols: class methods, exported const, routes', () => {
     const method = makeFieldedNode('method_definition', 'run() {}', {
       name: makeIdentifier('run'),
     });
+    const classBody = makeNode('class_body', '{}', 0, 5, { namedChildren: [method] });
     const classNode = makeNode('class_declaration', 'class Worker {}', 0, 5, {
-      childForFieldName: (f: string) => (f === 'name' ? makeIdentifier('Worker') : null),
-      descendantsOfType: (type: string | string[]) => {
-        const types = Array.isArray(type) ? type : [type];
-        return types.includes('method_definition') ? [method] : [];
-      },
+      childForFieldName: (f: string) =>
+        f === 'name' ? makeIdentifier('Worker') : f === 'body' ? classBody : null,
     });
     const exportNode = makeExportStatement(classNode);
     const root = makeProgramNode([exportNode]);
@@ -1181,10 +1177,7 @@ describe('extractSymbols: class methods, exported const, routes', () => {
       value: makeNode('number', '1', 0, 0),
     });
     const lexical = makeNode('lexical_declaration', 'const foo = 1', 0, 0, {
-      descendantsOfType: (type: string | string[]) => {
-        const types = Array.isArray(type) ? type : [type];
-        return types.includes('variable_declarator') ? [declarator] : [];
-      },
+      namedChildren: [declarator],
     });
     const exportNode = makeExportStatement(lexical);
     const root = makeProgramNode([exportNode]);
