@@ -22,6 +22,23 @@ const DEFAULT_ENV: Record<string, string> = {
   BASELINE_MODE: 'false',
 };
 
+/**
+ * The only user-set env keys carried over from an existing `.mcp.json`. A repo can ship its
+ * own `.mcp.json`, so anything that could load code, redirect network traffic, widen exposure
+ * or enable the LSP (NODE_OPTIONS, SUMMARIZER_BASE_URL, PINDEX_BIND_HOST, PINDEX_LSP, …) is
+ * never persisted silently; the user re-adds trusted keys by hand.
+ */
+export const PRESERVED_ENV_KEYS = [
+  'LANGUAGES',
+  'AUTO_REINDEX',
+  'GENERATE_SUMMARIES',
+  'SUMMARIZER_MODEL',
+  'MONITORING_AUTO_OPEN',
+  'EXPOSE_CORE_TOOLS_ONLY',
+  'OBSERVATION_RETENTION',
+  'PINDEX_PARSE_WORKERS',
+] as const;
+
 export function writeMcpJson(
   projectRoot: string,
   entry: RegistryEntry,
@@ -35,13 +52,28 @@ export function writeMcpJson(
     managed.FEDERATION_REPOS = formatFederationRepos(entry.federatedRepos.map((r) => r.path));
   }
 
-  // Keep user-set keys (LANGUAGES, PINDEX_LSP, …) from an existing pindex entry.
-  const userEnv = { ...(readMcpJson(projectRoot)?.mcpServers?.pindex?.env ?? {}) };
-  for (const key of MANAGED_ENV_KEYS) delete userEnv[key];
+  const existingEnv: Record<string, unknown> = readMcpJson(projectRoot)?.mcpServers?.pindex?.env ?? {};
+  const preserved: Record<string, string> = {};
+  const dropped: string[] = [];
+  for (const [key, value] of Object.entries(existingEnv)) {
+    if ((MANAGED_ENV_KEYS as readonly string[]).includes(key)) continue;
+    if ((PRESERVED_ENV_KEYS as readonly string[]).includes(key) && typeof value === 'string') {
+      preserved[key] = value;
+    } else if (value !== DEFAULT_ENV[key]) {
+      // A pindex-written default (e.g. BASELINE_MODE=false) is rewritten anyway: no warning.
+      dropped.push(key);
+    }
+  }
+  if (dropped.length > 0) {
+    // Names only, never values (they may hold secrets).
+    console.warn(
+      `  [pindex] .mcp.json: dropped env keys not kept automatically: ${dropped.join(', ')} — re-add trusted ones by hand.`,
+    );
+  }
 
   mergeMcpServer(projectRoot, 'pindex', {
     ...serverCommand(),
-    env: { ...DEFAULT_ENV, ...userEnv, ...managed },
+    env: { ...DEFAULT_ENV, ...preserved, ...managed },
   });
 }
 

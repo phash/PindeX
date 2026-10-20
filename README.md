@@ -168,7 +168,7 @@ pindex
 PindeX will:
 1. Walk upward from your current directory to find the project root (`package.json`, `.git`, etc.)
 2. Assign a dedicated monitoring port for this project
-3. Merge a `pindex` server entry into `.mcp.json` in the project root (other servers and keys in an existing file are preserved; an invalid-JSON file is left untouched and reported). `command` is the absolute path of the `node` that ran `pindex`, `args` the absolute path of `dist/index.js` — no PATH lookup needed
+3. Merge a `pindex` server entry into `.mcp.json` in the project root (other servers and keys in an existing file are preserved; an invalid-JSON file is left untouched and reported). Re-running keeps your settings for: `LANGUAGES`, `AUTO_REINDEX`, `GENERATE_SUMMARIES`, `SUMMARIZER_MODEL`, `MONITORING_AUTO_OPEN`, `EXPOSE_CORE_TOOLS_ONLY`, `OBSERVATION_RETENTION`, `PINDEX_PARSE_WORKERS`. Any other env key in the existing entry (e.g. `PINDEX_LSP`, `SUMMARIZER_API_KEY`, `SUMMARIZER_BASE_URL`, `PINDEX_BIND_HOST`, `NODE_OPTIONS`) is dropped and its name (never the value) is printed, so a `.mcp.json` shipped with a repo cannot slip settings into your config; re-add trusted keys by hand. `command` is the absolute path of the `node` that ran `pindex`, `args` the absolute path of `dist/index.js` — no PATH lookup needed
 4. Register the project in `~/.pindex/registry.json`
 5. Inject a PindeX workflow section into `CLAUDE.md` (created if missing)
 6. Install two Claude Code hooks (both marked with `"_pindex": "pindex-hook"`; your own hooks are kept):
@@ -668,7 +668,7 @@ goose session start
 
 ### Python (LSP)
 
-PindeX ships with Pyright as an optional dependency. LSP parsing is **opt-in**: set `PINDEX_LSP=true` (e.g. in the `env` of the `pindex` entry in `.mcp.json`; re-running `pindex` keeps it) and Pyright's LSP server produces the precise symbol tree instead of the default regex extractor. If Pyright is missing (for example when installed with `--no-optional`), PindeX logs a one-time warning and falls back to the regex path.
+PindeX ships with Pyright as an optional dependency. LSP parsing is **opt-in**: set `PINDEX_LSP=true` (e.g. in the `env` of the `pindex` entry in `.mcp.json`; for safety re-running `pindex` drops it and prints its name, so re-add it afterwards) and Pyright's LSP server produces the precise symbol tree instead of the default regex extractor. If Pyright is missing (for example when installed with `--no-optional`), PindeX logs a one-time warning and falls back to the regex path.
 
 **Trust note:** with `PINDEX_LSP=true`, Pyright reads the indexed project's `pyrightconfig.json` (and `pyproject.toml` settings) and may run the Python interpreter configured there. Enable it only for repositories you trust. PindeX resolves Pyright from its own installation or `PATH` (never from inside the project) and starts it with a working directory outside the project.
 

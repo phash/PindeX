@@ -17,7 +17,7 @@ User-visible changes from the 2026-10-20 review-fix branch.
 ### Setup / CLI
 
 - `.mcp.json` uses absolute paths (`command` = the `node` that ran `pindex`, `args` = absolute `dist/index.js`) and is merged instead of overwritten: other servers and keys are kept, invalid JSON is left untouched and reported.
-- Re-running `pindex` keeps user-set env keys of the `pindex` server (e.g. `LANGUAGES`, `PINDEX_LSP`); only `PROJECT_ROOT`, `INDEX_PATH`, `MONITORING_PORT` and `FEDERATION_REPOS` are rewritten.
+- Re-running `pindex` rewrites `PROJECT_ROOT`, `INDEX_PATH`, `MONITORING_PORT` and `FEDERATION_REPOS` and keeps your settings for: `LANGUAGES`, `AUTO_REINDEX`, `GENERATE_SUMMARIES`, `SUMMARIZER_MODEL`, `MONITORING_AUTO_OPEN`, `EXPOSE_CORE_TOOLS_ONLY`, `OBSERVATION_RETENTION`, `PINDEX_PARSE_WORKERS`. Any other env key in the existing entry (e.g. `PINDEX_LSP`, `SUMMARIZER_API_KEY`, `SUMMARIZER_BASE_URL`, `PINDEX_BIND_HOST`, `NODE_OPTIONS`) is dropped and its name (never the value) is printed, so a `.mcp.json` shipped with a repo cannot slip settings into your config; re-add trusted keys by hand.
 - The PindeX repo's own `.mcp.json` is no longer tracked. Maintainers: run `pindex` in the repo once to regenerate it.
 - The `SessionStart` hook (absolute node/script paths, `gui --no-open`) now lives in `.claude/settings.local.json`; a pindex entry in `.claude/settings.json` is moved there on the next `pindex` / `pindex reinit`. The `PreToolUse` hook stays in `.claude/settings.json`. `pindex remove` cleans both files.
 - The GUI dashboard uses port 7841 by default (outside the per-project range 7842+); when busy it falls back to 7840…7836.

@@ -187,7 +187,7 @@ pindex
 # → restart Claude Code to activate
 ```
 
-The repo's `.mcp.json` is not tracked (it contains machine-specific absolute paths): run `pindex` in the repo to generate it. Re-running keeps user-set env keys (e.g. `LANGUAGES`, `PINDEX_LSP`); only `PROJECT_ROOT`, `INDEX_PATH`, `MONITORING_PORT`, `FEDERATION_REPOS` are rewritten.
+The repo's `.mcp.json` is not tracked (it contains machine-specific absolute paths): run `pindex` in the repo to generate it. Re-running rewrites `PROJECT_ROOT`, `INDEX_PATH`, `MONITORING_PORT`, `FEDERATION_REPOS` and keeps only the allowlist `PRESERVED_ENV_KEYS` in `src/cli/init.ts` (`LANGUAGES`, `AUTO_REINDEX`, `GENERATE_SUMMARIES`, `SUMMARIZER_MODEL`, `MONITORING_AUTO_OPEN`, `EXPOSE_CORE_TOOLS_ONLY`, `OBSERVATION_RETENTION`, `PINDEX_PARSE_WORKERS`); every other key (e.g. `PINDEX_LSP`, `SUMMARIZER_BASE_URL`, `NODE_OPTIONS`) is dropped with a names-only warning — security: a repo may ship its own `.mcp.json`.
 
 Hooks: `PreToolUse` goes into `.claude/settings.json`, `SessionStart` (absolute node/script paths) into `.claude/settings.local.json`.
 
