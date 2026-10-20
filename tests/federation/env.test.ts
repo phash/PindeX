@@ -33,6 +33,12 @@ describe('parseFederationRepos / formatFederationRepos', () => {
     expect(parseFederationRepos('[not json')).toEqual([]);
   });
 
+  it('round-trips a posix path containing a comma (legacy separator)', () => {
+    const value = formatFederationRepos(['/a,b', '/c'], ':');
+    expect(value.startsWith('[')).toBe(true);
+    expect(parseFederationRepos(value, ':')).toEqual(['/a,b', '/c']);
+  });
+
   it('formats as JSON array when a path contains the delimiter', () => {
     const value = formatFederationRepos(['/a:b', '/c'], ':');
     expect(value.startsWith('[')).toBe(true);

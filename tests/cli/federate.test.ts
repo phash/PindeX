@@ -350,4 +350,23 @@ describe('pindex federate CLI', () => {
     };
     expect(parseFederationRepos(mcp.mcpServers.pindex.env.FEDERATION_REPOS)).toEqual([targetDir, third]);
   });
+
+  it('autoRegister (pindex add): registers an unknown target and creates .mcp.json', async () => {
+    rmSync(join(projectDir, '.mcp.json'));
+    const fresh = join(homeDir, 'fresh-target');
+    mkdirSync(fresh, { recursive: true });
+
+    await federateAdd(projectDir, fresh, { autoRegister: true });
+
+    const reg = JSON.parse(readFileSync(join(homeDir, '.pindex', 'registry.json'), 'utf-8')) as {
+      projects: Array<{ path: string; federatedRepos?: Array<{ path: string }> }>;
+    };
+    expect(reg.projects.some((p) => p.path === fresh)).toBe(true);
+    expect(reg.projects.find((p) => p.path === projectDir)!.federatedRepos![0]!.path).toBe(fresh);
+    const mcp = JSON.parse(readFileSync(join(projectDir, '.mcp.json'), 'utf-8')) as {
+      mcpServers: { pindex: { env: { FEDERATION_REPOS: string; PROJECT_ROOT: string } } };
+    };
+    expect(mcp.mcpServers.pindex.env.PROJECT_ROOT).toBe(projectDir);
+    expect(parseFederationRepos(mcp.mcpServers.pindex.env.FEDERATION_REPOS)).toEqual([fresh]);
+  });
 });

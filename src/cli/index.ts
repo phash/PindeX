@@ -174,7 +174,7 @@ async function main(): Promise<void> {
         console.error('Usage: pindex add <path-to-repo>');
         process.exit(1);
       }
-      await federateAdd(process.cwd(), args[0], {});
+      await federateAdd(process.cwd(), args[0], { autoRegister: true });
       break;
     }
 
@@ -354,9 +354,9 @@ async function main(): Promise<void> {
     (none)          Init this project: write .mcp.json, register globally
     init            Same as above
 
-    add <path>      Link another repo for cross-repo search (federation)
+    add <path>      Link another repo for cross-repo search (auto-registers it; alias of federate add)
     remove          Unregister project, remove .mcp.json, CLAUDE.md section & hook
-    remove <path>   Remove a federated repo link only
+    remove <path>   Remove a federated repo link only (alias of federate remove)
     reinit          Re-inject PindeX section into CLAUDE.md
     reinit --force  Replace existing section with current template
 
@@ -375,7 +375,7 @@ async function main(): Promise<void> {
 
   Examples:
     cd /my/project && pindex        # set up this project
-    pindex add /other/project       # link another repo
+    pindex add /other/project       # link another repo (auto-registers it; see also: pindex federate add|remove|list)
     pindex status                   # show all projects
     pindex-gui                      # open stats dashboard
 `);

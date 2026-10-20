@@ -38,7 +38,14 @@ function toForwardSlash(p: string): string {
 export function sanitizeFtsQuery(query: string): string {
   const tokens = query.split(/\s+/).filter((t) => t.length > 0);
   if (tokens.length === 0) return '""';
-  return tokens.map((t) => `"${t.replace(/"/g, '""')}"`).join(' ');
+  const parts: string[] = [];
+  for (const t of tokens) {
+    const base = t.replace(/\*+$/, '');
+    if (base.length === 0) continue; // bare '*' carries no term
+    const quoted = `"${base.replace(/"/g, '""')}"`;
+    parts.push(base.length !== t.length ? `${quoted}*` : quoted);
+  }
+  return parts.length > 0 ? parts.join(' ') : '""';
 }
 
 // ─── File Queries ─────────────────────────────────────────────────────────────

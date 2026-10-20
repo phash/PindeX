@@ -37,7 +37,8 @@ export function parseFederationRepos(value: string, delimiter: string = path.del
  * JSON array when a path itself contains the delimiter (unambiguous either way).
  */
 export function formatFederationRepos(paths: string[], delimiter: string = path.delimiter): string {
-  if (paths.some((p) => p.includes(delimiter))) return JSON.stringify(paths);
+  // ',' is a legacy separator on posix, so it must trigger the JSON form too.
+  if (paths.some((p) => p.includes(delimiter) || (delimiter === ':' && p.includes(',')))) return JSON.stringify(paths);
   return paths.join(delimiter);
 }
 

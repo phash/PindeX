@@ -33,6 +33,12 @@ describe('searchSymbols', () => {
     expect(result[0].file).toBe('src/auth.ts');
   });
 
+  it('supports a trailing * prefix query', () => {
+    insertTestSymbol(db, { fileId, name: 'FedAlpha', kind: 'class', signature: 'class FedAlpha' });
+    const result = searchSymbols(makeTestRepoSet(db), { query: 'Fed*' });
+    expect(result.map((r) => r.name)).toContain('FedAlpha');
+  });
+
   it('returns multiple matches', () => {
     const result = searchSymbols(makeTestRepoSet(db), { query: 'User' });
     expect(result.length).toBeGreaterThan(0);

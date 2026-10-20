@@ -381,6 +381,18 @@ describe('Session queries', () => {
 });
 
 describe('sanitizeFtsQuery', () => {
+  it('turns a trailing * into an FTS5 prefix operator outside the quotes', () => {
+    expect(sanitizeFtsQuery('Fed*')).toBe('"Fed"*');
+    expect(sanitizeFtsQuery('a"b*')).toBe('"a""b"*');
+    expect(sanitizeFtsQuery('foo bar*')).toBe('"foo" "bar"*');
+    expect(sanitizeFtsQuery('Fed***')).toBe('"Fed"*');
+  });
+
+  it('drops a bare * token', () => {
+    expect(sanitizeFtsQuery('*')).toBe('""');
+    expect(sanitizeFtsQuery('foo *')).toBe('"foo"');
+  });
+
   it('wraps a single token as a quoted FTS5 phrase', () => {
     expect(sanitizeFtsQuery('createUser')).toBe('"createUser"');
   });

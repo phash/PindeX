@@ -701,7 +701,7 @@ pindex [command] [options]
 # Set up a new project
 cd /my/project && pindex
 
-# Link project-b for cross-repo search
+# Link project-b for cross-repo search (registers it automatically; alias of `pindex federate add`)
 pindex add /my/project-b
 
 # Check all registered projects

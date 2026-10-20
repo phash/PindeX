@@ -7,6 +7,7 @@ import {
   type FederatedRegistryEntry,
 } from './project-detector.js';
 import { readMcpJson, mergeMcpServer, type McpServerEntry } from './mcp-json.js';
+import { writeMcpJson } from './init.js';
 import { assignName } from '../federation/registry-name.js';
 import { parseFederationRepos, formatFederationRepos } from '../federation/env.js';
 
@@ -25,7 +26,7 @@ function readPindexServer(projectRoot: string): McpServerEntry {
 export async function federateAdd(
   cwd: string,
   targetPath: string,
-  options: { name?: string },
+  options: { name?: string; autoRegister?: boolean },
 ): Promise<void> {
   const projectRoot = findProjectRoot(resolve(cwd));
   const targetRoot = resolve(targetPath);
@@ -39,6 +40,13 @@ export async function federateAdd(
   }
 
   const registry = new GlobalRegistry();
+  if (options.autoRegister) {
+    // `pindex add` convenience: register both projects and make sure a pindex
+    // server entry exists in the current project's .mcp.json.
+    registry.upsert(targetRoot);
+    const mine = registry.upsert(projectRoot);
+    if (!readMcpJson(projectRoot)?.mcpServers?.pindex) writeMcpJson(projectRoot, mine);
+  }
   const entries = registry.list();
 
   const me = entries.find((e) => e.path === projectRoot);
@@ -54,7 +62,7 @@ export async function federateAdd(
   }
 
   // Check .mcp.json exists in target (validates it was pindex-init-ed)
-  if (!existsSync(join(targetRoot, '.mcp.json'))) {
+  if (!options.autoRegister && !existsSync(join(targetRoot, '.mcp.json'))) {
     throw new Error(
       `Target has no .mcp.json: ${targetRoot}. Run 'pindex init' in that directory first.`,
     );
