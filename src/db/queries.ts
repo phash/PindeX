@@ -1,4 +1,5 @@
 import type Database from 'better-sqlite3';
+import { normalizeRelPath } from '../util/paths.js';
 import type {
   FileRecord,
   SymbolRecord,
@@ -128,27 +129,28 @@ export interface SymbolWithFile extends SymbolRecord {
   file_path: string;
 }
 
+export function getSymbolsByName(
+  db: Database.Database,
+  name: string,
+  filePath?: string,
+): SymbolWithFile[] {
+  const base =
+    'SELECT s.*, f.path AS file_path FROM symbols s JOIN files f ON s.file_id = f.id WHERE s.name = ?';
+  const order = ' ORDER BY s.is_exported DESC, f.path ASC, s.start_line ASC';
+  if (filePath) {
+    return db
+      .prepare(base + ' AND f.path = ?' + order)
+      .all(name, normalizeRelPath(filePath)) as SymbolWithFile[];
+  }
+  return db.prepare(base + order).all(name) as SymbolWithFile[];
+}
+
 export function getSymbolByName(
   db: Database.Database,
   name: string,
   filePath?: string,
 ): SymbolWithFile | null {
-  if (filePath) {
-    return (
-      (db
-        .prepare(
-          'SELECT s.*, f.path AS file_path FROM symbols s JOIN files f ON s.file_id = f.id WHERE s.name = ? AND f.path = ? LIMIT 1',
-        )
-        .get(name, filePath) as SymbolWithFile | undefined) ?? null
-    );
-  }
-  return (
-    (db
-      .prepare(
-        'SELECT s.*, f.path AS file_path FROM symbols s JOIN files f ON s.file_id = f.id WHERE s.name = ? LIMIT 1',
-      )
-      .get(name) as SymbolWithFile | undefined) ?? null
-  );
+  return getSymbolsByName(db, name, filePath)[0] ?? null;
 }
 
 export function deleteSymbolsByFileId(

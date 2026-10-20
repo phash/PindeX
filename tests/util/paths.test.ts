@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { resolve } from 'node:path';
-import { resolveWithinRoot } from '../../src/util/paths.js';
+import { resolveWithinRoot, normalizeRelPath } from '../../src/util/paths.js';
 
 describe('resolveWithinRoot', () => {
   const root = resolve('/tmp/pindex-test-root');
@@ -40,5 +40,13 @@ describe('resolveWithinRoot', () => {
   it('does not treat a sibling directory sharing the prefix as inside', () => {
     // e.g. /tmp/pindex-test-root-evil/ should NOT be treated as inside /tmp/pindex-test-root
     expect(resolveWithinRoot(root, '../pindex-test-root-evil/file.ts')).toBeNull();
+  });
+});
+
+describe('normalizeRelPath', () => {
+  it('converts backslashes and strips leading ./', () => {
+    expect(normalizeRelPath('.\\src\\a.ts')).toBe('src/a.ts');
+    expect(normalizeRelPath('./src/a.ts')).toBe('src/a.ts');
+    expect(normalizeRelPath('src/a.ts')).toBe('src/a.ts');
   });
 });

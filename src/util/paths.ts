@@ -14,3 +14,10 @@ export function resolveWithinRoot(projectRoot: string, relative: string): string
   if (candidate.startsWith(normalizedRoot + sep)) return candidate;
   return null;
 }
+
+/** Normalizes a user-supplied relative path to the index's form: forward slashes, no leading `./`. */
+export function normalizeRelPath(p: string): string {
+  let out = p.replace(/\\/g, '/');
+  while (out.startsWith('./')) out = out.slice(2);
+  return out;
+}

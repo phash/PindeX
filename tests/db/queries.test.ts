@@ -17,6 +17,7 @@ import {
   upsertSymbol,
   getSymbolsByFileId,
   getSymbolByName,
+  getSymbolsByName,
   searchSymbolsFts,
   sanitizeFtsQuery,
   getDependenciesByFile,
@@ -165,6 +166,24 @@ describe('Symbol queries', () => {
       const result = getSymbolByName(db, 'Shared', 'src/module.ts');
       expect(result).not.toBeNull();
       expect(result!.file_path).toBe('src/module.ts');
+    });
+  });
+
+  describe('deterministic lookup', () => {
+    beforeEach(() => {
+      const a = insertTestFile(db, { path: 'src/a.ts' });
+      const b = insertTestFile(db, { path: 'src/b.ts' });
+      insertTestSymbol(db, { fileId: a, name: 'format', isExported: false });
+      insertTestSymbol(db, { fileId: b, name: 'format', isExported: true });
+    });
+
+    it('prefers exported symbols, then path order', () => {
+      expect(getSymbolByName(db, 'format')!.file_path).toBe('src/b.ts');
+      expect(getSymbolsByName(db, 'format').map((s) => s.file_path)).toEqual(['src/b.ts', 'src/a.ts']);
+    });
+
+    it('normalizes backslash and ./ in the file filter', () => {
+      expect(getSymbolByName(db, 'format', '.\\src\\a.ts')!.file_path).toBe('src/a.ts');
     });
   });
 

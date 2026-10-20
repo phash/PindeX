@@ -40,6 +40,16 @@ describe('getSymbol', () => {
     expect(results).toEqual([]);
   });
 
+  it('picks the exported symbol deterministically among duplicates', () => {
+    const aId = insertTestFile(db, { path: 'src/a.ts' });
+    const bId = insertTestFile(db, { path: 'src/b.ts' });
+    insertTestSymbol(db, { fileId: aId, name: 'format', isExported: false });
+    insertTestSymbol(db, { fileId: bId, name: 'format', isExported: true });
+    const results = getSymbol(makeTestRepoSet(db), { name: 'format' });
+    expect(results).toHaveLength(1);
+    expect(results[0].file).toBe('src/b.ts');
+  });
+
   it('filters by file when specified', () => {
     const otherFileId = insertTestFile(db, { path: 'src/other.ts' });
     insertTestSymbol(db, { fileId: otherFileId, name: 'AuthService', kind: 'class', signature: 'class AuthService' });
