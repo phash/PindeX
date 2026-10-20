@@ -12,6 +12,7 @@ import {
   deleteSymbolsByFileId,
   deleteOutgoingDependencies,
   getAllFiles,
+  deleteFile,
   deleteUsagesByFile,
   getFileByPath,
   insertDocumentChunk,
@@ -116,7 +117,7 @@ export class Indexer {
   private readonly db: Database.Database;
   readonly projectRoot: string;
   private readonly languages: string[];
-  private readonly ignorePatterns: string[];
+  private readonly ignores: string[];
   private readonly generateSummaries: boolean;
   private readonly summarizer: Summarizer;
   private readonly documentPatterns: string[];
@@ -129,7 +130,7 @@ export class Indexer {
     this.db = options.db;
     this.projectRoot = resolve(options.projectRoot);
     this.languages = options.languages ?? DEFAULT_LANGUAGES;
-    this.ignorePatterns = options.ignorePatterns ?? DEFAULT_IGNORE;
+    this.ignores = options.ignorePatterns ?? DEFAULT_IGNORE;
     this.generateSummaries = options.generateSummaries ?? false;
     this.summarizer = new Summarizer(options.summarizerOptions ?? { enabled: false });
     this.documentPatterns = options.documentPatterns ?? DEFAULT_DOCUMENT_PATTERNS;
@@ -140,14 +141,24 @@ export class Indexer {
     }
   }
 
+  /** Glob ignore patterns shared with the file watcher. */
+  get ignorePatterns(): readonly string[] {
+    return this.ignores;
+  }
+
+  /** Document glob patterns (docs/config) shared with the file watcher. */
+  get documentGlobs(): readonly string[] {
+    return this.documentPatterns;
+  }
+
   /** Discovers and indexes all source files and document files in the project root. */
   async indexAll(options: IndexAllOptions = {}): Promise<IndexResult> {
-    const result: IndexResult = { indexed: 0, updated: 0, skipped: 0, errors: [] };
+    const result: IndexResult = { indexed: 0, updated: 0, skipped: 0, removed: 0, errors: [] };
     const codePatterns = buildCodePatterns(this.languages);
 
     const [codePaths, docPaths] = await Promise.all([
-      glob(codePatterns, { cwd: this.projectRoot, ignore: this.ignorePatterns, absolute: false }),
-      glob(this.documentPatterns, { cwd: this.projectRoot, ignore: this.ignorePatterns, absolute: false }),
+      glob(codePatterns, { cwd: this.projectRoot, ignore: this.ignores, absolute: false }),
+      glob(this.documentPatterns, { cwd: this.projectRoot, ignore: this.ignores, absolute: false }),
     ]);
 
     const allCodePaths = [...codePaths, ...(options.additionalPaths ?? [])];
@@ -206,6 +217,22 @@ export class Indexer {
       else if (fileResult.status === 'updated') result.updated++;
       else if (fileResult.status === 'skipped') result.skipped++;
       result.errors.push(...fileResult.errors);
+    }
+
+    // Prune rows for files deleted while the server was down. Never prune when
+    // the glob found nothing (misconfigured root must not wipe the index), and
+    // never prune files that still exist on disk (e.g. ignored but present).
+    const discovered = new Set<string>(
+      [...allCodePaths, ...docPaths].map((p) => p.replace(/\\/g, '/')),
+    );
+    if (codePaths.length + docPaths.length > 0) {
+      for (const file of getAllFiles(this.db)) {
+        if (discovered.has(file.path)) continue;
+        const abs = resolveWithinRoot(this.projectRoot, file.path);
+        if (abs !== null && existsSync(abs)) continue;
+        deleteFile(this.db, file.path);
+        result.removed++;
+      }
     }
 
     // Stash the cache for resolveDependencies (Task 7 will consume it).

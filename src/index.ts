@@ -3,7 +3,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { openDatabase } from './db/database.js';
 import { runMigrations } from './db/migrations.js';
 import { Indexer } from './indexer/index.js';
-import { FileWatcher } from './indexer/watcher.js';
+import { FileWatcher, attachWatcherErrorLogger } from './indexer/watcher.js';
 import { startMonitoringServer } from './monitoring/server.js';
 import { TokenLogger } from './monitoring/token-logger.js';
 import { createMcpServer } from './server.js';
@@ -118,6 +118,7 @@ async function main(): Promise<void> {
   let watcher: FileWatcher | null = null;
   if (AUTO_REINDEX) {
     watcher = new FileWatcher({ db, indexer, projectRoot: PROJECT_ROOT, languages: LANGUAGES, observer });
+    attachWatcherErrorLogger(watcher);
     watcher.start().catch((err) => {
       process.stderr.write(`[pindex] File watcher failed to start: ${String(err)}\n`);
     });

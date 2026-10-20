@@ -52,16 +52,22 @@ vi.mock('../../src/db/queries.js', async (importActual) => {
   return { ...actual, deleteFile: deleteFileMock };
 });
 
-import { FileWatcher } from '../../src/indexer/watcher.js';
+import { FileWatcher, attachWatcherErrorLogger } from '../../src/indexer/watcher.js';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 const DEBOUNCE_MS = 300;
 const fakeDb = {} as Database.Database;
 
-function makeStubIndexer(): { indexFile: ReturnType<typeof vi.fn> } & Pick<Indexer, never> {
+function makeStubIndexer(): {
+  indexFile: ReturnType<typeof vi.fn>;
+  indexDocument: ReturnType<typeof vi.fn>;
+} & Pick<Indexer, never> {
   return {
     indexFile: vi.fn().mockResolvedValue({ status: 'indexed', errors: [] }),
+    indexDocument: vi.fn().mockResolvedValue({ status: 'indexed', errors: [] }),
+    ignorePatterns: ['**/node_modules/**', '**/build/**'],
+    documentGlobs: ['**/*.md'],
   } as never;
 }
 
@@ -106,7 +112,7 @@ describe('FileWatcher (TST-01)', () => {
 
     await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
     expect(indexer.indexFile).toHaveBeenCalledTimes(1);
-    expect(indexer.indexFile).toHaveBeenCalledWith('src/new.ts', true);
+    expect(indexer.indexFile).toHaveBeenCalledWith('src/new.ts', false);
   });
 
   it("calls indexer.indexFile after the debounce on 'change'", async () => {
@@ -121,7 +127,7 @@ describe('FileWatcher (TST-01)', () => {
     await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
 
     expect(indexer.indexFile).toHaveBeenCalledTimes(1);
-    expect(indexer.indexFile).toHaveBeenCalledWith('src/edited.ts', true);
+    expect(indexer.indexFile).toHaveBeenCalledWith('src/edited.ts', false);
   });
 
   it('normalizes backslash paths to forward slashes before indexing', async () => {
@@ -135,7 +141,7 @@ describe('FileWatcher (TST-01)', () => {
     chokidarState.emit('change', 'src\\windows\\file.ts');
     await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
 
-    expect(indexer.indexFile).toHaveBeenCalledWith('src/windows/file.ts', true);
+    expect(indexer.indexFile).toHaveBeenCalledWith('src/windows/file.ts', false);
   });
 
   it("calls deleteFile (not indexFile) on 'unlink', normalized", async () => {
@@ -174,7 +180,7 @@ describe('FileWatcher (TST-01)', () => {
 
     await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
     expect(indexer.indexFile).toHaveBeenCalledTimes(1);
-    expect(indexer.indexFile).toHaveBeenCalledWith('src/hot.ts', true);
+    expect(indexer.indexFile).toHaveBeenCalledWith('src/hot.ts', false);
   });
 
   it('emits "indexed" after a successful index', async () => {
@@ -322,5 +328,47 @@ describe('FileWatcher (TST-01)', () => {
 
     await vi.advanceTimersByTimeAsync(DEBOUNCE_MS * 2);
     expect(indexer.indexFile).not.toHaveBeenCalled();
+  });
+
+  it('passes the indexer ignore patterns and document globs to chokidar', async () => {
+    const watcher = new FileWatcher({
+      db: fakeDb,
+      indexer: indexer as never as Indexer,
+      projectRoot: '/proj',
+    });
+    await watcher.start();
+
+    const call = chokidarState.watchCalls[0];
+    expect((call.options as { ignored: unknown }).ignored).toEqual(['**/node_modules/**', '**/build/**']);
+    expect(call.patterns as string[]).toContain('**/*.md');
+  });
+
+  it('routes document changes to indexDocument, not indexFile', async () => {
+    const watcher = new FileWatcher({
+      db: fakeDb,
+      indexer: indexer as never as Indexer,
+      projectRoot: '/proj',
+    });
+    await watcher.start();
+
+    chokidarState.emit('change', 'docs/readme.md');
+    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
+
+    expect(indexer.indexDocument).toHaveBeenCalledWith('docs/readme.md', false);
+    expect(indexer.indexFile).not.toHaveBeenCalled();
+  });
+
+  it('attachWatcherErrorLogger prevents an unhandled error emit from throwing', () => {
+    const watcher = new FileWatcher({
+      db: fakeDb,
+      indexer: indexer as never as Indexer,
+      projectRoot: '/proj',
+    });
+    expect(() => watcher.emit('error', new Error('boom'))).toThrow('boom');
+
+    const lines: string[] = [];
+    attachWatcherErrorLogger(watcher, (l) => lines.push(l));
+    expect(() => watcher.emit('error', new Error('boom'))).not.toThrow();
+    expect(lines).toEqual(['[pindex] File watcher error: Error: boom\n']);
   });
 });

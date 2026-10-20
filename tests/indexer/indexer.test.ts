@@ -293,3 +293,65 @@ describe('resolveDependencies — import specifiers', () => {
   });
 });
 
+
+describe('Indexer.indexAll pruning', () => {
+  let db: Database.Database;
+  let dir: string;
+
+  beforeEach(() => {
+    db = createTestDb();
+    dir = createTempProject();
+  });
+
+  function snapshotCount(path: string): number {
+    return (db.prepare('SELECT COUNT(*) AS c FROM ast_snapshots WHERE file_path = ?').get(path) as { c: number }).c;
+  }
+
+  it('removes rows (and ast_snapshots) for files deleted from disk', async () => {
+    const indexer = new Indexer({ db, projectRoot: dir });
+    await indexer.indexAll();
+    // indexing records AST snapshots; make sure at least one exists
+    if (snapshotCount('src/service.ts') === 0) {
+      db.prepare(
+        `INSERT INTO ast_snapshots (file_path, symbol_name, kind, signature, signature_hash) VALUES (?, ?, ?, ?, ?)`,
+      ).run('src/service.ts', 'MyService', 'class', 'class MyService', 'h');
+    }
+    expect(snapshotCount('src/service.ts')).toBeGreaterThan(0);
+
+    rmSync(join(dir, 'src', 'service.ts'));
+    const result = await indexer.indexAll();
+
+    expect(result.removed).toBe(1);
+    expect(getFileByPath(db, 'src/service.ts')).toBeNull();
+    expect(getFileByPath(db, 'src/index.ts')).not.toBeNull();
+    expect(snapshotCount('src/service.ts')).toBe(0);
+  });
+
+  it('does not prune when the glob finds no files', async () => {
+    const indexer = new Indexer({ db, projectRoot: dir });
+    await indexer.indexAll();
+    const before = getAllFiles(db).length;
+
+    rmSync(join(dir, 'src'), { recursive: true });
+    const result = await indexer.indexAll();
+
+    expect(result.removed).toBe(0);
+    expect(getAllFiles(db)).toHaveLength(before);
+  });
+
+  it('does not prune files that still exist on disk but are outside the glob', async () => {
+    const indexer = new Indexer({ db, projectRoot: dir });
+    await indexer.indexAll();
+    upsertFile(db, { path: 'src/extra.rb', language: 'ruby', hash: 'x', rawTokenEstimate: 1, summary: null });
+    writeFileSync(join(dir, 'src', 'extra.rb'), 'x = 1');
+
+    const result = await indexer.indexAll();
+    expect(result.removed).toBe(0);
+    expect(getFileByPath(db, 'src/extra.rb')).not.toBeNull();
+  });
+
+  it('exposes ignorePatterns', () => {
+    const indexer = new Indexer({ db, projectRoot: dir });
+    expect(indexer.ignorePatterns).toContain('**/node_modules/**');
+  });
+});

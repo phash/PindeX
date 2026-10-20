@@ -79,7 +79,9 @@ export function getAllFiles(db: Database.Database): FileRecord[] {
 }
 
 export function deleteFile(db: Database.Database, path: string): void {
-  db.prepare('DELETE FROM files WHERE path = ?').run(toForwardSlash(path));
+  const p = toForwardSlash(path);
+  db.prepare('DELETE FROM ast_snapshots WHERE file_path = ?').run(p);
+  db.prepare('DELETE FROM files WHERE path = ?').run(p);
 }
 
 // ─── Symbol Queries ───────────────────────────────────────────────────────────

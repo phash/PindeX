@@ -516,5 +516,7 @@ export interface IndexResult {
   indexed: number;
   updated: number;
   skipped: number;
+  /** Rows pruned because the file no longer exists on disk. */
+  removed: number;
   errors: string[];
 }

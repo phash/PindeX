@@ -1,6 +1,7 @@
 import { EventEmitter } from 'node:events';
 import type Database from 'better-sqlite3';
 import { type Indexer, LANGUAGE_PATTERNS } from './index.js';
+import { detectLanguage, isDocumentLanguage } from './parser.js';
 import type { SessionObserver } from '../memory/observer.js';
 import { deleteFile } from '../db/queries.js';
 
@@ -49,10 +50,11 @@ export class FileWatcher extends EventEmitter {
     if (patterns.length === 0) {
       patterns.push('**/*.ts', '**/*.tsx', '**/*.js');
     }
+    patterns.push(...this.indexer.documentGlobs);
 
     this.watcher = chokidar.watch(patterns, {
       cwd: this.options.projectRoot,
-      ignored: ['**/node_modules/**', '**/.git/**', '**/dist/**'],
+      ignored: [...this.indexer.ignorePatterns],
       persistent: true,
       ignoreInitial: true,
     });
@@ -97,9 +99,11 @@ export class FileWatcher extends EventEmitter {
 
     if (type === 'add' || type === 'change') {
       try {
-        const result = await this.indexer.indexFile(path, true);
+        const result = isDocumentLanguage(detectLanguage(path))
+          ? await this.indexer.indexDocument(path, false)
+          : await this.indexer.indexFile(path, false);
         this.emit('indexed', path);
-        if (this.observer && result.diff) {
+        if (this.observer && 'diff' in result && result.diff) {
           this.observer.onFileDiff(result.diff);
         }
       } catch (err) {
@@ -114,4 +118,14 @@ export class FileWatcher extends EventEmitter {
       }
     }
   }
+}
+
+/** Attaches an 'error' listener so watcher errors are logged instead of crashing the process. */
+export function attachWatcherErrorLogger(
+  watcher: EventEmitter,
+  write: (line: string) => void = (line) => { process.stderr.write(line); },
+): void {
+  watcher.on('error', (err: unknown) => {
+    write(`[pindex] File watcher error: ${String(err)}\n`);
+  });
 }
