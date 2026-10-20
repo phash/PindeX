@@ -12,9 +12,59 @@ import {
   countPriorSessions,
   getAntiPatternEvents,
 } from '../db/queries.js';
+import { buildCallGraph } from '../graph/call-graph.js';
+import { rankHubs, detectCommunities, summarizeCommunities } from '../graph/communities.js';
 import type { RepoSet } from '../federation/repo-set.js';
 
 const MAX_MODULE_GROUPS = 50;
+const MAX_HUBS = 10;
+const MAX_COMMUNITIES = 8;
+
+/** Hubs + file communities from call edges and import dependencies; undefined without call edges. */
+function computeGraphInsights(
+  db: Database.Database,
+  files: Array<{ path: string }>,
+): Pick<ProjectOverviewSnapshot, 'hubs' | 'communities'> | undefined {
+  const { edges } = buildCallGraph(db);
+  if (edges.length === 0) return undefined;
+
+  const pairWeights = new Map<string, number>();
+  const bump = (a: string, b: string): void => {
+    if (a === b) return;
+    const k = a < b ? `${a}\0${b}` : `${b}\0${a}`;
+    pairWeights.set(k, (pairWeights.get(k) ?? 0) + 1);
+  };
+  // Imports: weight 1 per distinct file pair (either direction counts once).
+  const depPairs = new Set<string>();
+  const deps = db
+    .prepare(
+      `SELECT DISTINCT f1.path AS a, f2.path AS b FROM dependencies d
+       JOIN files f1 ON d.from_file = f1.id JOIN files f2 ON d.to_file = f2.id`,
+    )
+    .all() as Array<{ a: string; b: string }>;
+  for (const { a, b } of deps) {
+    if (a === b) continue;
+    depPairs.add(a < b ? `${a}\0${b}` : `${b}\0${a}`);
+  }
+  for (const k of depPairs) pairWeights.set(k, 1);
+  // Calls: weight 1 per call edge, aggregated by (fromFile, to.file).
+  for (const e of edges) bump(e.fromFile, e.to.file);
+
+  const weighted: Array<[string, string, number]> = [];
+  const degree = new Map<string, number>();
+  for (const [k, w] of [...pairWeights.entries()].sort((x, y) => (x[0] < y[0] ? -1 : 1))) {
+    const [a, b] = k.split('\0');
+    weighted.push([a, b, w]);
+    degree.set(a, (degree.get(a) ?? 0) + w);
+    degree.set(b, (degree.get(b) ?? 0) + w);
+  }
+
+  const assignment = detectCommunities(files.map((f) => f.path), weighted);
+  return {
+    hubs: rankHubs(edges, MAX_HUBS),
+    communities: summarizeCommunities(assignment, degree, MAX_COMMUNITIES),
+  };
+}
 
 /** Group key: first two path segments of the directory part ('.' for root files). */
 function dirKey(path: string): string {
@@ -83,6 +133,7 @@ function buildSnapshot(
 
   let totalSymbols = 0;
   let modules: ProjectOverviewSnapshot['modules'];
+  let insights: ReturnType<typeof computeGraphInsights>;
 
   if (mode === 'brief') {
     // Brief mode: counts only, no per-file or per-directory data
@@ -97,6 +148,7 @@ function buildSnapshot(
       totalSymbols += row.cnt;
     }
     modules = groupByDirectory(files, symbolCounts);
+    insights = computeGraphInsights(db, files);
   }
 
   const snapshot: ProjectOverviewSnapshot = {
@@ -108,6 +160,7 @@ function buildSnapshot(
   };
 
   if (modules) snapshot.modules = modules;
+  if (insights) Object.assign(snapshot, insights);
 
   // Session memory summary (passive surfacing) — only for primary
   if (sessionId) {

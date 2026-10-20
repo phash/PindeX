@@ -127,7 +127,7 @@ npm run build            # compile src/ → dist/
 | `get_call_path` | Shortest call chain from symbol A to B (`from`/`to`, `from_file`/`to_file`, `max_depth` default 6, max 12); edges tagged `EXTRACTED`/`INFERRED`; primary repo only |
 | `get_dependencies` | Import graph for a file (imports / imported_by / both) |
 | `get_api_endpoints` | Extracted HTTP/REST endpoints (Express-style route symbols) in the codebase |
-| `get_project_overview` | Project-level stats, entry points, directory groups (full mode) + session memory summary |
+| `get_project_overview` | Project-level stats, entry points, directory groups, hub symbols (top 10 by distinct caller files) and file communities (max 8; full mode, only with call edges) + session memory summary |
 | `reindex` | Rebuild index for one file or the entire project |
 | `get_token_stats` | Token usage statistics for a session |
 | `start_comparison` | Start A/B session (indexed vs baseline) |

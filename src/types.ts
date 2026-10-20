@@ -359,6 +359,10 @@ export interface ProjectOverviewSnapshot {
     /** Only files that have a summary; omitted when none do. */
     summaries?: Array<{ path: string; summary: string }>;
   }>;
+  /** Most widely called symbols (max 10); full mode with call edges only. */
+  hubs?: Array<{ symbol: string; file: string; callerFiles: number }>;
+  /** File clusters from dependency + call edges (max 8); full mode with call edges only. */
+  communities?: Array<{ id: number; label: string; size: number; topFiles: string[] }>;
   stats: { totalFiles: number; totalSymbols: number };
   session_memory?: SessionMemorySummary;
   index_recommendation?: IndexRecommendation;

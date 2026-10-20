@@ -147,11 +147,11 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'get_project_overview',
-    description: 'Project stats and entry points. brief=counts only; full=directory groups.',
+    description: 'Project stats and entry points. brief=counts only; full=directory groups + hub symbols + file communities.',
     inputSchema: {
       type: 'object',
       properties: {
-        mode: { type: 'string', enum: ['brief', 'full'], description: 'brief=counts only; full=directory groups (default)' },
+        mode: { type: 'string', enum: ['brief', 'full'], description: 'brief=counts only; full=directory groups, hubs, communities (default)' },
       },
       required: [],
     },
