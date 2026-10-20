@@ -106,11 +106,12 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'find_usages',
-    description: 'All call sites of a symbol across the codebase.',
+    description: 'Call sites of a symbol (EXTRACTED = via import/same file, INFERRED = unique name). Pass file to disambiguate.',
     inputSchema: {
       type: 'object',
       properties: {
         symbol: { type: 'string', description: 'Symbol name' },
+        file: { type: 'string', description: 'File defining the symbol (when the name is ambiguous)' },
       },
       required: ['symbol'],
     },

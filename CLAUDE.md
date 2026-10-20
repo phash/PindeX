@@ -123,7 +123,7 @@ npm run build            # compile src/ → dist/
 | `get_symbol` | Symbol details: signature, location, file dependencies + memory context |
 | `get_context` | Line-range snippet from a file (token-efficient) |
 | `get_file_summary` | File overview: symbols, imports, exports + memory context |
-| `find_usages` | All locations where a symbol is used |
+| `find_usages` | Call sites of a symbol with `caller` + confidence (`EXTRACTED`/`INFERRED`); `file` disambiguates, ambiguous names return candidates |
 | `get_dependencies` | Import graph for a file (imports / imported_by / both) |
 | `get_api_endpoints` | Extracted HTTP/REST endpoints (Express-style route symbols) in the codebase |
 | `get_project_overview` | Project-level stats, entry points, directory groups (full mode) + session memory summary |

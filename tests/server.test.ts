@@ -31,6 +31,7 @@ import {
   insertTestSession,
   insertTestTokenLog,
   insertTestDependency,
+  insertTestRef,
 } from './helpers/fixtures.js';
 import { insertDocumentChunk } from '../src/db/queries.js';
 
@@ -184,7 +185,7 @@ describe('createMcpServer – tools/call dispatch (all tools)', () => {
     // A second file that imports app.ts (for dependency graph) and uses greet.
     const consumerId = insertTestFile(db, { path: 'src/consumer.ts', language: 'typescript', hash: 'def456' });
     insertTestDependency(db, consumerId, fileId, 'greet');
-    // TODO(Task 4): seed symbol_refs (insertTestRef) once find_usages reads them.
+    insertTestRef(db, consumerId, 'greet', 3);
 
     // A document chunk so search_docs / get_doc_chunk have content (uses the
     // real query helper so the FTS5 triggers fire).
@@ -248,12 +249,14 @@ describe('createMcpServer – tools/call dispatch (all tools)', () => {
     expect(res[0].symbols.map((s: any) => s.name)).toContain('greet');
   });
 
-  // TODO(Task 4): re-enable when find_usages reads symbol_refs
-  it.skip('find_usages returns call sites', async () => {
+  it('find_usages returns call sites', async () => {
     const res = await callTool(server, 'find_usages', { symbol: 'greet' });
-    // Shape can be array of usages or grouped per-repo; just assert it parsed.
-    expect(res).toBeTruthy();
-    expect(JSON.stringify(res)).toContain('consumer.ts');
+    expect(res).toEqual([{ file: 'src/consumer.ts', line: 3, caller: null, confidence: 'EXTRACTED' }]);
+  });
+
+  it('find_usages accepts a file argument', async () => {
+    const res = await callTool(server, 'find_usages', { symbol: 'greet', file: './src/app.ts' });
+    expect(res).toHaveLength(1);
   });
 
   it('get_dependencies returns the import graph', async () => {

@@ -46,7 +46,7 @@ Your project files
   ├── files            (path, hash, language, token estimate)
   ├── symbols          (name, kind, signature, lines)       ─► search_symbols
   ├── dependencies     (import graph)                       ─► get_dependencies
-  ├── usages           (symbol → call sites)                ─► find_usages
+  ├── symbol_refs      (call sites, resolved at query time) ─► find_usages
   ├── documents        (text chunks from .md/.yaml/.txt)    ─► search_docs
   ├── context_entries  (notes saved by Claude mid-session)  ─► search_docs
   └── token_log        (per-session metrics)
@@ -358,13 +358,14 @@ High-level overview of a file without loading its full content.
 
 ### `find_usages`
 
-All locations in the codebase where a symbol is referenced.
+Call sites of a symbol, resolved through the call graph.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
 | `symbol` | string | ✓ | Symbol name to look up |
+| `file` | string | | File defining the symbol, to disambiguate same-named definitions |
 
-**Returns:** List of `{ file, line, project }` entries.
+**Returns:** List of `{ file, line, caller, confidence }` entries (`project` added when federated, max 500 refs per repo). `confidence` is `EXTRACTED` (same file or via import) or `INFERRED` (unique name project-wide). A name defined more than once without `file` returns `{ error: "ambiguous", candidates: [{ file, line, kind }] }`.
 
 ---
 

@@ -206,29 +206,34 @@ Liest einen Zeilen-Bereich aus einer Datei direkt von der Festplatte. Token-effi
 
 ### `find_usages`
 
-Alle Stellen in der Codebase an denen ein Symbol verwendet wird.
+Aufrufstellen eines Symbols, aufgelöst über den Call-Graph (`symbol_refs` + `dependencies`).
 
 **Input:**
 
 | Parameter | Typ | Pflicht | Default | Beschreibung |
 |---|---|---|---|---|
 | `symbol` | string (min 1) | ✓ | — | Symbol-Name |
+| `file` | string (min 1) | | — | Definierende Datei, falls der Name mehrfach definiert ist |
 
 **Output:**
 
 ```json
-{
-  "symbol": "upsertFile",
-  "usages": [
-    { "file": "src/indexer/index.ts", "line": 226, "context": "upsertFile(this.db, {" },
-    { "file": "src/indexer/index.ts", "line": 309, "context": "upsertFile(this.db, {" }
-  ]
-}
+[
+  { "file": "src/indexer/index.ts", "line": 226, "caller": "indexFile", "confidence": "EXTRACTED" }
+]
+```
+
+Mehrdeutiger Name ohne `file`:
+
+```json
+{ "error": "ambiguous", "candidates": [{ "file": "src/a.ts", "line": 2, "kind": "function" }] }
 ```
 
 **Verhalten:**
-- Suche über `usages`-Tabelle (vorbefüllte Referenzen)
-- `context` enthält die Zeile an der Verwendungsstelle
+- Auflösung je Referenz (erster Treffer gewinnt): (1) Symbol in derselben Datei (`this.x()` nur Methoden) → `EXTRACTED`; (2) per Import (`dependencies.symbol_name`) aus einer Datei, die es definiert → `EXTRACTED`; (3) genau eine Definition projektweit → `INFERRED`; sonst verworfen
+- `caller` = umschließendes Symbol, `null` auf Modulebene; `project` nur bei mehr als einem Repo
+- Cap: max. 500 Referenzen pro Repo vor der Auflösung
+- Bekannte Grenze: Aliased Imports (`import { a as b }`) — der Aufruf `b()` wird nicht über den Import aufgelöst
 
 ---
 

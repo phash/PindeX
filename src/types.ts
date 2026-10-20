@@ -263,13 +263,25 @@ export interface GetFileSummaryOutput {
 
 export interface FindUsagesInput {
   symbol: string;
+  /** Defining file, to pick one of several same-named symbols. */
+  file?: string;
   repos?: string[];
 }
 
 export interface UsageResult {
   file: string;
   line: number;
-  project: string;
+  /** Enclosing symbol of the call site; null for module-level calls. */
+  caller: string | null;
+  confidence: 'EXTRACTED' | 'INFERRED';
+  /** Only set when more than one repo is configured (federation). */
+  project?: string;
+}
+
+/** Returned by find_usages when the symbol name has several definitions and no `file` was given. */
+export interface FindUsagesAmbiguous {
+  error: 'ambiguous';
+  candidates: Array<{ file: string; line: number; kind: string; project?: string }>;
 }
 
 export interface GetDependenciesInput {
