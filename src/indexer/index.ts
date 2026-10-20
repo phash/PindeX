@@ -4,13 +4,14 @@ import { glob } from 'glob';
 import type Database from 'better-sqlite3';
 import type { IndexResult, ParsedFile, ParsedImport } from '../types.js';
 import { ParsePool } from './parse-pool.js';
-import { parseFile, parseDocument, hashContent } from './parser.js';
+import { parseFile, parseDocument, hashContent, isDocumentLanguage } from './parser.js';
 import {
   upsertFile,
   upsertSymbol,
   upsertDependency,
   deleteSymbolsByFileId,
-  deleteDependenciesByFile,
+  deleteOutgoingDependencies,
+  getAllFiles,
   deleteUsagesByFile,
   getFileByPath,
   insertDocumentChunk,
@@ -188,6 +189,7 @@ export class Indexer {
         parseResult.content,
         parseResult.hash,
         options.force ?? false,
+        false,
       );
       if (fileRes.status === 'indexed') result.indexed++;
       else if (fileRes.status === 'updated') result.updated++;
@@ -267,6 +269,7 @@ export class Indexer {
     content: string,
     hash: string,
     force: boolean,
+    resolveEdges = true,
   ): Promise<IndexFileResult> {
     const existing = getFileByPath(this.db, relativePath);
     if (!force && existing && existing.hash === hash) {
@@ -331,10 +334,13 @@ export class Indexer {
             hasTryCatch: sym.hasTryCatch,
           });
         }
-        deleteDependenciesByFile(this.db, fileRecord.id);
+        deleteOutgoingDependencies(this.db, fileRecord.id);
         return diff;
       });
       const diff = runInTransaction();
+      // indexAll() resolves all edges in one pass afterwards; the single-file
+      // (watcher) path has to rebuild this file's outgoing edges itself.
+      if (resolveEdges) this.resolveFileDependencies(relativePath, parsed.imports);
       return { status: isUpdate ? 'updated' : 'indexed', errors: [], diff };
     } catch (err) {
       return {
@@ -418,45 +424,64 @@ export class Indexer {
    *  and re-parsing every file. Slow path (no cache) re-parses as before. */
   async resolveDependencies(importsCache?: Map<string, ParsedImport[]>): Promise<void> {
     const cache = importsCache ?? this.lastImportsCache ?? undefined;
-    const { getAllFiles } = await import('../db/queries.js');
     const allFiles = getAllFiles(this.db);
     const pathIndex = new Map(allFiles.map((f) => [f.path, f.id]));
     const knownPaths = new Set(pathIndex.keys());
 
-    for (const file of allFiles) {
-      let imports: ParsedImport[] | undefined;
+    const resolveAll = this.db.transaction(() => {
+      for (const file of allFiles) {
+        if (isDocumentLanguage(file.language)) continue;
+        let imports: ParsedImport[] | undefined;
 
-      if (cache && cache.has(file.path)) {
-        imports = cache.get(file.path);
-      } else {
-        const absolutePath = resolveWithinRoot(this.projectRoot, file.path);
-        if (!absolutePath || !existsSync(absolutePath)) continue;
-        try {
-          const content = readFileSync(absolutePath, 'utf-8');
-          imports = parseFile(absolutePath, content).imports;
-        } catch (err) {
-          process.stderr.write(
-            `[pindex] resolveDependencies: re-parse failed for ${file.path}: ${String(err)}\n`,
-          );
-          continue;
+        if (cache && cache.has(file.path)) {
+          imports = cache.get(file.path);
+        } else {
+          const absolutePath = resolveWithinRoot(this.projectRoot, file.path);
+          if (!absolutePath || !existsSync(absolutePath)) continue;
+          try {
+            const content = readFileSync(absolutePath, 'utf-8');
+            imports = parseFile(absolutePath, content).imports;
+          } catch (err) {
+            process.stderr.write(
+              `[pindex] resolveDependencies: re-parse failed for ${file.path}: ${String(err)}\n`,
+            );
+            continue;
+          }
         }
+
+        if (!imports) continue;
+        this.writeEdges(file.id, file.path, imports, pathIndex, knownPaths);
       }
+    });
+    resolveAll();
+  }
 
-      if (!imports) continue;
+  /** Rebuilds the outgoing import edges of a single file (watcher path). */
+  resolveFileDependencies(relativePath: string, imports: ParsedImport[]): void {
+    const fileRecord = getFileByPath(this.db, relativePath);
+    if (!fileRecord) return;
+    const pathIndex = new Map(getAllFiles(this.db).map((f) => [f.path, f.id]));
+    const knownPaths = new Set(pathIndex.keys());
+    this.db.transaction(() => {
+      this.writeEdges(fileRecord.id, relativePath, imports, pathIndex, knownPaths);
+    })();
+  }
 
-      deleteDependenciesByFile(this.db, file.id);
-      for (const imp of imports) {
-        const resolvedPath = this.resolveImportPath(file.path, imp.source, knownPaths);
-        if (!resolvedPath) continue;
-        const toFileId = pathIndex.get(resolvedPath);
-        if (!toFileId) continue;
-        for (const sym of imp.symbols.length > 0 ? imp.symbols : [null]) {
-          upsertDependency(this.db, {
-            fromFile: file.id,
-            toFile: toFileId,
-            symbolName: sym,
-          });
-        }
+  private writeEdges(
+    fileId: number,
+    filePath: string,
+    imports: ParsedImport[],
+    pathIndex: Map<string, number>,
+    knownPaths: Set<string>,
+  ): void {
+    deleteOutgoingDependencies(this.db, fileId);
+    for (const imp of imports) {
+      const resolvedPath = this.resolveImportPath(filePath, imp.source, knownPaths);
+      if (!resolvedPath) continue;
+      const toFileId = pathIndex.get(resolvedPath);
+      if (!toFileId) continue;
+      for (const sym of imp.symbols.length > 0 ? imp.symbols : [null]) {
+        upsertDependency(this.db, { fromFile: fileId, toFile: toFileId, symbolName: sym });
       }
     }
   }
@@ -473,26 +498,29 @@ export class Indexer {
     this.pool = null;
   }
 
-  /** Resolves a relative import path to a project-relative file path. */
+  /** Resolves a relative import path to a project-relative file path.
+   *  Order: exact → appended extension → NodeNext `.js`→`.ts` swap → directory index. */
   private resolveImportPath(fromFile: string, importSource: string, knownPaths?: Set<string>): string | null {
     if (!importSource.startsWith('.')) return null; // Skip external packages
 
     const fromDir = dirname(fromFile).replace(/\\/g, '/');
-    const extensions = ['.ts', '.tsx', '.js', '/index.ts', '/index.js'];
+    const base = join(fromDir, importSource).replace(/\\/g, '/');
+    const exists = (p: string): boolean =>
+      knownPaths ? knownPaths.has(p) : existsSync(join(this.projectRoot, p));
 
-    for (const ext of extensions) {
-      const candidate = join(fromDir, importSource + ext).replace(/\\/g, '/');
-      if (knownPaths ? knownPaths.has(candidate) : existsSync(join(this.projectRoot, candidate))) {
-        return candidate;
-      }
-    }
+    const candidates: string[] = [base];
+    for (const ext of ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs']) candidates.push(base + ext);
+    const swap: Record<string, string[]> = {
+      '.js': ['.ts', '.tsx'],
+      '.jsx': ['.tsx'],
+      '.mjs': ['.mts'],
+      '.cjs': ['.cts'],
+    };
+    const dot = base.lastIndexOf('.');
+    const jsExt = dot > base.lastIndexOf('/') ? base.slice(dot) : '';
+    for (const ts of swap[jsExt] ?? []) candidates.push(base.slice(0, dot) + ts);
+    for (const ext of ['.ts', '.tsx', '.js', '.jsx']) candidates.push(`${base}/index${ext}`);
 
-    // Try without extension (already has extension)
-    const withoutResolve = join(fromDir, importSource).replace(/\\/g, '/');
-    if (knownPaths ? knownPaths.has(withoutResolve) : existsSync(join(this.projectRoot, withoutResolve))) {
-      return withoutResolve;
-    }
-
-    return null;
+    return candidates.find(exists) ?? null;
   }
 }

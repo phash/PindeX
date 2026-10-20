@@ -31,6 +31,7 @@ import {
   deleteSymbolsByFileId,
   upsertDependency,
   upsertUsage,
+  deleteOutgoingDependencies,
 } from '../../src/db/queries.js';
 
 describe('File queries', () => {
@@ -226,6 +227,16 @@ describe('Dependency queries', () => {
       insertTestDependency(db, fileAId, fileBId, 'SomeSymbol');
       const deps = getDependenciesByFile(db, fileAId);
       expect(deps).toContain('src/b.ts');
+    });
+  });
+
+  describe('deleteOutgoingDependencies', () => {
+    it('removes only edges the file declares, keeping incoming edges', () => {
+      insertTestDependency(db, fileAId, fileBId, 'x');
+      insertTestDependency(db, fileBId, fileAId, 'y');
+      deleteOutgoingDependencies(db, fileBId);
+      expect(getDependenciesByFile(db, fileBId)).toHaveLength(0);
+      expect(getDependenciesByFile(db, fileAId)).toContain('src/b.ts');
     });
   });
 

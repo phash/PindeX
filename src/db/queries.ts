@@ -246,11 +246,12 @@ export function getImportedByFile(
   return rows.map((r) => r.path);
 }
 
-export function deleteDependenciesByFile(
+/** Deletes only the edges a file declares (its imports), never edges pointing at it. */
+export function deleteOutgoingDependencies(
   db: Database.Database,
   fileId: number,
 ): void {
-  db.prepare('DELETE FROM dependencies WHERE from_file = ? OR to_file = ?').run(fileId, fileId);
+  db.prepare('DELETE FROM dependencies WHERE from_file = ?').run(fileId);
 }
 
 // ─── Usage Queries ────────────────────────────────────────────────────────────
