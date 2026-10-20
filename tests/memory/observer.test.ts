@@ -3,10 +3,9 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type Database from 'better-sqlite3';
-import { createTestDb } from '../helpers/db.js';
+import { createTestDb, getSessionEvents } from '../helpers/db.js';
 import { SessionObserver } from '../../src/memory/observer.js';
 import {
-  getSessionEvents,
   getObservationsBySession,
   insertObservation,
 } from '../../src/db/queries.js';

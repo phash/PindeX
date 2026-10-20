@@ -18,7 +18,7 @@ extensions:
     args:
       - /absolute/path/to/PindeX/dist/index.js
     envs:
-      INDEX_PATH: /absolute/path/to/project/.codebase-index/index.db
+      INDEX_PATH: /absolute/path/to/project/.pindex/index.db
       PROJECT_ROOT: /absolute/path/to/project
       LANGUAGES: typescript,javascript
       AUTO_REINDEX: "true"
@@ -26,6 +26,5 @@ extensions:
       MONITORING_PORT: "7842"
       MONITORING_AUTO_OPEN: "false"
       BASELINE_MODE: "false"
-      TOKEN_PRICE_PER_MILLION: "3.00"
     enabled: true
     timeout: 300

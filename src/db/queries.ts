@@ -3,13 +3,10 @@ import { normalizeRelPath } from '../util/paths.js';
 import type {
   FileRecord,
   SymbolRecord,
-  DependencyRecord,
   UsageRecord,
-  TokenLogEntry,
   SessionRecord,
   SymbolKind,
   DocumentChunkRecord,
-  ContextEntryRecord,
   AstSnapshotRecord,
   SessionObservationRecord,
   SessionEventRecord,
@@ -314,7 +311,6 @@ export interface InsertTokenLogInput {
   toolName: string;
   tokensUsed: number;
   tokensWithoutIndex: number;
-  filesTouched?: string[];
   query?: string;
 }
 
@@ -323,14 +319,13 @@ export function insertTokenLog(
   input: InsertTokenLogInput,
 ): void {
   db.prepare(`
-    INSERT INTO token_log (session_id, tool_name, tokens_used, tokens_without_index, files_touched, query)
-    VALUES (@sessionId, @toolName, @tokensUsed, @tokensWithoutIndex, @filesTouched, @query)
+    INSERT INTO token_log (session_id, tool_name, tokens_used, tokens_without_index, query)
+    VALUES (@sessionId, @toolName, @tokensUsed, @tokensWithoutIndex, @query)
   `).run({
     sessionId: input.sessionId,
     toolName: input.toolName,
     tokensUsed: input.tokensUsed,
     tokensWithoutIndex: input.tokensWithoutIndex,
-    filesTouched: input.filesTouched ? JSON.stringify(input.filesTouched) : null,
     query: input.query ?? null,
   });
 
@@ -405,22 +400,6 @@ export function createSession(
     INSERT INTO sessions (id, mode, label)
     VALUES (@id, @mode, @label)
   `).run(input);
-}
-
-export interface UpdateSessionInput {
-  totalTokens: number;
-  totalSavings: number;
-}
-
-export function updateSession(
-  db: Database.Database,
-  sessionId: string,
-  input: UpdateSessionInput,
-): void {
-  db.prepare(`
-    UPDATE sessions SET total_tokens = @totalTokens, total_savings = @totalSavings
-    WHERE id = @sessionId
-  `).run({ ...input, sessionId });
 }
 
 export function getSession(
@@ -750,26 +729,6 @@ export function insertSessionEvent(
     extraJson: input.extraJson ?? null,
   });
   return result.lastInsertRowid as number;
-}
-
-export function getSessionEvents(
-  db: Database.Database,
-  sessionId: string,
-  eventTypes?: SessionEventType[],
-): SessionEventRecord[] {
-  if (eventTypes && eventTypes.length > 0) {
-    const placeholders = eventTypes.map(() => '?').join(', ');
-    return db
-      .prepare(
-        `SELECT * FROM session_events
-         WHERE session_id = ? AND event_type IN (${placeholders})
-         ORDER BY timestamp`,
-      )
-      .all(sessionId, ...eventTypes) as SessionEventRecord[];
-  }
-  return db
-    .prepare('SELECT * FROM session_events WHERE session_id = ? ORDER BY timestamp')
-    .all(sessionId) as SessionEventRecord[];
 }
 
 export function getRecentFileChangeEvents(

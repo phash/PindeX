@@ -21,11 +21,6 @@ export function getPindexHome(): string {
   return newHome;
 }
 
-/** @deprecated Use getPindexHome() */
-export function getMcpIndexerHome(): string {
-  return getPindexHome();
-}
-
 /** Returns the projects directory within ~/.pindex. */
 export function getProjectsDir(): string {
   return join(getPindexHome(), 'projects');
@@ -60,17 +55,6 @@ export function hashProjectPath(projectPath: string): string {
 /** Returns the index DB path for a given project (stored locally in {projectPath}/.pindex/). */
 export function getProjectIndexPath(projectPath: string): string {
   return join(resolve(projectPath), '.pindex', 'index.db');
-}
-
-/** Returns the meta JSON path for a given project (stored locally in {projectPath}/.pindex/). */
-export function getProjectMetaPath(projectPath: string): string {
-  return join(resolve(projectPath), '.pindex', 'meta.json');
-}
-
-export interface ProjectMeta {
-  path: string;
-  lastIndexed: string | null;
-  hash: string;
 }
 
 /**

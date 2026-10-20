@@ -214,28 +214,4 @@ describe('daemon (TST-12)', () => {
       child.kill('SIGKILL');
     }
   });
-
-  it('showStatus prints the running PID when a live daemon exists (with projectPath)', async () => {
-    const { writePidFile, showStatus } = await import('../../src/cli/daemon.js');
-    const { hashProjectPath } = await import('../../src/cli/project-detector.js');
-
-    const projectPath = '/some/project/path';
-    writePidFile(process.pid, hashProjectPath(projectPath));
-
-    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-
-    await showStatus(projectPath);
-
-    expect(logSpy).toHaveBeenCalledWith(`Daemon running (PID ${process.pid})`);
-  });
-
-  it('showStatus prints "No daemon running" when no PID file exists (global, no projectPath)', async () => {
-    const { showStatus } = await import('../../src/cli/daemon.js');
-
-    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-
-    await showStatus(); // hash undefined → global path
-
-    expect(logSpy).toHaveBeenCalledWith('No daemon running');
-  });
 });

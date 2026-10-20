@@ -1,5 +1,4 @@
-import { mkdirSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { ensurePindexHome, writeFileSecure } from './project-detector.js';
 
@@ -28,37 +27,6 @@ export function writeGlobalConfig(): void {
   if (!existsSync(configPath)) {
     writeFileSecure(configPath, JSON.stringify(DEFAULT_CONFIG, null, 2));
   }
-}
-
-/** Writes or merges the MCP server registration into Claude Code's global config. */
-export function registerMcpServer(): void {
-  const claudeConfigPath = join(homedir(), '.claude', 'claude_code_config.json');
-
-  const mcpServerEntry = {
-    'pindex': {
-      command: 'pindex-server',
-      args: [],
-      env: {},
-    },
-  };
-
-  let config: Record<string, unknown> = {};
-
-  if (existsSync(claudeConfigPath)) {
-    try {
-      config = JSON.parse(readFileSync(claudeConfigPath, 'utf-8'));
-    } catch {
-      config = {};
-    }
-  }
-
-  const existing = (config.mcpServers as Record<string, unknown>) ?? {};
-  config.mcpServers = { ...existing, ...mcpServerEntry };
-
-  const dir = join(homedir(), '.claude');
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-
-  writeFileSync(claudeConfigPath, JSON.stringify(config, null, 2), 'utf-8');
 }
 
 /** Runs the complete one-time setup. */

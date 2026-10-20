@@ -26,7 +26,6 @@ import {
   insertTokenLog,
   getSessionStats,
   createSession,
-  updateSession,
   getSession,
   listSessions,
   deleteSymbolsByFileId,
@@ -323,7 +322,6 @@ describe('Token log queries', () => {
         toolName: 'search_symbols',
         tokensUsed: 50,
         tokensWithoutIndex: 500,
-        filesTouched: ['src/a.ts'],
         query: 'myFunc',
       });
       const stats = getSessionStats(db, 'sess-1');
@@ -360,15 +358,6 @@ describe('Session queries', () => {
     });
   });
 
-  describe('updateSession', () => {
-    it('updates total_tokens and total_savings', () => {
-      createSession(db, { id: 'sess-upd', mode: 'indexed', label: null });
-      updateSession(db, 'sess-upd', { totalTokens: 100, totalSavings: 900 });
-      const session = getSession(db, 'sess-upd');
-      expect(session!.total_tokens).toBe(100);
-      expect(session!.total_savings).toBe(900);
-    });
-  });
 
   describe('listSessions', () => {
     it('returns all sessions', () => {

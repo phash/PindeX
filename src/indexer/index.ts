@@ -1,5 +1,5 @@
 import { readFileSync, existsSync, statSync } from 'node:fs';
-import { join, relative, resolve, dirname } from 'node:path';
+import { join, resolve, dirname } from 'node:path';
 import { glob } from 'glob';
 import type Database from 'better-sqlite3';
 import type { IndexResult, ParsedFile, ParsedImport } from '../types.js';
@@ -13,7 +13,6 @@ import {
   deleteOutgoingDependencies,
   getAllFiles,
   deleteFile,
-  deleteUsagesByFile,
   getFileByPath,
   insertDocumentChunk,
   deleteDocumentChunksByFileId,
@@ -235,7 +234,7 @@ export class Indexer {
       }
     }
 
-    // Stash the cache for resolveDependencies (Task 7 will consume it).
+    // Stash the cache for resolveDependencies.
     this.lastImportsCache = importsCache;
 
     return result;

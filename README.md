@@ -42,7 +42,7 @@ Your project files
   Claude calls save_context(…)  ──────────────────► context_entries
                                                       │
                                                       ▼
-  SQLite (FTS5)  ← stored in ~/.pindex/projects/{hash}/index.db
+  SQLite (FTS5)  ← stored in {project}/.pindex/index.db
   ├── files            (path, hash, language, token estimate)
   ├── symbols          (name, kind, signature, lines)       ─► search_symbols
   ├── dependencies     (import graph)                       ─► get_dependencies
@@ -180,7 +180,7 @@ Output:
   ╚══════════════════════════════════════════╝
 
   Project   : /my/project
-  Index     : ~/.pindex/projects/a3f8b2c1/index.db
+  Index     : /path/to/project/.pindex/index.db
   Port      : 7856
   Config    : .mcp.json (written)
   CLAUDE.md : section added
@@ -226,7 +226,7 @@ Opens `http://localhost:7841` — an aggregated dashboard showing token savings,
 
 ### Multiple independent projects
 
-Each project gets its own `.mcp.json` (pointing to its own `PROJECT_ROOT`) and its own SQLite database at `~/.pindex/projects/{hash}/index.db`. When Claude Code opens Project A, it spawns `pindex-server` with `PROJECT_ROOT=/path/to/project-a` — it never touches Project B's index.
+Each project gets its own `.mcp.json` (pointing to its own `PROJECT_ROOT`) and its own SQLite database at `{project}/.pindex/index.db`. When Claude Code opens Project A, it spawns `pindex-server` with `PROJECT_ROOT=/path/to/project-a` — it never touches Project B's index.
 
 ```bash
 cd /project-a && pindex   # registers project-a
@@ -540,7 +540,7 @@ These are set automatically in the generated `.mcp.json` — you rarely need to 
 | Variable | Default | Description |
 |---|---|---|
 | `PROJECT_ROOT` | `.` | Root directory of the project to index |
-| `INDEX_PATH` | `~/.pindex/projects/{hash}/index.db` | Path to the SQLite database |
+| `INDEX_PATH` | `{project}/.pindex/index.db` | Path to the SQLite database |
 | `LANGUAGES` | `typescript,javascript` | Comma-separated list of languages to index. Supported values: `typescript`, `javascript`, `java`, `kotlin`, `python`, `php`, `vue`, `svelte`, `ruby`, `csharp`, `go`, `rust` |
 | `AUTO_REINDEX` | `true` | Watch for file changes and reindex automatically |
 | `MONITORING_PORT` | assigned per-project | Port for the live dashboard + WebSocket |
@@ -550,7 +550,6 @@ These are set automatically in the generated `.mcp.json` — you rarely need to 
 | `SUMMARIZER_API_KEY` | _(empty)_ | API key for the LLM summarization provider |
 | `SUMMARIZER_BASE_URL` | `https://api.openai.com/v1` | Base URL for the OpenAI-compatible chat completions API. Works with OpenAI, Ollama, LiteLLM, Anthropic proxy, etc. |
 | `SUMMARIZER_MODEL` | `gpt-4o-mini` | Model name for summarization requests |
-| `TOKEN_PRICE_PER_MILLION` | `3.00` | USD price per million tokens — used for cost estimates |
 | `PINDEX_PARSE_WORKERS` | _(empty)_ | Parse workers (0=sync, empty=auto) |
 | `PINDEX_BIND_HOST` | `127.0.0.1` | Bind host for monitoring/GUI (default loopback) |
 | `PINDEX_LSP` | `true` | opt-in LSP parsing for Python (set to `false` to force regex) |
@@ -583,13 +582,12 @@ The `pindex` entry in `.mcp.json` (auto-generated; other servers in the file are
       "args": ["/usr/lib/node_modules/pindex/dist/index.js"],
       "env": {
         "PROJECT_ROOT": "/absolute/path/to/project",
-        "INDEX_PATH": "/home/user/.pindex/projects/a3f8b2c1/index.db",
+        "INDEX_PATH": "/path/to/project/.pindex/index.db",
         "MONITORING_PORT": "7856",
         "AUTO_REINDEX": "true",
         "GENERATE_SUMMARIES": "false",
         "MONITORING_AUTO_OPEN": "false",
-        "BASELINE_MODE": "false",
-        "TOKEN_PRICE_PER_MILLION": "3.00"
+        "BASELINE_MODE": "false"
       }
     }
   }
@@ -644,14 +642,13 @@ extensions:
     args: []
     envs:
       PROJECT_ROOT: /absolute/path/to/project
-      INDEX_PATH: /home/user/.pindex/projects/{hash}/index.db
+      INDEX_PATH: /absolute/path/to/project/.pindex/index.db
       LANGUAGES: typescript,javascript
       AUTO_REINDEX: "true"
       GENERATE_SUMMARIES: "false"
       MONITORING_PORT: "{port}"
       MONITORING_AUTO_OPEN: "false"
       BASELINE_MODE: "false"
-      TOKEN_PRICE_PER_MILLION: "3.00"
     enabled: true
     timeout: 300
 ```

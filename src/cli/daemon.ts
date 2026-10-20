@@ -1,9 +1,7 @@
 import { existsSync, readFileSync, unlinkSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import {
-  getPindexHome,
   getProjectsDir,
-  hashProjectPath,
   ensurePindexHome,
   writeFileSecure,
 } from './project-detector.js';
@@ -87,16 +85,5 @@ export async function stopDaemon(projectHash?: string): Promise<void> {
   } catch (err) {
     console.error(`Failed to stop daemon: ${String(err)}`);
     removePidFile(projectHash);
-  }
-}
-
-/** Prints daemon status for the given project (or global). */
-export async function showStatus(projectPath?: string): Promise<void> {
-  const hash = projectPath ? hashProjectPath(projectPath) : undefined;
-  const pid = getDaemonPid(hash);
-  if (pid) {
-    console.log(`Daemon running (PID ${pid})`);
-  } else {
-    console.log('No daemon running');
   }
 }

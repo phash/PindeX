@@ -1,5 +1,5 @@
 import { writeFileSync, existsSync, mkdirSync, readFileSync, appendFileSync } from 'node:fs';
-import { resolve, join, relative, basename } from 'node:path';
+import { join } from 'node:path';
 import {
   findProjectRoot,
   getProjectIndexPath,

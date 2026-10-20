@@ -13,7 +13,6 @@ export interface LogInput {
   toolName: string;
   tokensUsed: number;
   tokensWithoutIndex: number;
-  filesTouched?: string[];
   query?: string;
 }
 
@@ -37,7 +36,6 @@ export class TokenLogger {
       toolName: input.toolName,
       tokensUsed: input.tokensUsed,
       tokensWithoutIndex: input.tokensWithoutIndex,
-      filesTouched: input.filesTouched,
       query: input.query,
     });
 

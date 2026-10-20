@@ -113,7 +113,7 @@ npm run build            # compile src/ → dist/
 - **Monitoring**: per-project Express + WebSocket server, per-project deterministic port
 - **GUI**: `pindex-gui` binary — aggregated Express dashboard reading all project DBs directly
 - **CLI**: `pindex` (init/add/remove/status), per-project daemon management
-- **Global state**: `~/.pindex/registry.json` + `~/.pindex/projects/{hash}/index.db`
+- **Global state**: `~/.pindex/registry.json` + `{project}/.pindex/index.db`
 
 ## MCP Tools
 
@@ -150,7 +150,7 @@ npm run build            # compile src/ → dist/
 node dist/index.js
 
 # Environment variables
-INDEX_PATH=~/.pindex/projects/{hash}/index.db  # SQLite DB path (set by pindex init)
+INDEX_PATH={project}/.pindex/index.db  # SQLite DB path (set by pindex init)
 PROJECT_ROOT=.                                  # project to index
 LANGUAGES=typescript,javascript                 # comma-separated
 AUTO_REINDEX=true                               # watch for file changes
@@ -161,7 +161,6 @@ SUMMARIZER_MODEL=gpt-4o-mini                    # Modell für Summaries
 MONITORING_PORT=7843                            # per-project port (assigned by pindex init)
 MONITORING_AUTO_OPEN=false                      # open browser on start
 BASELINE_MODE=false                             # disable index (A/B testing)
-TOKEN_PRICE_PER_MILLION=3.00                    # for cost estimates
 PINDEX_PARSE_WORKERS=                           # parse workers (0=sync, empty=auto)
 PINDEX_BIND_HOST=127.0.0.1                      # bind host (loopback default)
 GUI_PORT=7841                                   # pindex gui / pindex-gui dashboard port (default 7841; `pindex gui --no-open` = background only)
@@ -202,7 +201,7 @@ extensions:
     cmd: pindex-server
     args: []
     envs:
-      INDEX_PATH: /home/user/.pindex/projects/{hash}/index.db
+      INDEX_PATH: /absolute/path/to/project/.pindex/index.db
       PROJECT_ROOT: /absolute/path/to/project
       LANGUAGES: typescript,javascript
       AUTO_REINDEX: "true"
@@ -210,7 +209,6 @@ extensions:
       MONITORING_PORT: "7843"
       MONITORING_AUTO_OPEN: "false"
       BASELINE_MODE: "false"
-      TOKEN_PRICE_PER_MILLION: "3.00"
     enabled: true
     timeout: 300
 ```

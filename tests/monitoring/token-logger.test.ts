@@ -99,8 +99,8 @@ describe('TokenLogger', () => {
     expect(events[0].savings_percent).toBe(0);
   });
 
-  // ─── filesTouched / query optional fields ──────────────────────────────────
-  it('forwards filesTouched and query through to the emitted event', () => {
+  // ─── query optional field ──────────────────────────────────
+  it('forwards query through to the emitted event', () => {
     const logger = new TokenLogger({ db, sessionId: 'sess-123', emitter });
     const events: Array<{ query?: string; tool: string }> = [];
     emitter.on('token_event', (e) => events.push(e));
@@ -109,7 +109,6 @@ describe('TokenLogger', () => {
       toolName: 'find_usages',
       tokensUsed: 10,
       tokensWithoutIndex: 100,
-      filesTouched: ['src/a.ts', 'src/b.ts'],
       query: 'myQuery',
     });
 

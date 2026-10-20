@@ -13,7 +13,7 @@ vi.mock('node:os', async (importOriginal) => {
   };
 });
 
-import { computeDefaultPort, GUI_DEFAULT_PORT, hashProjectPath, getProjectIndexPath, getProjectMetaPath, getPindexHome, GlobalRegistry } from '../../src/cli/project-detector.js';
+import { computeDefaultPort, GUI_DEFAULT_PORT, hashProjectPath, getProjectIndexPath, getPindexHome, GlobalRegistry } from '../../src/cli/project-detector.js';
 
 describe('hashProjectPath', () => {
   it('returns an 8-character hex string', () => {
@@ -51,13 +51,6 @@ describe('getProjectIndexPath', () => {
     const path = getProjectIndexPath('/home/user/myproject');
     expect(path).toContain('.pindex');
     expect(path).toContain('myproject');
-  });
-});
-
-describe('getProjectMetaPath', () => {
-  it('returns a path ending with meta.json', () => {
-    const path = getProjectMetaPath('/home/user/myproject');
-    expect(path.endsWith('meta.json')).toBe(true);
   });
 });
 
@@ -412,27 +405,6 @@ describe('findProjectRoot (sandboxed)', () => {
     const root = findProjectRoot(nested);
     expect(typeof root).toBe('string');
     expect(root.length).toBeGreaterThan(0);
-  });
-});
-
-describe('getMcpIndexerHome (deprecated alias, sandboxed)', () => {
-  let tempHome: string;
-
-  beforeEach(async () => {
-    tempHome = join(tmpdir(), `pindex-alias-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
-    mkdirSync(tempHome, { recursive: true });
-    const { homedir } = await import('node:os');
-    vi.mocked(homedir).mockReturnValue(tempHome);
-  });
-
-  afterEach(() => {
-    rmSync(tempHome, { recursive: true, force: true });
-    vi.restoreAllMocks();
-  });
-
-  it('returns the same path as getPindexHome', async () => {
-    const { getMcpIndexerHome, getPindexHome: gph } = await import('../../src/cli/project-detector.js');
-    expect(getMcpIndexerHome()).toBe(gph());
   });
 });
 

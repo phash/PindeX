@@ -43,7 +43,7 @@ function isPortListening(port: number): Promise<boolean> {
   });
 }
 
-export function loadProjectStats(entry: RegistryEntry): Omit<ProjectStats, 'serverRunning'> {
+function loadProjectStats(entry: RegistryEntry): Omit<ProjectStats, 'serverRunning'> {
   const dbPath = getProjectIndexPath(entry.path);
 
   if (!existsSync(dbPath)) {
