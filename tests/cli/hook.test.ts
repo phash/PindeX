@@ -57,6 +57,7 @@ describe('runPreToolUseHook', () => {
     const ctx: string = out.hookSpecificOutput.additionalContext;
     expect(ctx).toContain('src/a.ts');
     expect(ctx).toContain('alpha(function)@1-1');
+    expect(ctx).toContain('(2 lines)');
     expect(ctx).toContain('get_context');
     expect(out.hookSpecificOutput.permissionDecision).toBeUndefined();
   });
@@ -154,5 +155,12 @@ describe('runPreToolUseHook', () => {
     expect(second.additionalContext).toContain('src/a.ts');
     const other = JSON.parse(run(stdin({ session_id: 's2' }), env)).hookSpecificOutput;
     expect(other.permissionDecision).toBe('deny');
+  });
+
+  it('says nothing (and does not deny in strict mode) for an indexed file without symbols', () => {
+    index('src/a.ts', SRC, 'typescript', 0);
+    expect(run(stdin())).toBe('');
+    expect(run(stdin(), { PINDEX_HOOK_STRICT: '1' })).toBe('');
+    expect(existsSync(stateDir)).toBe(false);
   });
 });

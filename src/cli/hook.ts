@@ -25,16 +25,18 @@ interface HookInput {
   tool_input?: { file_path?: string; offset?: unknown; limit?: unknown };
 }
 
+/** Compact symbol outline; '' when the file has no indexed symbols (nothing to offer). */
 function buildOutline(db: Database.Database, fileId: number, rel: string, content: string): string {
   const rows = db
     .prepare('SELECT name, kind, start_line, end_line FROM symbols WHERE file_id = ? ORDER BY start_line, id')
     .all(fileId) as { name: string; kind: string; start_line: number; end_line: number }[];
+  if (rows.length === 0) return '';
   const lines = content.split('\n').length - (content.endsWith('\n') ? 1 : 0);
   const strip = (n: string) => n.replace(/[\u0000-\u001f\u007f]/g, ' ');
   const clean = (n: string) => strip(n).slice(0, MAX_NAME);
   const shown = rows.slice(0, MAX_SYMBOLS).map((s) => `${clean(s.name)}(${s.kind})@${s.start_line}-${s.end_line}`);
   if (rows.length > MAX_SYMBOLS) shown.push(`… +${rows.length - MAX_SYMBOLS} more`);
-  const text = `[PindeX] ${strip(rel)} (${lines} lines est.) symbols: ${shown.join(', ')}\n${HINT}`;
+  const text = `[PindeX] ${strip(rel)} (${lines} lines) symbols: ${shown.join(', ')}\n${HINT}`;
   return text.length > MAX_CONTEXT ? text.slice(0, MAX_CONTEXT - 1) + '…' : text;
 }
 
@@ -94,6 +96,7 @@ export function runPreToolUseHook(io: HookIO): string {
     if (hashContent(content) !== file.hash) return '';
 
     const outline = buildOutline(db, file.id, rel, content);
+    if (!outline) return '';
     if (io.env.PINDEX_HOOK_STRICT === '1') {
       const stateDir = io.stateDir ?? join(getPindexHome(), 'hook-state');
       if (firstFullRead(stateDir, input.session_id ?? '', rel)) {
