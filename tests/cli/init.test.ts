@@ -264,6 +264,24 @@ describe('injectClaudeMdSection', () => {
     expect(content).not.toContain('Old Section');
   });
 
+  it('force with an orphan legacy end marker does not stack sections', () => {
+    const p = join(tempDir, 'CLAUDE.md');
+    writeFileSync(p, '# P\n\nmine\n\n## PindeX stale\nold\n<!-- pindex -->\n', 'utf-8');
+    expect(injectClaudeMdSection(tempDir, { force: true })).toBe('updated');
+    let content = readFileSync(p, 'utf-8');
+    expect(content).toContain('mine');
+    expect(content).not.toContain('stale');
+    expect(content).not.toContain('<!-- pindex -->');
+    expect(content.match(/pindex:start/g)).toHaveLength(1);
+
+    writeFileSync(p, '# P\n\nmine\n<!-- pindex -->\nafter\n', 'utf-8');
+    injectClaudeMdSection(tempDir, { force: true });
+    content = readFileSync(p, 'utf-8');
+    expect(content).toContain('mine');
+    expect(content).toContain('after');
+    expect(content).not.toContain('<!-- pindex -->');
+  });
+
   it('template has no find_symbol and no null claim', () => {
     injectClaudeMdSection(tempDir);
     const content = readFileSync(join(tempDir, 'CLAUDE.md'), 'utf-8');
@@ -350,6 +368,27 @@ describe('injectClaudeSettings', () => {
 
     const result = injectClaudeSettings(tempDir);
     expect(result).toBe('skipped');
+  });
+
+  it('user hook merely mentioning pindex-hook survives inject + remove', () => {
+    const claudeDir = join(tempDir, '.claude');
+    mkdirSync(claudeDir, { recursive: true });
+    const mine = { hooks: [{ type: 'command', command: 'echo pindex-hook is mine' }] };
+    writeFileSync(join(claudeDir, 'settings.json'), JSON.stringify({ hooks: { SessionStart: [mine] } }), 'utf-8');
+    injectClaudeSettings(tempDir);
+    removeClaudeSettings(tempDir);
+    const config = JSON.parse(readFileSync(join(claudeDir, 'settings.json'), 'utf-8'));
+    expect(config.hooks.SessionStart).toEqual([mine]);
+  });
+
+  it('malformed settings.json is left untouched and reported', () => {
+    const claudeDir = join(tempDir, '.claude');
+    mkdirSync(claudeDir, { recursive: true });
+    const p = join(claudeDir, 'settings.json');
+    writeFileSync(p, '{ not json pindex-hook', 'utf-8');
+    expect(() => injectClaudeSettings(tempDir)).toThrow(/not valid JSON/);
+    expect(() => removeClaudeSettings(tempDir)).toThrow(/not valid JSON/);
+    expect(readFileSync(p, 'utf-8')).toBe('{ not json pindex-hook');
   });
 
   it('SessionStart hook is quiet (--no-open) with absolute node + script', () => {

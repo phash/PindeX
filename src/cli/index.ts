@@ -234,17 +234,23 @@ async function main(): Promise<void> {
           detached: true,
           stdio: 'ignore',
         });
+        let spawnError: Error | null = null;
         child.on('error', (err) => {
+          spawnError = err;
           console.error(`  [pindex] Could not start GUI dashboard: ${err.message}`);
         });
         child.unref();
 
         // Hook mode must return quickly: do not wait for the server.
         if (noOpen) break;
+        // 'error' for a missing executable fires on the next tick.
+        await new Promise((r) => setImmediate(r));
+        if (spawnError) { process.exitCode = 1; break; }
 
         // Wait for server to be ready (max 3s)
         for (let i = 0; i < 15; i++) {
           await new Promise((r) => setTimeout(r, 200));
+          if (spawnError) break;
           const up = await new Promise<boolean>((resolve) => {
             const s = net.createConnection(port, 'localhost');
             s.on('connect', () => { s.destroy(); resolve(true); });
@@ -252,6 +258,7 @@ async function main(): Promise<void> {
           });
           if (up) break;
         }
+        if (spawnError) { process.exitCode = 1; break; }
         console.log(`  [pindex] Started GUI dashboard on port ${port}`);
       }
 

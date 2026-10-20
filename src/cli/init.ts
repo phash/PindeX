@@ -85,7 +85,14 @@ function stripSection(content: string): string | null {
   for (const re of patterns) {
     if (re.test(content)) return content.replace(re, '');
   }
-  return null;
+  // Orphan legacy end marker without the exact heading: drop a preceding "## PindeX" heading
+  // block if there is one, else only the marker line itself.
+  const endIdx = content.indexOf(LEGACY_SECTION_END);
+  if (endIdx === -1) return null;
+  const headingIdx = content.lastIndexOf('\n## PindeX', endIdx);
+  const from = headingIdx !== -1 ? headingIdx : endIdx;
+  const to = endIdx + LEGACY_SECTION_END.length;
+  return content.slice(0, from) + content.slice(content[to] === '\n' ? to + 1 : to);
 }
 
 /**
@@ -137,6 +144,27 @@ const PINDEX_HOOKS = {
   },
 };
 
+function isPindexEntry(entry: unknown): boolean {
+  return typeof entry === 'object' && entry !== null &&
+    (entry as { _pindex?: unknown })._pindex === HOOK_MARKER;
+}
+
+/** Parses settings.json; throws a clear error (file untouched) if it is not a JSON object. */
+function readSettings(settingsPath: string): Record<string, unknown> {
+  const raw = readFileSync(settingsPath, 'utf-8');
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error('top-level value is not an object');
+    }
+    return parsed as Record<string, unknown>;
+  } catch (err) {
+    throw new Error(
+      `${settingsPath} is not valid JSON (${(err as Error).message}). Fix or remove it manually; PindeX will not overwrite it.`,
+    );
+  }
+}
+
 const OLD_SESSION_START_COMMAND = 'pindex gui';
 
 /** SessionStart entry: starts the dashboard in the background without opening a browser. */
@@ -171,10 +199,10 @@ export function injectClaudeSettings(
   if (!existsSync(claudeDir)) mkdirSync(claudeDir, { recursive: true });
 
   if (existsSync(settingsPath)) {
-    const raw = readFileSync(settingsPath, 'utf-8');
-    let existing: Record<string, unknown>;
-    try { existing = JSON.parse(raw); } catch { existing = {}; }
-    if (raw.includes(HOOK_MARKER) && !force && !hasStaleSessionStart(existing)) return 'skipped';
+    const existing = readSettings(settingsPath);
+    const eh = existing.hooks as Record<string, unknown[]> | undefined;
+    const alreadyInstalled = [...(eh?.PreToolUse ?? []), ...(eh?.SessionStart ?? [])].some(isPindexEntry);
+    if (alreadyInstalled && !force && !hasStaleSessionStart(existing)) return 'skipped';
 
     // Deep-merge hooks
     const existingHooks = existing.hooks as Record<string, unknown[]> | undefined;
@@ -185,12 +213,12 @@ export function injectClaudeSettings(
         PreToolUse: [
           // Remove old pindex hook entries, then re-add
           ...(existingHooks?.PreToolUse ?? [])
-            .filter((h) => !JSON.stringify(h).includes(HOOK_MARKER)),
+            .filter((h) => !isPindexEntry(h)),
           { ...PINDEX_HOOKS.hooks.PreToolUse[0], _pindex: HOOK_MARKER },
         ],
         SessionStart: [
           ...(existingHooks?.SessionStart ?? [])
-            .filter((h) => !JSON.stringify(h).includes(HOOK_MARKER)),
+            .filter((h) => !isPindexEntry(h)),
           { ...sessionStartEntry(), _pindex: HOOK_MARKER },
         ],
       },
@@ -312,16 +340,14 @@ export function removeClaudeMdSection(projectRoot: string): 'removed' | 'not_fou
 export function removeClaudeSettings(projectRoot: string): 'removed' | 'not_found' | 'skipped' {
   const settingsPath = join(projectRoot, '.claude', 'settings.json');
   if (!existsSync(settingsPath)) return 'skipped';
-  const raw = readFileSync(settingsPath, 'utf-8');
-  if (!raw.includes(HOOK_MARKER)) return 'not_found';
-  let existing: Record<string, unknown>;
-  try { existing = JSON.parse(raw); } catch { return 'not_found'; }
+  const existing = readSettings(settingsPath);
   const hooks = existing.hooks as Record<string, unknown[]> | undefined;
+  if (![...(hooks?.PreToolUse ?? []), ...(hooks?.SessionStart ?? [])].some(isPindexEntry)) return 'not_found';
   const filteredPre = (hooks?.PreToolUse ?? []).filter(
-    (h) => !JSON.stringify(h).includes(HOOK_MARKER),
+    (h) => !isPindexEntry(h),
   );
   const filteredSession = (hooks?.SessionStart ?? []).filter(
-    (h) => !JSON.stringify(h).includes(HOOK_MARKER),
+    (h) => !isPindexEntry(h),
   );
   const updated = {
     ...existing,
