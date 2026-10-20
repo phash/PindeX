@@ -430,31 +430,66 @@ describe('LspPythonClient — robustness', () => {
 });
 
 describe('resolvePyrightLangserver', () => {
-  const sep = '/';
+  const noPkg = () => { throw new Error('MODULE_NOT_FOUND'); };
+  const identity = (p: string) => p;
+
   it('prefers the pyright package resolved from this module over cwd', () => {
     const calls: string[] = [];
     const result = resolvePyrightLangserver('/proj', {
       resolvePackageJson: () => '/pkg/node_modules/pyright/package.json',
       exists: (p) => { calls.push(p); return p === '/pkg/node_modules/.bin/pyright-langserver'; },
+      realpath: identity,
       pathEnv: '',
     });
     expect(result).toBe('/pkg/node_modules/.bin/pyright-langserver');
     expect(calls.some((c) => c.startsWith('/proj'))).toBe(false);
   });
 
-  it('falls back to projectRoot node_modules when the package is not resolvable', () => {
+  it('never uses <projectRoot>/node_modules/.bin', () => {
     const result = resolvePyrightLangserver('/proj', {
-      resolvePackageJson: () => { throw new Error('MODULE_NOT_FOUND'); },
-      exists: (p) => p === ['/proj', 'node_modules', '.bin', 'pyright-langserver'].join(sep),
+      resolvePackageJson: noPkg,
+      exists: (p) => p === '/proj/node_modules/.bin/pyright-langserver',
+      realpath: identity,
       pathEnv: '',
     });
-    expect(result).toBe('/proj/node_modules/.bin/pyright-langserver');
+    expect(result).toBeNull();
   });
 
-  it('falls back to PATH last', () => {
+  it('ignores relative PATH entries', () => {
     const result = resolvePyrightLangserver('/proj', {
-      resolvePackageJson: () => { throw new Error('MODULE_NOT_FOUND'); },
+      resolvePackageJson: noPkg,
+      exists: () => true,
+      realpath: identity,
+      pathEnv: ['.', 'node_modules/.bin'].join(':'),
+    });
+    expect(result).toBeNull();
+  });
+
+  it('ignores absolute PATH entries inside projectRoot (incl. via symlink)', () => {
+    const result = resolvePyrightLangserver('/proj', {
+      resolvePackageJson: noPkg,
+      exists: () => true,
+      realpath: (p) => (p === '/link/pyright-langserver' ? '/proj/evil/pyright-langserver' : p),
+      pathEnv: ['/proj/node_modules/.bin', '/link'].join(':'),
+    });
+    expect(result).toBeNull();
+  });
+
+  it('does not treat a sibling directory sharing the root prefix as inside', () => {
+    const result = resolvePyrightLangserver('/proj', {
+      resolvePackageJson: noPkg,
+      exists: (p) => p === '/project-other/bin/pyright-langserver',
+      realpath: identity,
+      pathEnv: '/project-other/bin',
+    });
+    expect(result).toBe('/project-other/bin/pyright-langserver');
+  });
+
+  it('uses an absolute PATH entry outside projectRoot', () => {
+    const result = resolvePyrightLangserver('/proj', {
+      resolvePackageJson: noPkg,
       exists: (p) => p === '/usr/local/bin/pyright-langserver',
+      realpath: identity,
       pathEnv: ['/usr/bin', '/usr/local/bin'].join(':'),
     });
     expect(result).toBe('/usr/local/bin/pyright-langserver');
@@ -463,8 +498,9 @@ describe('resolvePyrightLangserver', () => {
   it('returns null when nothing is found', () => {
     expect(
       resolvePyrightLangserver('/proj', {
-        resolvePackageJson: () => { throw new Error('x'); },
+        resolvePackageJson: noPkg,
         exists: () => false,
+        realpath: identity,
         pathEnv: '/usr/bin',
       }),
     ).toBeNull();

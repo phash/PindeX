@@ -1,7 +1,7 @@
 import { spawn as nodeSpawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { resolve, join, dirname, delimiter } from 'node:path';
+import { resolve, join, dirname, delimiter, isAbsolute, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
   StreamMessageReader,
@@ -271,18 +271,23 @@ export interface PyrightResolveDeps {
   /** Resolves pyright's package.json relative to this module. Throws if absent. */
   resolvePackageJson: () => string;
   exists: (path: string) => boolean;
+  realpath: (path: string) => string;
   pathEnv: string;
 }
 
 const defaultResolveDeps = (): PyrightResolveDeps => ({
   resolvePackageJson: () => createRequire(import.meta.url).resolve('pyright/package.json'),
   exists: existsSync,
+  realpath: realpathSync,
   pathEnv: process.env.PATH ?? '',
 });
 
-/** Resolves the pyright-langserver binary. Order: the pyright package that is
- *  installed alongside PindeX (independent of cwd) -> <projectRoot>/node_modules
- *  -> PATH. Returns null if not found. */
+/** Resolves the pyright-langserver binary. Order: PindeX's own pyright
+ *  install (independent of cwd) -> absolute PATH entries outside the project.
+ *
+ *  SECURITY: binaries living inside the indexed project (node_modules/.bin,
+ *  relative PATH entries such as "." or symlinks into the repo) are never
+ *  used. Indexing an untrusted repository must not execute code from it. */
 export function resolvePyrightLangserver(
   projectRoot: string,
   deps: PyrightResolveDeps = defaultResolveDeps(),
@@ -295,13 +300,26 @@ export function resolvePyrightLangserver(
     if (deps.exists(candidate)) return candidate;
   } catch { /* package not installed */ }
 
-  const local = join(projectRoot, 'node_modules', '.bin', bin);
-  if (deps.exists(local)) return local;
+  let rootReal: string;
+  try {
+    rootReal = deps.realpath(projectRoot);
+  } catch {
+    rootReal = resolve(projectRoot);
+  }
+  const rootPrefix = rootReal.endsWith(sep) ? rootReal : rootReal + sep;
 
   for (const dir of deps.pathEnv.split(delimiter)) {
-    if (!dir) continue;
+    if (!dir || !isAbsolute(dir)) continue;
     const candidate = join(dir, bin);
-    if (deps.exists(candidate)) return candidate;
+    if (!deps.exists(candidate)) continue;
+    let real: string;
+    try {
+      real = deps.realpath(candidate);
+    } catch {
+      continue;
+    }
+    if (real === rootReal || real.startsWith(rootPrefix)) continue;
+    return candidate;
   }
   return null;
 }
