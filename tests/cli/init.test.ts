@@ -432,15 +432,17 @@ describe('injectClaudeSettings', () => {
     expect(existsSync(settingsPath)).toBe(true);
 
     const config = JSON.parse(readFileSync(settingsPath, 'utf-8'));
-    expect(config.hooks).toBeDefined();
-    expect(config.hooks.PreToolUse).toHaveLength(1);
-    expect(config.hooks.PreToolUse[0]._pindex).toBe('pindex-hook');
-    // SessionStart holds machine-specific absolute paths → local, not shared settings
-    expect(config.hooks.SessionStart).toBeUndefined();
+    // both hooks hold machine-specific absolute paths → local, not shared settings
+    expect(config.hooks).toBeUndefined();
     const local = JSON.parse(readFileSync(join(tempDir, '.claude', 'settings.local.json'), 'utf-8'));
     expect(local.hooks.SessionStart).toHaveLength(1);
     expect(local.hooks.SessionStart[0]._pindex).toBe('pindex-hook');
-    expect(local.hooks.PreToolUse).toBeUndefined();
+    const pre = local.hooks.PreToolUse;
+    expect(pre).toHaveLength(1);
+    expect(pre[0]._pindex).toBe('pindex-hook');
+    expect(pre[0].matcher).toBe('Read');
+    expect(pre[0].hooks[0].timeout).toBe(5);
+    expect(pre[0].hooks[0].command).toMatch(/^"\/.*" "\/.*" hook pre-tool-use$/);
   });
 
   it('merges hooks into existing settings.json', () => {
@@ -458,7 +460,7 @@ describe('injectClaudeSettings', () => {
     const config = JSON.parse(readFileSync(join(claudeDir, 'settings.json'), 'utf-8'));
     expect(config.theme).toBe('dark');
     expect(config.hooks.CustomHook).toBeDefined();
-    expect(config.hooks.PreToolUse).toBeDefined();
+    expect(config.hooks.PreToolUse).toBeUndefined();
     expect(config.hooks.SessionStart).toBeUndefined();
     const local = JSON.parse(readFileSync(join(claudeDir, 'settings.local.json'), 'utf-8'));
     expect(local.hooks.SessionStart).toHaveLength(1);
@@ -467,18 +469,12 @@ describe('injectClaudeSettings', () => {
   it('skips if marker is already present (idempotent)', () => {
     const claudeDir = join(tempDir, '.claude');
     mkdirSync(claudeDir, { recursive: true });
-    writeFileSync(
-      join(claudeDir, 'settings.json'),
-      JSON.stringify({
-        hooks: { PreToolUse: [{ _pindex: 'pindex-hook', matcher: 'Read|Glob|Grep' }] },
-      }),
-      'utf-8',
-    );
     const { command, args } = nodeScriptCommand('cli/index.js');
     writeFileSync(
       join(claudeDir, 'settings.local.json'),
       JSON.stringify({
         hooks: {
+          PreToolUse: [{ _pindex: 'pindex-hook', matcher: 'Read', hooks: [{ type: 'command', command: `"${command}" "${args[0]}" hook pre-tool-use`, timeout: 5 }] }],
           SessionStart: [{ _pindex: 'pindex-hook', hooks: [{ type: 'command', command: `"${command}" "${args[0]}" gui --no-open` }] }],
         },
       }),
@@ -487,6 +483,24 @@ describe('injectClaudeSettings', () => {
 
     const result = injectClaudeSettings(tempDir);
     expect(result).toBe('skipped');
+  });
+
+  it('auto-upgrades the broken CLAUDE_TOOL_INPUT_FILE_PATH hook without --force', () => {
+    const claudeDir = join(tempDir, '.claude');
+    mkdirSync(claudeDir, { recursive: true });
+    writeFileSync(
+      join(claudeDir, 'settings.json'),
+      JSON.stringify({
+        hooks: { PreToolUse: [{ _pindex: 'pindex-hook', matcher: 'Read|Glob|Grep', hooks: [{ type: 'command', command: 'node -e "process.env.CLAUDE_TOOL_INPUT_FILE_PATH"' }] }] },
+      }),
+      'utf-8',
+    );
+    expect(injectClaudeSettings(tempDir)).toBe('added');
+    const shared = JSON.parse(readFileSync(join(claudeDir, 'settings.json'), 'utf-8'));
+    expect(shared.hooks).toBeUndefined();
+    const local = JSON.parse(readFileSync(join(claudeDir, 'settings.local.json'), 'utf-8'));
+    expect(local.hooks.PreToolUse[0].hooks[0].command.endsWith('hook pre-tool-use')).toBe(true);
+    expect(injectClaudeSettings(tempDir)).toBe('skipped');
   });
 
   it('user hook merely mentioning pindex-hook survives inject + remove', () => {
@@ -567,8 +581,7 @@ describe('injectClaudeSettings', () => {
     );
     expect(injectClaudeSettings(tempDir)).toBe('added');
     const config = JSON.parse(readFileSync(join(claudeDir, 'settings.json'), 'utf-8'));
-    expect(config.hooks.SessionStart).toBeUndefined();
-    expect(config.hooks.PreToolUse).toHaveLength(1);
+    expect(config.hooks).toBeUndefined();
     const local = JSON.parse(readFileSync(join(claudeDir, 'settings.local.json'), 'utf-8'));
     expect(local.hooks.SessionStart[0].hooks[0].command).toBe(abs);
   });

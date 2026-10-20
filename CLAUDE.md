@@ -169,6 +169,7 @@ EXPOSE_CORE_TOOLS_ONLY=false                    # 'true' = register only core to
 PINDEX_LSP=                                     # opt-in Pyright LSP for Python: only 'true' enables it (default off = regex)
 # Trust: with PINDEX_LSP=true pyright reads the project's pyrightconfig.json and may run the configured
 # Python interpreter — enable only for trusted repos. Pyright is spawned with cwd=os.tmpdir().
+PINDEX_HOOK_STRICT=1                            # PreToolUse hook: deny the first whole-file Read per session (outline as reason) instead of advising
 FEDERATION_REPOS=/path/a:/path/b               # OS path delimiter (":" posix, ";" Windows) or a JSON array
 # Federation CLI: configure via 'pindex federate add/remove/list' (preferred over editing FEDERATION_REPOS by hand).
 # 9 read-only tools (search_symbols, find_usages, get_symbol, get_file_summary, get_context,

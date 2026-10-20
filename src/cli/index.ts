@@ -325,6 +325,21 @@ async function main(): Promise<void> {
       break;
     }
 
+    case 'hook': {
+      // Claude Code hook: must never fail or print errors. Lazy import keeps startup cheap.
+      let out = '';
+      try {
+        if (args[0] === 'pre-tool-use') {
+          const { runPreToolUseHook } = await import('./hook.js');
+          const chunks: Buffer[] = [];
+          for await (const c of process.stdin) chunks.push(c as Buffer);
+          out = runPreToolUseHook({ stdin: Buffer.concat(chunks).toString('utf-8'), env: process.env });
+        }
+      } catch { out = ''; }
+      process.stdout.write(out, () => process.exit(0));
+      return;
+    }
+
     case 'federate': {
       const sub = args[0];
       try {
@@ -392,6 +407,8 @@ async function main(): Promise<void> {
     stats           Show token stats overview
 
     migrate         Move all project indexes from ~/.pindex/projects/ to {project}/.pindex/
+    hook pre-tool-use  Claude Code PreToolUse hook (reads hook JSON on stdin; installed by init)
+
     uninstall       Stop all daemons (data kept in ~/.pindex)
 
   Examples:
