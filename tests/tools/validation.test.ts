@@ -451,3 +451,13 @@ describe('GetCallPathSchema', () => {
     expect(GetCallPathSchema.safeParse({ from: 'a' }).success).toBe(false);
   });
 });
+
+describe('FindUsagesSchema limit', () => {
+  it('accepts an integer limit 1..500 and rejects out-of-range or fractional values', () => {
+    expect(FindUsagesSchema.safeParse({ symbol: 'a', limit: 1 }).success).toBe(true);
+    expect(FindUsagesSchema.safeParse({ symbol: 'a', limit: 500 }).success).toBe(true);
+    expect(FindUsagesSchema.safeParse({ symbol: 'a', limit: 0 }).success).toBe(false);
+    expect(FindUsagesSchema.safeParse({ symbol: 'a', limit: 501 }).success).toBe(false);
+    expect(FindUsagesSchema.safeParse({ symbol: 'a', limit: 2.5 }).success).toBe(false);
+  });
+});

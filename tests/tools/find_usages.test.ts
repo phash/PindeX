@@ -68,9 +68,28 @@ describe('findUsages', () => {
     ]);
   });
 
-  it('returns empty array for unknown symbol', () => {
+  it('returns not_found for an unknown symbol', () => {
     const result = findUsages(makeTestRepoSet(db), { symbol: 'unknownXYZ' });
-    expect(result).toHaveLength(0);
+    expect(result).toEqual({ error: 'not_found' });
+  });
+
+  it('returns not_found for a name that is only an interface (non-callable)', () => {
+    const f = insertTestFile(db, { path: 'src/types.ts' });
+    insertTestSymbol(db, { fileId: f, name: 'Shape', kind: 'interface' });
+    expect(findUsages(makeTestRepoSet(db), { symbol: 'Shape' })).toEqual({ error: 'not_found' });
+  });
+
+  it('class + interface of the same name is not ambiguous; new Foo() resolves', () => {
+    const a = insertTestFile(db, { path: 'src/foo.ts' });
+    const b = insertTestFile(db, { path: 'src/foo-types.ts' });
+    const c = insertTestFile(db, { path: 'src/use.ts' });
+    insertTestSymbol(db, { fileId: a, name: 'Foo', kind: 'class', isExported: true });
+    insertTestSymbol(db, { fileId: b, name: 'Foo', kind: 'interface', isExported: true });
+    insertTestDependency(db, c, a, 'Foo');
+    insertTestRef(db, c, 'Foo', 3, { kind: 'new' });
+    expect(findUsages(makeTestRepoSet(db), { symbol: 'Foo' })).toEqual([
+      { file: 'src/use.ts', line: 3, caller: null, confidence: 'EXTRACTED' },
+    ]);
   });
 
   it('returns empty array for symbol with no usages', () => {
@@ -169,11 +188,11 @@ describe('findUsages — disambiguation', () => {
 
   it('absolute file outside the repo root is rejected', () => {
     const fed = makeFederatedTestRepoSet({ db: createTestDb(), name: 'other' }, [{ db, name: 'main', path: '/proj' }]);
-    expect(findUsages(fed, { symbol: 'format', file: '/elsewhere/src/a.ts', repos: ['main'] })).toEqual([]);
+    expect(findUsages(fed, { symbol: 'format', file: '/elsewhere/src/a.ts', repos: ['main'] })).toEqual({ error: 'not_found' });
   });
 
-  it('file that defines no such symbol yields no usages', () => {
-    expect(findUsages(makeTestRepoSet(db), { symbol: 'format', file: 'src/c.ts' })).toEqual([]);
+  it('file that defines no such symbol yields not_found', () => {
+    expect(findUsages(makeTestRepoSet(db), { symbol: 'format', file: 'src/c.ts' })).toEqual({ error: 'not_found' });
   });
 });
 
@@ -193,11 +212,14 @@ describe('findUsages — high-volume names', () => {
     expect(result.map((u) => u.line)).toEqual([10, 20, 30]);
   });
 
-  it('caps output at 500 usages', () => {
+  it('caps output at 100 usages by default; limit raises it up to 500', () => {
     const db = createTestDb();
     const f = insertTestFile(db, { path: 'src/a.ts' });
     insertTestSymbol(db, { fileId: f, name: 'run' });
     for (let i = 0; i < 520; i++) insertTestRef(db, f, 'run', i + 1);
-    expect(usageList(findUsages(makeTestRepoSet(db), { symbol: 'run' }))).toHaveLength(500);
+    const rs = makeTestRepoSet(db);
+    expect(usageList(findUsages(rs, { symbol: 'run' }))).toHaveLength(100);
+    expect(usageList(findUsages(rs, { symbol: 'run', limit: 7 }))).toHaveLength(7);
+    expect(usageList(findUsages(rs, { symbol: 'run', limit: 500 }))).toHaveLength(500);
   });
 });

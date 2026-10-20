@@ -1,11 +1,12 @@
-import type { FindUsagesAmbiguous, FindUsagesInput, UsageResult } from '../types.js';
+import type { FindUsagesAmbiguous, FindUsagesInput, FindUsagesNotFound, UsageResult } from '../types.js';
 import type { RepoSet, Repo } from '../federation/repo-set.js';
 import { getRefsByCallee } from '../db/queries.js';
 import { findSymbolCandidates, resolveRefs, type SymbolNode } from '../graph/call-graph.js';
 import { relative, isAbsolute } from 'node:path';
 import { resolveWithinRoot } from '../util/paths.js';
 
-/** Max usages returned (applied after resolution, so heavy decoy names can't hide real call sites). */
+/** Default / max usages returned (applied after resolution, so heavy decoy names can't hide real call sites). */
+export const DEFAULT_USAGES = 100;
 export const MAX_USAGES = 500;
 
 /** Maps the user's `file` to the index's repo-relative form; null = escapes the root. */
@@ -18,11 +19,12 @@ export function fileKeyFor(repo: Repo, file: string | undefined): string | undef
 
 /** Call sites of a symbol, resolved through the call graph. Several definitions
  *  of the name without a `file` hint yield `{ error: 'ambiguous', candidates }`
- *  (as data, not an exception) so the caller can retry with `file`. */
+ *  (as data, not an exception) so the caller can retry with `file`; no callable
+ *  definition at all yields `{ error: 'not_found' }`. */
 export function findUsages(
   repoSet: RepoSet,
   input: FindUsagesInput,
-): UsageResult[] | FindUsagesAmbiguous {
+): UsageResult[] | FindUsagesAmbiguous | FindUsagesNotFound {
   const repos = repoSet.filter(input.repos);
   const multiRepo = repoSet.filter().length > 1;
 
@@ -33,6 +35,8 @@ export function findUsages(
     const candidates = findSymbolCandidates(repo.db, input.symbol, file);
     if (candidates.length > 0) targets.push({ repo, candidates });
   }
+
+  if (targets.length === 0) return { error: 'not_found' };
 
   // With `file`, every same-named definition in that file is a target
   // (e.g. methods of two classes); without it, a repeated name is ambiguous.
@@ -67,5 +71,5 @@ export function findUsages(
       usages.push(usage);
     }
   }
-  return usages.slice(0, MAX_USAGES);
+  return usages.slice(0, Math.min(input.limit ?? DEFAULT_USAGES, MAX_USAGES));
 }

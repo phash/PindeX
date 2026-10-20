@@ -108,12 +108,13 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'find_usages',
-    description: 'Call sites of a symbol (EXTRACTED = via import/same file, INFERRED = unique name). Pass file to disambiguate. Max 500 results.',
+    description: 'Call sites of a symbol as {file,line,caller,confidence} (EXTRACTED = via import/same file, INFERRED = unique name). Ambiguous name → {error:"ambiguous",candidates}: retry with file. Unknown → {error:"not_found"}. Default 100 results (limit up to 500).',
     inputSchema: {
       type: 'object',
       properties: {
         symbol: { type: 'string', description: 'Symbol name' },
         file: { type: 'string', description: 'File defining the symbol (when the name is ambiguous)' },
+        limit: { type: 'number', description: 'Max results (default 100, max 500)' },
       },
       required: ['symbol'],
     },

@@ -47,6 +47,7 @@ export const GetFileSummarySchema = z.object({
 export const FindUsagesSchema = z.object({
   symbol: z.string().min(1),
   file: z.string().min(1).optional(),
+  limit: z.number().int().min(1).max(500).optional(),
   repos: reposField,
 });
 

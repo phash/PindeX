@@ -265,6 +265,8 @@ export interface FindUsagesInput {
   symbol: string;
   /** Defining file, to pick one of several same-named symbols. */
   file?: string;
+  /** Max usages returned (default 100, max 500). */
+  limit?: number;
   repos?: string[];
 }
 
@@ -282,6 +284,11 @@ export interface UsageResult {
 export interface FindUsagesAmbiguous {
   error: 'ambiguous';
   candidates: Array<{ file: string; line: number; kind: string; project?: string }>;
+}
+
+/** Returned by find_usages when no callable definition of the name exists (in `file`, if given). */
+export interface FindUsagesNotFound {
+  error: 'not_found';
 }
 
 export interface GetCallPathInput {
