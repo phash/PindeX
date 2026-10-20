@@ -1,6 +1,6 @@
 # PindeX – Datenmodell
 
-Stand: 2026-03-03 (Schema-Version 5)
+Stand: 2026-10-21 (Schema-Version 6)
 
 ---
 
@@ -55,7 +55,7 @@ Zentrale Tabelle — jede indexierte Datei (Code + Dokumente) wird hier registri
 | `language` | TEXT NOT NULL | Erkannte Sprache (`typescript`, `javascript`, `markdown`, etc.) |
 | `summary` | TEXT | LLM-generierte Zusammenfassung (null wenn deaktiviert) |
 | `last_indexed` | DATETIME | Zeitstempel der letzten Indexierung |
-| `hash` | TEXT | MD5-Hash des Datei-Inhalts (für inkrementelles Reindexing) |
+| `hash` | TEXT | MD5-Hash des Datei-Inhalts (für inkrementelles Reindexing); NULL erzwingt ein Neu-Parsen beim nächsten `indexAll` |
 | `raw_token_estimate` | INTEGER | Geschätzte Token-Anzahl des Roh-Inhalts |
 
 **Inkrementelles Reindexing:** Beim Indexieren wird der MD5-Hash verglichen. Nur bei Änderung werden Symbole/Chunks neu geschrieben.
@@ -348,7 +348,7 @@ PindeX verwendet **`PRAGMA user_version`** für Schema-Versionierung. Migratione
 | 3 | Session Memory: `ast_snapshots`, `session_observations`, `session_events` |
 | 4 | AST-Flags: `is_async` und `has_try_catch` Spalten auf `symbols` |
 | 5 | Performance: UNIQUE-Constraints auf `dependencies` und `usages`, zusätzliche Indexe |
-| 6 | Call-Graph: `symbol_refs` ersetzt `usages` (DROP); `files.hash` wird auf NULL gesetzt, damit das nächste `indexAll` alle Dateien neu parst und `symbol_refs` füllt |
+| 6 | Call-Graph: `symbol_refs` ersetzt `usages` (DROP); `files.hash` wird für Code-Dateien mit Tree-sitter-Parser (`typescript`, `tsx`, `javascript`, `jsx`, `vue`, `svelte`) auf NULL gesetzt, damit das nächste `indexAll` sie neu parst und `symbol_refs` füllt. Vorhandene LLM-Summaries werden dabei übernommen (Datei-Summary, Symbol-Summaries per gleichem Namen) |
 
 **Migrationsstrategie:**
 - Migrationen sind additiv (kein Datenverlust)

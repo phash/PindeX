@@ -364,8 +364,9 @@ Call sites of a symbol, resolved through the call graph.
 |---|---|---|---|
 | `symbol` | string | ✓ | Symbol name to look up |
 | `file` | string | | File defining the symbol, to disambiguate same-named definitions |
+| `limit` | number | | Max results (default 100, max 500) |
 
-**Returns:** List of `{ file, line, caller, confidence }` entries (`project` added when federated; max 500 results, extra ones are cut without a marker). `confidence` is `EXTRACTED` (same file or via import) or `INFERRED` (unique name project-wide). Member calls on a receiver other than `this` (`date.format()`) are never `EXTRACTED`. `file` may be relative or absolute inside the repo root. A name defined more than once without `file` returns `{ error: "ambiguous", candidates: [{ file, line, kind }] }`.
+**Returns:** List of `{ file, line, caller, confidence }` entries (`project` added when federated; default 100 results, `limit` up to 500, extra ones are cut without a marker). `confidence` is `EXTRACTED` (same file or via import) or `INFERRED` (unique name project-wide). Member calls on a receiver other than `this` (`date.format()`) are never `EXTRACTED`, and only `INFERRED` when the calling file is the target's file or imports anything from it (so `arr.filter()` does not land on an unrelated `RepoSet.filter`). Only callable definitions (function, method, class, const) are considered. `file` may be relative or absolute inside the repo root. A name defined more than once without `file` returns `{ error: "ambiguous", candidates: [{ file, line, kind }] }`; an unknown name returns `{ error: "not_found" }`.
 
 ---
 
@@ -381,7 +382,7 @@ Shortest call chain from symbol A to symbol B, resolved through the call graph.
 | `to_file` | string | | File defining `to`, to disambiguate |
 | `max_depth` | number | | Max call hops (default 6, max 12) |
 
-**Returns:** `{ path: [{ from, to, file, line, confidence }], hops }`, or `{ path: null, hops: 0 }` when no chain exists within `max_depth`. Module-level calls are not traversed. An ambiguous or unknown endpoint returns `{ error: "ambiguous", side, candidates }` / `{ error: "not_found", side }`. Primary repo only (no `repos` param).
+**Returns:** `{ path: [{ from, to, file, line, confidence }], hops }`, `{ path: null, hops: 0 }` when no chain exists within `max_depth`, or `{ path: [], hops: 0 }` when `from` and `to` are the same symbol. Module-level calls are not traversed. An ambiguous or unknown endpoint returns `{ error: "ambiguous", side, candidates }` / `{ error: "not_found", side }`. Primary repo only (no `repos` param).
 
 ---
 
@@ -403,7 +404,7 @@ Import graph for a file — what it imports, what imports it, or both.
 Project-wide statistics. Optional `mode`: `brief` (counts only) or `full` (default, adds directory groups, hub symbols and file communities).
 When federation is active, also includes stats for each linked repository.
 
-**Returns:** Total file count, dominant language, entry points (`index`, `main`, `app` files), in full mode directory groups (top two path segments, max 50) with file and symbol counts, `hubs` (top 10 symbols by distinct caller files) and `communities` (up to 8 file clusters from imports + call edges, omitted when no call edges exist), an `index_recommendation` field (see [When Is PindeX Worth Using?](#when-is-pindex-worth-using)), and (if federated) per-repo breakdowns.
+**Returns:** Total file count, dominant language, entry points (`index`, `main`, `app` files), in full mode directory groups (top two path segments, max 50) with file and symbol counts, `hubs` (top 10 symbols by distinct caller files) and `communities` (up to 8 file clusters from imports + call edges, labelled by their common directory when it has at least two segments, otherwise by the top non-test file; omitted when no call edges exist; member calls with built-in method names such as `arr.filter()` on other objects are ignored for both), an `index_recommendation` field (see [When Is PindeX Worth Using?](#when-is-pindex-worth-using)), and (if federated) per-repo breakdowns.
 
 ---
 
