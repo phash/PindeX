@@ -24,13 +24,20 @@
 - Hook default = advisory (`additionalContext` with a compact symbol outline). `PINDEX_HOOK_STRICT=1` = deny the first unscoped `Read` per file per session, allow the retry. Hook fails open on every error.
 - Communities: deterministic label propagation on the file graph (import edges + resolved call edges, undirected, weighted by edge count). No Leiden/Louvain library.
 
+## State after the review-fix plan (2026-10-20-review-fixes.md, merged first)
+
+- Task 1 below is already done there. `getSymbolByName` is deterministic (`getSymbolsByName` + `normalizeRelPath` exist). Tool output is compact JSON; `find_usages` rows no longer have `context`; `project` is omitted for single-repo in `search_symbols`. `UserInputError` (`src/tools/errors.ts`) is passed through to clients.
+- Hooks: SessionStart lives in `.claude/settings.local.json`; helpers in `src/cli/init.ts`. `.mcp.json` writes go through `writeMcpJson` / `src/cli/mcp-json.ts`.
+- `Indexer` keeps an in-memory imports map and has `resolveImportersOf(path)`.
+- Unit tests run with HOME sandboxed (`tests/setup.ts`).
+
 ## Global Constraints
 
 - Node >= 18, ESM, all relative imports end in `.js`.
 - No new npm dependencies.
 - Schema change = new migration `version: 6` in `src/db/migrations.ts` plus matching `initSchema` DDL; runs in the existing per-migration transaction.
 - Every user-supplied path goes through `resolveWithinRoot` (`src/util/paths.ts`); `null` = reject.
-- New MCP tool needs all four: entry in `TOOL_DEFINITIONS` (`src/server.ts`), Zod schema in `TOOL_SCHEMAS` (`src/tools/schemas.ts`), dispatch `case` in `src/server.ts`, estimator `case` in `src/monitoring/estimator.ts`.
+- New MCP tool needs all four: entry in `TOOL_DEFINITIONS` (`src/server.ts`), Zod schema in `TOOL_SCHEMAS` (`src/tools/schemas.ts`), dispatch `case` in `src/server.ts` incl. its `heuristicMultiplier` (the old `src/monitoring/estimator.ts` was deleted by the review-fix plan).
 - Tool output stays compact: no pretty-printed JSON beyond what `server.ts` already does, list caps documented per tool.
 - Hook output format (Claude Code PreToolUse JSON, verify field names against https://code.claude.com/docs/en/hooks before Task 7): `{"hookSpecificOutput":{"hookEventName":"PreToolUse","additionalContext":"…"}}`, strict deny: `{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"…"}}`. Exit code 0 in all cases.
 - Hook wall time target < 300 ms on a 1k-file index; hard `timeout: 5` in the hook config.
@@ -205,7 +212,7 @@ Review 2026-10-20 found three defects that together leave `dependencies` nearly 
 
 **Files:**
 - Create: `src/tools/get_call_path.ts`
-- Modify: `src/graph/call-graph.ts` (add `shortestPath`), `src/server.ts`, `src/tools/schemas.ts`, `src/monitoring/estimator.ts`, `src/types.ts`, `CLAUDE.md`, `README.md`, `src/cli/init.ts` (`CLAUDE_MD_SECTION`: add "Wie hängen A und B zusammen? → `get_call_path`")
+- Modify: `src/graph/call-graph.ts` (add `shortestPath`), `src/server.ts`, `src/tools/schemas.ts`, `src/types.ts`, `CLAUDE.md`, `README.md`, `src/cli/init.ts` (`CLAUDE_MD_SECTION`: add "Wie hängen A und B zusammen? → `get_call_path`")
 - Test: `tests/graph/call-graph.test.ts`, `tests/tools/get_call_path.test.ts`, `tests/tools/validation.test.ts`
 
 **Interfaces:**
@@ -219,7 +226,7 @@ Review 2026-10-20 found three defects that together leave `dependencies` nearly 
     | { error: 'ambiguous'; side: 'from' | 'to'; candidates: Array<{ file: string; line: number; kind: string }> }
     | { error: 'not_found'; side: 'from' | 'to' };
   ```
-- Primary repo only; `repos` param not accepted (document in description). Heuristic multiplier in server/estimator: `15`. Add to `CORE_TOOL_NAMES`.
+- Primary repo only; `repos` param not accepted (document in description). Heuristic multiplier in `src/server.ts`: `15`. Add to `CORE_TOOL_NAMES`.
 - Path search: directed BFS over `from.id → to.id`; module-level edges (`from === null`) are not traversable starting points.
 
 - [ ] **Step 1: Write failing tests:**
@@ -284,7 +291,7 @@ Review 2026-10-20 found three defects that together leave `dependencies` nearly 
   5. Freshness: `hashContent(readFileSync(abs))` must equal `files.hash`; else `''` (stale index must not mislead).
   6. Outline = `"[PindeX] <rel> (<n> lines est.) symbols: name(kind)@start-end, …"` — max 40 symbols, then `"… +N more"`; followed by `"Use get_context(file, line) or Read with offset/limit for the part you need."`
   7. Default → advisory JSON with `additionalContext`. `PINDEX_HOOK_STRICT=1` → if `stateDir/<session_id>.json` does not list `rel`: add it, return deny JSON with the outline as `permissionDecisionReason`; else advisory.
-- New hook config in `init.ts`: `matcher: 'Read'`, `command: '"<process.execPath>" "<absolute path to dist/cli/index.js>" hook pre-tool-use'` (absolute paths, both quoted; bare `pindex` fails when the global bin is not on PATH, which is the user's current state), `timeout: 5`. Tests assert the command contains `hook pre-tool-use` and starts with a quoted absolute path. `injectClaudeSettings` replaces an existing pindex entry **without** `--force` when its command contains `CLAUDE_TOOL_INPUT_FILE_PATH` (auto-upgrade of the broken hook) and returns `'added'`.
+- New hook config in `init.ts`: `matcher: 'Read'`, command built like the existing SessionStart entry (`sessionStartEntry()` / `nodeScriptCommand('cli/index.js')`): `'"<process.execPath>" "<absolute path to dist/cli/index.js>" hook pre-tool-use'`, `timeout: 5`. Because it contains machine-specific absolute paths it goes into **`.claude/settings.local.json`** (same rule the review-fix plan applied to SessionStart); the old pindex-marked PreToolUse entry is removed from the shared `.claude/settings.json`. Use the existing parsed-marker helpers (`isPindexEntry`, `withPindexHook`, compute-both-then-write). Tests assert the command contains `hook pre-tool-use` and starts with a quoted absolute path. `injectClaudeSettings` replaces an existing pindex entry **without** `--force` when its command contains `CLAUDE_TOOL_INPUT_FILE_PATH` (auto-upgrade of the broken hook) and returns `'added'`.
 
 - [ ] **Step 1: Write failing tests** (`hook.test.ts`; temp project dir + `createTestDb`-style DB written to a temp `PINDEX_HOME`):
   - indexed fresh `src/a.ts`, full Read → output parses as JSON, `hookSpecificOutput.additionalContext` contains `src/a.ts` and a symbol name.
