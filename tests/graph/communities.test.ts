@@ -4,7 +4,7 @@ import type { CallEdge, SymbolNode } from '../../src/graph/call-graph.js';
 
 const node = (id: number, name: string, file: string): SymbolNode => ({ id, name, kind: 'function', file, line: 1 });
 const edge = (fromFile: string, to: SymbolNode, line = 1): CallEdge => ({
-  from: null, fromFile, to, line, confidence: 'EXTRACTED',
+  from: null, fromFile, to, line, confidence: 'EXTRACTED', foreignReceiver: false,
 });
 
 describe('rankHubs', () => {

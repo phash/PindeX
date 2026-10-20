@@ -222,6 +222,7 @@ describe('shortestPath', () => {
     to: node(to),
     line: 1,
     confidence: 'EXTRACTED',
+    foreignReceiver: false,
   });
 
   it('prefers the shortest route', () => {
