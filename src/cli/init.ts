@@ -240,14 +240,14 @@ function sessionStartEntry(): { hooks: { type: string; command: string }[] } {
 }
 
 /**
- * PreToolUse entry: on a whole-file Read, `pindex hook pre-tool-use` injects a symbol outline.
+ * PreToolUse entry: on a whole-file Read, `cli/hook-main.js` injects a symbol outline.
  * Absolute node/script paths → settings.local.json. Hard 5 s timeout (seconds); the hook fails open.
  */
 function preToolUseEntry(): { matcher: string; hooks: { type: string; command: string; timeout: number }[] } {
-  const { command, args } = nodeScriptCommand('cli/index.js');
+  const { command, args } = nodeScriptCommand('cli/hook-main.js');
   return {
     matcher: 'Read',
-    hooks: [{ type: 'command', command: `"${command}" "${args[0]}" hook pre-tool-use`, timeout: 5 }],
+    hooks: [{ type: 'command', command: `"${command}" "${args[0]}"`, timeout: 5 }],
   };
 }
 
@@ -294,10 +294,11 @@ export function injectClaudeSettings(
     'SessionStart',
     sessionStartEntry(),
   );
-  writeSettings(sharedPath, nextShared);
+  // The shared file is only touched when it exists (an old pindex entry may need removing).
+  if (shared !== null) writeSettings(sharedPath, nextShared);
   writeSettings(localPath, nextLocal);
 
-  return shared === null ? 'created' : 'added';
+  return shared === null && local === null ? 'created' : 'added';
 }
 
 // ─── .gitignore injection ──────────────────────────────────────────────────

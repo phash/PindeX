@@ -412,6 +412,8 @@ describe('injectClaudeMdSection', () => {
   });
 });
 
+const hookMainPath = () => nodeScriptCommand('cli/hook-main.js').args[0];
+
 describe('injectClaudeSettings', () => {
   let tempDir: string;
 
@@ -428,12 +430,8 @@ describe('injectClaudeSettings', () => {
     const result = injectClaudeSettings(tempDir);
     expect(result).toBe('created');
 
-    const settingsPath = join(tempDir, '.claude', 'settings.json');
-    expect(existsSync(settingsPath)).toBe(true);
-
-    const config = JSON.parse(readFileSync(settingsPath, 'utf-8'));
-    // both hooks hold machine-specific absolute paths → local, not shared settings
-    expect(config.hooks).toBeUndefined();
+    // both hooks hold machine-specific absolute paths → local only; no empty shared file
+    expect(existsSync(join(tempDir, '.claude', 'settings.json'))).toBe(false);
     const local = JSON.parse(readFileSync(join(tempDir, '.claude', 'settings.local.json'), 'utf-8'));
     expect(local.hooks.SessionStart).toHaveLength(1);
     expect(local.hooks.SessionStart[0]._pindex).toBe('pindex-hook');
@@ -442,7 +440,7 @@ describe('injectClaudeSettings', () => {
     expect(pre[0]._pindex).toBe('pindex-hook');
     expect(pre[0].matcher).toBe('Read');
     expect(pre[0].hooks[0].timeout).toBe(5);
-    expect(pre[0].hooks[0].command).toMatch(/^"\/.*" "\/.*" hook pre-tool-use$/);
+    expect(pre[0].hooks[0].command).toMatch(/^"\/.*" "\/.*\/cli\/hook-main\.js"$/);
   });
 
   it('merges hooks into existing settings.json', () => {
@@ -474,7 +472,7 @@ describe('injectClaudeSettings', () => {
       join(claudeDir, 'settings.local.json'),
       JSON.stringify({
         hooks: {
-          PreToolUse: [{ _pindex: 'pindex-hook', matcher: 'Read', hooks: [{ type: 'command', command: `"${command}" "${args[0]}" hook pre-tool-use`, timeout: 5 }] }],
+          PreToolUse: [{ _pindex: 'pindex-hook', matcher: 'Read', hooks: [{ type: 'command', command: `"${command}" "${hookMainPath()}"`, timeout: 5 }] }],
           SessionStart: [{ _pindex: 'pindex-hook', hooks: [{ type: 'command', command: `"${command}" "${args[0]}" gui --no-open` }] }],
         },
       }),
@@ -499,8 +497,23 @@ describe('injectClaudeSettings', () => {
     const shared = JSON.parse(readFileSync(join(claudeDir, 'settings.json'), 'utf-8'));
     expect(shared.hooks).toBeUndefined();
     const local = JSON.parse(readFileSync(join(claudeDir, 'settings.local.json'), 'utf-8'));
-    expect(local.hooks.PreToolUse[0].hooks[0].command.endsWith('hook pre-tool-use')).toBe(true);
+    expect(local.hooks.PreToolUse[0].hooks[0].command).toContain('hook-main.js');
     expect(injectClaudeSettings(tempDir)).toBe('skipped');
+  });
+
+  it('replaces a pindex PreToolUse entry that still points at index.js without --force', () => {
+    const claudeDir = join(tempDir, '.claude');
+    mkdirSync(claudeDir, { recursive: true });
+    injectClaudeSettings(tempDir);
+    const lp = join(claudeDir, 'settings.local.json');
+    const local = JSON.parse(readFileSync(lp, 'utf-8'));
+    const { command, args } = nodeScriptCommand('cli/index.js');
+    local.hooks.PreToolUse[0].hooks[0].command = `"${command}" "${args[0]}" hook pre-tool-use`;
+    writeFileSync(lp, JSON.stringify(local), 'utf-8');
+    expect(injectClaudeSettings(tempDir)).toBe('added');
+    const next = JSON.parse(readFileSync(lp, 'utf-8'));
+    expect(next.hooks.PreToolUse).toHaveLength(1);
+    expect(next.hooks.PreToolUse[0].hooks[0].command).toContain('hook-main.js');
   });
 
   it('user hook merely mentioning pindex-hook survives inject + remove', () => {
@@ -852,6 +865,8 @@ describe('removeClaudeSettings', () => {
     const sharedPath = join(tempDir, '.claude', 'settings.json');
     const localPath = join(tempDir, '.claude', 'settings.local.json');
     expect(existsSync(localPath)).toBe(true);
+    // an old pindex entry in the shared file is cleaned too
+    writeFileSync(sharedPath, JSON.stringify({ hooks: { PreToolUse: [{ _pindex: 'pindex-hook' }] } }), 'utf-8');
 
     expect(removeClaudeSettings(tempDir)).toBe('removed');
     expect(JSON.parse(readFileSync(sharedPath, 'utf-8')).hooks).toBeUndefined();
@@ -935,7 +950,6 @@ describe('initProject', () => {
 
     // side-effect files
     expect(existsSync(join(tempDir, 'CLAUDE.md'))).toBe(true);
-    expect(existsSync(join(tempDir, '.claude', 'settings.json'))).toBe(true);
     expect(existsSync(join(tempDir, '.claude', 'settings.local.json'))).toBe(true);
     expect(existsSync(join(tempDir, '.gitignore'))).toBe(true);
 

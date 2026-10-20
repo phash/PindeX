@@ -142,12 +142,16 @@ async function main(): Promise<void> {
 
         const languages = process.env.LANGUAGES?.split(',').map((l) => l.trim()).filter(Boolean);
         const indexer = new Indexer({ db, projectRoot: targetPath, languages });
-        const result = await indexer.indexAll({ force });
-        await indexer.resolveDependencies();
+        try {
+          const result = await indexer.indexAll({ force });
+          await indexer.resolveDependencies();
 
-        console.log(`Done: ${result.indexed} indexed, ${result.updated} updated, ${result.skipped} skipped`);
-        if (result.errors.length > 0) {
-          console.error(`Errors: ${result.errors.join(', ')}`);
+          console.log(`Done: ${result.indexed} indexed, ${result.updated} updated, ${result.skipped} skipped`);
+          if (result.errors.length > 0) {
+            console.error(`Errors: ${result.errors.join(', ')}`);
+          }
+        } finally {
+          await indexer.closePool();
         }
       } finally {
         db.close();
@@ -327,6 +331,7 @@ async function main(): Promise<void> {
 
     case 'hook': {
       // Claude Code hook: must never fail or print errors. Lazy import keeps startup cheap.
+      // Alias of the lean cli/hook-main.js entry that init installs.
       let out = '';
       try {
         if (args[0] === 'pre-tool-use') {
