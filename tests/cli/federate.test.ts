@@ -119,6 +119,18 @@ describe('pindex federate CLI', () => {
     );
   });
 
+  it('add keeps foreign servers in .mcp.json', async () => {
+    const serena = { command: 'uvx', args: ['serena'] };
+    writeFileSync(
+      join(projectDir, '.mcp.json'),
+      JSON.stringify({ mcpServers: { serena, pindex: { env: {} } } }),
+    );
+    await federateAdd(projectDir, targetDir, {});
+    const mcp = JSON.parse(readFileSync(join(projectDir, '.mcp.json'), 'utf-8'));
+    expect(mcp.mcpServers.serena).toEqual(serena);
+    expect(mcp.mcpServers.pindex.env.FEDERATION_REPOS).toContain(targetDir);
+  });
+
   it('add throws when the target has no .mcp.json', async () => {
     rmSync(join(targetDir, '.mcp.json'), { force: true });
     await expect(federateAdd(projectDir, targetDir, {})).rejects.toThrow(

@@ -168,7 +168,7 @@ pindex
 PindeX will:
 1. Walk upward from your current directory to find the project root (`package.json`, `.git`, etc.)
 2. Assign a dedicated monitoring port for this project
-3. Write `.mcp.json` into the project root with absolute paths
+3. Merge a `pindex` server entry into `.mcp.json` in the project root (other servers and keys in an existing file are preserved; an invalid-JSON file is left untouched and reported). `command` is the absolute path of the `node` that ran `pindex`, `args` the absolute path of `dist/index.js` — no PATH lookup needed
 4. Register the project in `~/.pindex/registry.json`
 5. Inject a PindeX workflow section into `CLAUDE.md` (created if missing)
 6. Add a `PreToolUse` hook to `.claude/settings.json` to remind Claude to prefer PindeX tools
@@ -193,7 +193,7 @@ Output:
 
 ### 2. Restart Claude Code
 
-Claude Code auto-discovers `.mcp.json`. On the next startup it will spawn `pindex-server` with the correct `PROJECT_ROOT` — the index is built automatically in the background.
+Claude Code auto-discovers `.mcp.json`. On the next startup it will spawn the server (absolute `node` + `dist/index.js`) with the correct `PROJECT_ROOT` — the index is built automatically in the background.
 
 ### 3. Use the tools
 
@@ -573,14 +573,14 @@ pindex
 # restart Claude Code → pindex-server starts automatically
 ```
 
-The `.mcp.json` format (auto-generated, do not edit by hand):
+The `pindex` entry in `.mcp.json` (auto-generated; other servers in the file are left alone). `command`/`args` are absolute paths to the Node binary and the installed `dist/index.js`; `pindex remove` deletes only the `pindex` entry. `.mcp.json` contains machine-specific paths, so keep it out of version control (`.gitignore`):
 
 ```json
 {
   "mcpServers": {
     "pindex": {
-      "command": "pindex-server",
-      "args": [],
+      "command": "/usr/bin/node",
+      "args": ["/usr/lib/node_modules/pindex/dist/index.js"],
       "env": {
         "PROJECT_ROOT": "/absolute/path/to/project",
         "INDEX_PATH": "/home/user/.pindex/projects/a3f8b2c1/index.db",
@@ -602,8 +602,8 @@ With federation (`pindex add /other/project`):
 {
   "mcpServers": {
     "pindex": {
-      "command": "pindex-server",
-      "args": [],
+      "command": "/usr/bin/node",
+      "args": ["/usr/lib/node_modules/pindex/dist/index.js"],
       "env": {
         "PROJECT_ROOT": "/absolute/path/to/project",
         "FEDERATION_REPOS": "/absolute/path/to/other/project",

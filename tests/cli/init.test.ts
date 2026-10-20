@@ -7,7 +7,8 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs';
-import { join } from 'node:path';
+import { join, isAbsolute } from 'node:path';
+import { serverCommand, nodeScriptCommand } from '../../src/cli/mcp-json.js';
 
 // Mock the project-detector module to avoid touching ~/.pindex
 vi.mock('../../src/cli/project-detector.js', () => {
@@ -123,7 +124,9 @@ describe('writeMcpJson', () => {
 
     const config = JSON.parse(readFileSync(mcpJsonPath, 'utf-8'));
     expect(config.mcpServers.pindex).toBeDefined();
-    expect(config.mcpServers.pindex.command).toBe('pindex-server');
+    expect(isAbsolute(config.mcpServers.pindex.command)).toBe(true);
+    expect(config.mcpServers.pindex.command).toBe(process.execPath);
+    expect(config.mcpServers.pindex.args[0].replace(/\\/g, '/')).toMatch(/dist\/index\.js$/);
     expect(config.mcpServers.pindex.env.PROJECT_ROOT).toBe(tempDir);
     expect(config.mcpServers.pindex.env.MONITORING_PORT).toBe('7843');
     expect(config.mcpServers.pindex.env.AUTO_REINDEX).toBe('true');
@@ -149,6 +152,59 @@ describe('writeMcpJson', () => {
     expect(config.mcpServers.pindex.env.FEDERATION_REPOS).toBe(
       '/path/to/repo-a:/path/to/repo-b',
     );
+  });
+});
+
+describe('writeMcpJson / removeMcpJson merge behavior', () => {
+  let tempDir: string;
+  const entry = () => ({
+    path: tempDir,
+    hash: 'abc12345',
+    name: 'test-project',
+    monitoringPort: 7843,
+    federatedRepos: [] as Array<{ path: string; name: string }>,
+    addedAt: new Date().toISOString(),
+  });
+
+  beforeEach(() => {
+    tempDir = join(tmpdir(), `pindex-merge-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    mkdirSync(tempDir, { recursive: true });
+  });
+
+  afterEach(() => {
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it('keeps foreign servers when writing, and removeMcpJson leaves them in place', () => {
+    const serena = { command: 'uvx', args: ['serena'] };
+    writeFileSync(join(tempDir, '.mcp.json'), JSON.stringify({ mcpServers: { serena } }), 'utf-8');
+
+    writeMcpJson(tempDir, entry());
+    let config = JSON.parse(readFileSync(join(tempDir, '.mcp.json'), 'utf-8'));
+    expect(config.mcpServers.serena).toEqual(serena);
+    expect(config.mcpServers.pindex).toBeDefined();
+
+    expect(removeMcpJson(tempDir)).toBe('removed');
+    expect(existsSync(join(tempDir, '.mcp.json'))).toBe(true);
+    config = JSON.parse(readFileSync(join(tempDir, '.mcp.json'), 'utf-8'));
+    expect(config.mcpServers).toEqual({ serena });
+  });
+
+  it('does not overwrite an invalid .mcp.json and throws a clear error', () => {
+    const path = join(tempDir, '.mcp.json');
+    writeFileSync(path, '{ not json', 'utf-8');
+    expect(() => writeMcpJson(tempDir, entry())).toThrow(/not valid JSON/);
+    expect(readFileSync(path, 'utf-8')).toBe('{ not json');
+    expect(() => removeMcpJson(tempDir)).toThrow(/not valid JSON/);
+    expect(readFileSync(path, 'utf-8')).toBe('{ not json');
+  });
+
+  it('serverCommand and nodeScriptCommand return absolute node + script paths', () => {
+    const cmd = serverCommand();
+    expect(cmd.command).toBe(process.execPath);
+    expect(isAbsolute(cmd.args[0])).toBe(true);
+    expect(cmd.args[0].replace(/\\/g, '/')).toMatch(/dist\/index\.js$/);
+    expect(nodeScriptCommand('hooks/x.js').args[0].replace(/\\/g, '/')).toMatch(/dist\/hooks\/x\.js$/);
   });
 });
 
@@ -496,7 +552,9 @@ describe('initProject', () => {
     const mcpPath = join(tempDir, '.mcp.json');
     expect(existsSync(mcpPath)).toBe(true);
     const config = JSON.parse(readFileSync(mcpPath, 'utf-8'));
-    expect(config.mcpServers.pindex.command).toBe('pindex-server');
+    expect(isAbsolute(config.mcpServers.pindex.command)).toBe(true);
+    expect(config.mcpServers.pindex.command).toBe(process.execPath);
+    expect(config.mcpServers.pindex.args[0].replace(/\\/g, '/')).toMatch(/dist\/index\.js$/);
     expect(config.mcpServers.pindex.env.PROJECT_ROOT).toBe(tempDir);
     // index path uses absolute path inside the project's .pindex/
     expect(config.mcpServers.pindex.env.INDEX_PATH).toContain('.pindex');

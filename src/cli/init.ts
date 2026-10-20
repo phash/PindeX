@@ -1,4 +1,4 @@
-import { writeFileSync, existsSync, mkdirSync, readFileSync, appendFileSync, unlinkSync } from 'node:fs';
+import { writeFileSync, existsSync, mkdirSync, readFileSync, appendFileSync } from 'node:fs';
 import { resolve, join, relative, basename } from 'node:path';
 import {
   findProjectRoot,
@@ -6,6 +6,7 @@ import {
   GlobalRegistry,
   type RegistryEntry,
 } from './project-detector.js';
+import { mergeMcpServer, serverCommand } from './mcp-json.js';
 
 // ─── .mcp.json generation ─────────────────────────────────────────────────
 
@@ -13,32 +14,24 @@ export function writeMcpJson(
   projectRoot: string,
   entry: RegistryEntry,
 ): void {
-  const federationEnv =
+  const federationEnv: Record<string, string> =
     entry.federatedRepos.length > 0
       ? { FEDERATION_REPOS: entry.federatedRepos.map((r) => r.path).join(':') }
       : {};
 
-  const config = {
-    mcpServers: {
-      pindex: {
-        command: 'pindex-server',
-        args: [] as string[],
-        env: {
-          PROJECT_ROOT: entry.path,
-          INDEX_PATH: getProjectIndexPath(entry.path),
-          MONITORING_PORT: String(entry.monitoringPort),
-          AUTO_REINDEX: 'true',
-          GENERATE_SUMMARIES: 'false',
-          MONITORING_AUTO_OPEN: 'false',
-          BASELINE_MODE: 'false',
-          ...federationEnv,
-        },
-      },
+  mergeMcpServer(projectRoot, 'pindex', {
+    ...serverCommand(),
+    env: {
+      PROJECT_ROOT: entry.path,
+      INDEX_PATH: getProjectIndexPath(entry.path),
+      MONITORING_PORT: String(entry.monitoringPort),
+      AUTO_REINDEX: 'true',
+      GENERATE_SUMMARIES: 'false',
+      MONITORING_AUTO_OPEN: 'false',
+      BASELINE_MODE: 'false',
+      ...federationEnv,
     },
-  };
-
-  const mcpJsonPath = join(projectRoot, '.mcp.json');
-  writeFileSync(mcpJsonPath, JSON.stringify(config, null, 2) + '\n', 'utf-8');
+  });
 }
 
 // ─── CLAUDE.md injection ───────────────────────────────────────────────────
@@ -312,13 +305,13 @@ export function removeClaudeSettings(projectRoot: string): 'removed' | 'not_foun
 }
 
 /**
- * Removes .mcp.json from the project root (if present).
+ * Removes the pindex server from .mcp.json, keeping other servers.
+ * The file is deleted only if nothing else is left in it.
  * Returns 'removed' | 'skipped'.
  */
 export function removeMcpJson(projectRoot: string): 'removed' | 'skipped' {
-  const mcpJsonPath = join(projectRoot, '.mcp.json');
-  if (!existsSync(mcpJsonPath)) return 'skipped';
-  unlinkSync(mcpJsonPath);
+  if (!existsSync(join(projectRoot, '.mcp.json'))) return 'skipped';
+  mergeMcpServer(projectRoot, 'pindex', null);
   return 'removed';
 }
 
