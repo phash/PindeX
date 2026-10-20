@@ -35,13 +35,6 @@ export interface SymbolRecord {
   has_try_catch: 0 | 1;
 }
 
-export interface UsageRecord {
-  id: number;
-  symbol_id: number;
-  used_in_file: number;
-  used_at_line: number;
-}
-
 export interface SessionRecord {
   id: string;
   started_at: string;

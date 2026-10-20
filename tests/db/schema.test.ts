@@ -34,12 +34,11 @@ describe('initSchema', () => {
     expect(tables).toHaveLength(1);
   });
 
-  it('creates the usages table', () => {
+  it('creates the symbol_refs table and no usages table', () => {
     initSchema(db);
-    const tables = db
-      .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='usages'")
-      .all();
-    expect(tables).toHaveLength(1);
+    const names = (db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{ name: string }>).map((r) => r.name);
+    expect(names).toContain('symbol_refs');
+    expect(names).not.toContain('usages');
   });
 
   it('creates the token_log table', () => {

@@ -92,19 +92,32 @@ export function insertTestDependency(
   return result.lastInsertRowid as number;
 }
 
-// ─── Usage Fixtures ───────────────────────────────────────────────────────────
+// ─── Call-Reference Fixtures ──────────────────────────────────────────────────
 
-export function insertTestUsage(
+export function insertTestRef(
   db: Database.Database,
-  symbolId: number,
-  usedInFile: number,
-  usedAtLine: number,
+  fileId: number,
+  calleeName: string,
+  line: number,
+  options: {
+    callerSymbolId?: number | null;
+    receiver?: string | null;
+    kind?: 'call' | 'new';
+  } = {},
 ): number {
-  const stmt = db.prepare(`
-    INSERT INTO usages (symbol_id, used_in_file, used_at_line)
-    VALUES (?, ?, ?)
-  `);
-  const result = stmt.run(symbolId, usedInFile, usedAtLine);
+  const result = db
+    .prepare(
+      `INSERT INTO symbol_refs (file_id, caller_symbol_id, callee_name, receiver, kind, line)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      fileId,
+      options.callerSymbolId ?? null,
+      calleeName,
+      options.receiver ?? null,
+      options.kind ?? 'call',
+      line,
+    );
   return result.lastInsertRowid as number;
 }
 

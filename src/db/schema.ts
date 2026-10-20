@@ -35,11 +35,14 @@ export function initSchema(db: Database.Database): void {
       symbol_name TEXT
     );
 
-    CREATE TABLE IF NOT EXISTS usages (
-      id            INTEGER PRIMARY KEY,
-      symbol_id     INTEGER NOT NULL REFERENCES symbols(id) ON DELETE CASCADE,
-      used_in_file  INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
-      used_at_line  INTEGER
+    CREATE TABLE IF NOT EXISTS symbol_refs (
+      id               INTEGER PRIMARY KEY,
+      file_id          INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+      caller_symbol_id INTEGER REFERENCES symbols(id) ON DELETE SET NULL,
+      callee_name      TEXT NOT NULL,
+      receiver         TEXT,
+      kind             TEXT NOT NULL,
+      line             INTEGER NOT NULL
     );
 
     CREATE TABLE IF NOT EXISTS token_log (
@@ -69,9 +72,8 @@ export function initSchema(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_dependencies_from ON dependencies(from_file);
     CREATE INDEX IF NOT EXISTS idx_dependencies_to ON dependencies(to_file);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_dependencies_unique ON dependencies(from_file, to_file, symbol_name);
-    CREATE INDEX IF NOT EXISTS idx_usages_symbol ON usages(symbol_id);
-    CREATE INDEX IF NOT EXISTS idx_usages_used_in_file ON usages(used_in_file);
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_usages_unique ON usages(symbol_id, used_in_file, used_at_line);
+    CREATE INDEX IF NOT EXISTS idx_symbol_refs_callee ON symbol_refs(callee_name);
+    CREATE INDEX IF NOT EXISTS idx_symbol_refs_file ON symbol_refs(file_id);
     CREATE INDEX IF NOT EXISTS idx_token_log_session ON token_log(session_id);
   `);
 

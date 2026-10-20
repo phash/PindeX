@@ -11,6 +11,7 @@ import {
   upsertDependency,
   deleteSymbolsByFileId,
   deleteOutgoingDependencies,
+  replaceSymbolRefs,
   getAllFiles,
   deleteFile,
   getFileByPath,
@@ -347,8 +348,9 @@ export class Indexer {
         const fileRecord = getFileByPath(this.db, relativePath)!;
         const diff = computeAstDiff(this.db, relativePath, parsed.symbols);
         deleteSymbolsByFileId(this.db, fileRecord.id);
+        const symbolIdByKey = new Map<string, number>();
         for (const sym of parsed.symbols) {
-          upsertSymbol(this.db, {
+          const symbolId = upsertSymbol(this.db, {
             fileId: fileRecord.id,
             name: sym.name,
             kind: sym.kind,
@@ -360,7 +362,9 @@ export class Indexer {
             isAsync: sym.isAsync,
             hasTryCatch: sym.hasTryCatch,
           });
+          symbolIdByKey.set(`${sym.name}:${sym.startLine}`, symbolId);
         }
+        replaceSymbolRefs(this.db, fileRecord.id, parsed.references, symbolIdByKey);
         deleteOutgoingDependencies(this.db, fileRecord.id);
         return diff;
       });

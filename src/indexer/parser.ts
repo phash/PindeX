@@ -592,6 +592,17 @@ export function extractReferences(rootNode: AstNode, symbols: ParsedSymbol[]): P
   return refs;
 }
 
+/** Reference extraction must never discard a file's symbols/imports: on failure
+ *  fall back to no references. */
+function safeExtractReferences(rootNode: AstNode, symbols: ParsedSymbol[], filePath: string): ParsedReference[] {
+  try {
+    return extractReferences(rootNode, symbols);
+  } catch (err) {
+    process.stderr.write(`[pindex] Reference extraction failed for ${filePath}: ${err}\n`);
+    return [];
+  }
+}
+
 // ─── Main Parse Function ──────────────────────────────────────────────────────
 
 /** Parses a source file using tree-sitter and extracts symbols + imports.
@@ -649,7 +660,7 @@ export function parseFile(filePath: string, content: string): ParsedFile {
       const tree = parser.parse(scriptContent);
       const symbols = extractSymbols(tree.rootNode as AstNode, scriptContent);
       const imports = extractImports(tree.rootNode as AstNode);
-      const references = extractReferences(tree.rootNode as AstNode, symbols);
+      const references = safeExtractReferences(tree.rootNode as AstNode, symbols, filePath);
       return { language, symbols, imports, references, rawTokenEstimate };
     }
 
@@ -673,7 +684,7 @@ export function parseFile(filePath: string, content: string): ParsedFile {
     const tree = parser.parse(content);
     const symbols = extractSymbols(tree.rootNode as AstNode, content);
     const imports = extractImports(tree.rootNode as AstNode);
-    const references = extractReferences(tree.rootNode as AstNode, symbols);
+    const references = safeExtractReferences(tree.rootNode as AstNode, symbols, filePath);
 
     return { language, symbols, imports, references, rawTokenEstimate };
   } catch (err) {

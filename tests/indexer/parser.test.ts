@@ -1,4 +1,5 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
+import { createRequire } from 'node:module';
 import type { AstNode } from '../../src/types.js';
 import {
   extractSymbols,
@@ -1288,5 +1289,42 @@ describe('hashContent', () => {
   it('is deterministic and differs for different content', () => {
     expect(hashContent('abc')).toBe(hashContent('abc'));
     expect(hashContent('abc')).not.toBe(hashContent('abd'));
+  });
+});
+
+describe('parseFile — reference extraction failure isolation', () => {
+  it('keeps symbols when extractReferences throws', () => {
+    // parseFile loads tree-sitter through createRequire, so spy on that same instance.
+    const RealParser = createRequire(import.meta.url)('tree-sitter') as {
+      prototype: { parse(s: string): { rootNode: AstNode } };
+    };
+    const realParse = RealParser.prototype.parse;
+    const spy = vi.spyOn(RealParser.prototype, 'parse').mockImplementation(function (this: unknown, src: string) {
+      const tree = realParse.call(this, src);
+      const root = tree.rootNode;
+      const wrapped = new Proxy(root, {
+        get(target, prop) {
+          if (prop === 'descendantsOfType') {
+            return (type: string | string[]) => {
+              if (Array.isArray(type) && type.includes('call_expression')) throw new Error('boom');
+              return target.descendantsOfType(type);
+            };
+          }
+          const v = Reflect.get(target, prop, target);
+          return typeof v === 'function' ? v.bind(target) : v;
+        },
+      });
+      return { rootNode: wrapped };
+    });
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      const result = parseFile('a.ts', 'export function survivor() { other(); }');
+      expect(result.symbols.map((s) => s.name)).toEqual(['survivor']);
+      expect(result.references).toEqual([]);
+      expect(stderr).toHaveBeenCalledWith(expect.stringContaining('Reference extraction failed'));
+    } finally {
+      spy.mockRestore();
+      stderr.mockRestore();
+    }
   });
 });
