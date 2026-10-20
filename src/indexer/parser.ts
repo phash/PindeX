@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
-import type { AstNode, ParsedFile, ParsedSymbol, ParsedImport, SymbolKind, ParsedDocument, DocumentChunk } from '../types.js';
+import type { AstNode, ParsedFile, ParsedSymbol, ParsedImport, ParsedReference, SymbolKind, ParsedDocument, DocumentChunk } from '../types.js';
 
 // CJS require wrapper — needed because tree-sitter ships as CommonJS but this
 // package uses ESM ("type": "module"). createRequire gives us a proper require
@@ -539,6 +539,59 @@ function extractSfcScript(content: string): string {
   return m?.[1] ?? '';
 }
 
+// ─── Call References ──────────────────────────────────────────────────────────
+
+const MAX_RECEIVER_LENGTH = 60;
+
+/** Extracts raw call/new references. Callees that are not a plain identifier or
+ *  member expression (e.g. foo()(), arr[0]()) are skipped. */
+export function extractReferences(rootNode: AstNode, symbols: ParsedSymbol[]): ParsedReference[] {
+  const refs: ParsedReference[] = [];
+  const seen = new Set<string>();
+
+  for (const node of rootNode.descendantsOfType(['call_expression', 'new_expression'])) {
+    const isNew = node.type === 'new_expression';
+    const target = node.childForFieldName(isNew ? 'constructor' : 'function');
+    if (!target) continue;
+
+    let callee: string;
+    let receiver: string | null = null;
+    if (target.type === 'identifier') {
+      callee = target.text;
+    } else if (target.type === 'member_expression') {
+      const prop = target.childForFieldName('property');
+      const obj = target.childForFieldName('object');
+      if (!prop || !obj) continue;
+      callee = prop.text;
+      receiver = obj.text.slice(0, MAX_RECEIVER_LENGTH);
+    } else {
+      continue;
+    }
+
+    const line = node.startPosition.row + 1;
+    let enclosing: ParsedSymbol | null = null;
+    for (const sym of symbols) {
+      if (sym.startLine <= line && line <= sym.endLine &&
+          (!enclosing || sym.endLine - sym.startLine <= enclosing.endLine - enclosing.startLine)) {
+        enclosing = sym;
+      }
+    }
+    const caller = enclosing?.name ?? null;
+    const key = `${callee}\0${receiver}\0${line}\0${caller}\0${isNew}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    refs.push({
+      callee,
+      receiver,
+      kind: isNew ? 'new' : 'call',
+      line,
+      caller,
+      callerLine: enclosing?.startLine ?? null,
+    });
+  }
+  return refs;
+}
+
 // ─── Main Parse Function ──────────────────────────────────────────────────────
 
 /** Parses a source file using tree-sitter and extracts symbols + imports.
@@ -550,35 +603,35 @@ export function parseFile(filePath: string, content: string): ParsedFile {
   // Route non-TS languages to regex-based parsers (no tree-sitter needed)
   if (language === 'java') {
     const { symbols, imports } = parseJava(content);
-    return { language, symbols, imports, rawTokenEstimate };
+    return { language, symbols, imports, references: [], rawTokenEstimate };
   }
   if (language === 'kotlin') {
     const { symbols, imports } = parseKotlin(content);
-    return { language, symbols, imports, rawTokenEstimate };
+    return { language, symbols, imports, references: [], rawTokenEstimate };
   }
   if (language === 'python') {
     const { symbols, imports } = parsePython(content);
-    return { language, symbols, imports, rawTokenEstimate };
+    return { language, symbols, imports, references: [], rawTokenEstimate };
   }
   if (language === 'php') {
     const { symbols, imports } = parsePhp(content);
-    return { language, symbols, imports, rawTokenEstimate };
+    return { language, symbols, imports, references: [], rawTokenEstimate };
   }
   if (language === 'ruby') {
     const { symbols, imports } = parseRuby(content);
-    return { language, symbols, imports, rawTokenEstimate };
+    return { language, symbols, imports, references: [], rawTokenEstimate };
   }
   if (language === 'csharp') {
     const { symbols, imports } = parseCsharp(content);
-    return { language, symbols, imports, rawTokenEstimate };
+    return { language, symbols, imports, references: [], rawTokenEstimate };
   }
   if (language === 'go') {
     const { symbols, imports } = parseGo(content);
-    return { language, symbols, imports, rawTokenEstimate };
+    return { language, symbols, imports, references: [], rawTokenEstimate };
   }
   if (language === 'rust') {
     const { symbols, imports } = parseRust(content);
-    return { language, symbols, imports, rawTokenEstimate };
+    return { language, symbols, imports, references: [], rawTokenEstimate };
   }
 
   try {
@@ -590,13 +643,14 @@ export function parseFile(filePath: string, content: string): ParsedFile {
 
     if (language === 'vue' || language === 'svelte') {
       const scriptContent = extractSfcScript(content);
-      if (!scriptContent.trim()) return { language, symbols: [], imports: [], rawTokenEstimate };
+      if (!scriptContent.trim()) return { language, symbols: [], imports: [], references: [], rawTokenEstimate };
       const tsLangs = _require('tree-sitter-typescript') as { typescript: unknown; tsx: unknown };
       parser.setLanguage(tsLangs.typescript);
       const tree = parser.parse(scriptContent);
       const symbols = extractSymbols(tree.rootNode as AstNode, scriptContent);
       const imports = extractImports(tree.rootNode as AstNode);
-      return { language, symbols, imports, rawTokenEstimate };
+      const references = extractReferences(tree.rootNode as AstNode, symbols);
+      return { language, symbols, imports, references, rawTokenEstimate };
     }
 
     let lang: unknown;
@@ -612,18 +666,19 @@ export function parseFile(filePath: string, content: string): ParsedFile {
       const tsLangs = _require('tree-sitter-typescript') as { typescript: unknown; tsx: unknown };
       lang = language === 'tsx' || language === 'jsx' ? tsLangs.tsx : tsLangs.typescript;
     } else {
-      return { language, symbols: [], imports: [], rawTokenEstimate };
+      return { language, symbols: [], imports: [], references: [], rawTokenEstimate };
     }
 
     parser.setLanguage(lang);
     const tree = parser.parse(content);
     const symbols = extractSymbols(tree.rootNode as AstNode, content);
     const imports = extractImports(tree.rootNode as AstNode);
+    const references = extractReferences(tree.rootNode as AstNode, symbols);
 
-    return { language, symbols, imports, rawTokenEstimate };
+    return { language, symbols, imports, references, rawTokenEstimate };
   } catch (err) {
     process.stderr.write(`[pindex] Parse error for ${filePath}: ${err}\n`);
-    return { language, symbols: [], imports: [], rawTokenEstimate };
+    return { language, symbols: [], imports: [], references: [], rawTokenEstimate };
   }
 }
 

@@ -146,10 +146,25 @@ export interface ParsedImport {
   symbols: string[];
 }
 
+export interface ParsedReference {
+  /** 'foo' for foo(), a.foo(), new foo(). */
+  callee: string;
+  /** 'this', 'a', 'a.b'; null for bare calls. Truncated to 60 chars. */
+  receiver: string | null;
+  kind: 'call' | 'new';
+  /** 1-based line of the call. */
+  line: number;
+  /** Name of the innermost enclosing ParsedSymbol; null at module level. */
+  caller: string | null;
+  /** startLine of the enclosing symbol; null at module level. */
+  callerLine: number | null;
+}
+
 export interface ParsedFile {
   language: string;
   symbols: ParsedSymbol[];
   imports: ParsedImport[];
+  references: ParsedReference[];
   rawTokenEstimate: number;
 }
 
