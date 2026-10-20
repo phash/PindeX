@@ -4,6 +4,8 @@ import type { ParsedSymbol, SymbolKind } from '../types.js';
 // LSP SymbolKind → PindeX SymbolKind.
 // Numeric values per LSP spec:
 //  5 Class / 9 Constructor / 6 Method / 12 Function / 13 Variable / 14 Constant
+const CLASS_KIND = 5;
+
 const KIND_MAP: Record<number, SymbolKind> = {
   5: 'class',
   6: 'method',
@@ -37,7 +39,8 @@ function walk(nodes: DocumentSymbol[], out: ParsedSymbol[]): void {
         hasTryCatch: false,
       });
     }
-    if (node.children && node.children.length > 0) {
+    // Only classes contribute nested members; function children are locals.
+    if (node.kind === CLASS_KIND && node.children && node.children.length > 0) {
       walk(node.children, out);
     }
   }
