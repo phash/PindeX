@@ -688,13 +688,23 @@ export function countPriorSessions(
   return row.cnt;
 }
 
+/**
+ * Parses a SQLite CURRENT_TIMESTAMP value ('YYYY-MM-DD HH:MM:SS', UTC, no zone
+ * marker) as a UTC Date. `new Date(ts)` would read it as local time.
+ */
+export function parseSqliteUtc(ts: string): Date {
+  return new Date(ts.replace(' ', 'T') + 'Z');
+}
+
+/** Deletes rows older than `days` days. Comparison happens in SQL (same format as CURRENT_TIMESTAMP). */
 export function deleteObservationsOlderThan(
   db: Database.Database,
-  cutoffIso: string,
+  days: number,
 ): void {
-  db.prepare('DELETE FROM session_observations WHERE created_at < ?').run(cutoffIso);
-  db.prepare('DELETE FROM session_events WHERE timestamp < ?').run(cutoffIso);
-  db.prepare('DELETE FROM token_log WHERE timestamp < ?').run(cutoffIso);
+  const modifier = `-${Math.trunc(days)} days`;
+  db.prepare("DELETE FROM session_observations WHERE created_at < datetime('now', ?)").run(modifier);
+  db.prepare("DELETE FROM session_events WHERE timestamp < datetime('now', ?)").run(modifier);
+  db.prepare("DELETE FROM token_log WHERE timestamp < datetime('now', ?)").run(modifier);
 }
 
 export function deleteObservationsExceptSession(
@@ -759,17 +769,16 @@ export function getRecentFileChangeEvents(
   sessionId: string,
   windowMinutes: number,
 ): SessionEventRecord[] {
-  const cutoff = new Date(Date.now() - windowMinutes * 60 * 1000).toISOString();
   return db
     .prepare(
       `SELECT * FROM session_events
        WHERE session_id = ?
          AND file_path = ?
          AND event_type IN ('symbol_added', 'symbol_removed', 'sig_changed')
-         AND timestamp >= ?
+         AND timestamp >= datetime('now', ?)
        ORDER BY timestamp`,
     )
-    .all(sessionId, toForwardSlash(filePath), cutoff) as SessionEventRecord[];
+    .all(sessionId, toForwardSlash(filePath), `-${windowMinutes} minutes`) as SessionEventRecord[];
 }
 
 /**

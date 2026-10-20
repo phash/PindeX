@@ -32,6 +32,9 @@ import {
   upsertDependency,
   upsertUsage,
   deleteOutgoingDependencies,
+  getRecentFileChangeEvents,
+  insertSessionEvent,
+  parseSqliteUtc,
 } from '../../src/db/queries.js';
 
 describe('File queries', () => {
@@ -419,5 +422,32 @@ describe('FTS robustness (SEC-05/TST-15)', () => {
     const results = searchSymbolsFts(db, 'parseExpression', 10);
     expect(results.length).toBeGreaterThan(0);
     expect(results[0].name).toBe('parseExpression');
+  });
+});
+
+describe('Session timestamp handling', () => {
+  let db: Database.Database;
+  beforeEach(() => {
+    db = createTestDb();
+    insertTestSession(db, 's1', 'indexed', 'S');
+  });
+
+  const change = () =>
+    insertSessionEvent(db, { sessionId: 's1', eventType: 'sig_changed', filePath: 'src/a.ts', symbolName: 'x' });
+
+  it('getRecentFileChangeEvents returns events with default CURRENT_TIMESTAMP', () => {
+    change(); change(); change();
+    expect(getRecentFileChangeEvents(db, 'src/a.ts', 's1', 5)).toHaveLength(3);
+  });
+
+  it('getRecentFileChangeEvents excludes events older than the window', () => {
+    change();
+    const id = change();
+    db.prepare("UPDATE session_events SET timestamp = datetime('now','-10 minutes') WHERE id = ?").run(id);
+    expect(getRecentFileChangeEvents(db, 'src/a.ts', 's1', 5)).toHaveLength(1);
+  });
+
+  it('parseSqliteUtc reads SQLite timestamps as UTC', () => {
+    expect(parseSqliteUtc('2026-01-01 10:00:00').toISOString()).toBe('2026-01-01T10:00:00.000Z');
   });
 });
