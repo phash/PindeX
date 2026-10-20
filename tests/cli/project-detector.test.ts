@@ -13,7 +13,7 @@ vi.mock('node:os', async (importOriginal) => {
   };
 });
 
-import { hashProjectPath, getProjectIndexPath, getProjectMetaPath, getPindexHome, GlobalRegistry } from '../../src/cli/project-detector.js';
+import { computeDefaultPort, GUI_DEFAULT_PORT, hashProjectPath, getProjectIndexPath, getProjectMetaPath, getPindexHome, GlobalRegistry } from '../../src/cli/project-detector.js';
 
 describe('hashProjectPath', () => {
   it('returns an 8-character hex string', () => {
@@ -531,5 +531,18 @@ describe('GlobalRegistry — atomic, locked writes (sandboxed)', () => {
     const list = new Reg().list();
     expect(list[0].name).toBeTruthy();
     expect(readFileSync(regPath, 'utf-8')).toBe(legacy);
+  });
+});
+
+describe('computeDefaultPort / GUI_DEFAULT_PORT', () => {
+  it('GUI port is 7841', () => {
+    expect(GUI_DEFAULT_PORT).toBe(7841);
+  });
+
+  it('never returns the GUI port over 10000 random hashes', () => {
+    for (let i = 0; i < 10000; i++) {
+      const hash = Math.floor(Math.random() * 0xffffffff).toString(16).padStart(8, '0');
+      expect(computeDefaultPort(hash)).not.toBe(GUI_DEFAULT_PORT);
+    }
   });
 });

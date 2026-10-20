@@ -6,7 +6,7 @@ import {
   GlobalRegistry,
   type RegistryEntry,
 } from './project-detector.js';
-import { mergeMcpServer, serverCommand } from './mcp-json.js';
+import { mergeMcpServer, serverCommand, nodeScriptCommand } from './mcp-json.js';
 import { formatFederationRepos } from '../federation/env.js';
 
 // ─── .mcp.json generation ─────────────────────────────────────────────────
@@ -37,16 +37,21 @@ export function writeMcpJson(
 
 // ─── CLAUDE.md injection ───────────────────────────────────────────────────
 
-const CLAUDE_MD_MARKER = '<!-- pindex -->';
+const SECTION_START = '<!-- pindex:start -->';
+const SECTION_END = '<!-- pindex:end -->';
+/** End marker of sections written by older versions (no start marker). */
+const LEGACY_SECTION_END = '<!-- pindex -->';
+const LEGACY_HEADING = '## PindeX – Codebase Navigation';
 
 const CLAUDE_MD_SECTION = `
+${SECTION_START}
 ## PindeX – Codebase Navigation
 
 Dieses Projekt ist mit PindeX indexiert.
 
 **PFLICHT-WORKFLOW** – bei jeder Codebase-Aufgabe:
 1. **Unbekannte Datei?** → \`mcp__pindex__get_file_summary\` ZUERST, dann ggf. \`get_context\`
-2. **Symbol suchen?** → \`mcp__pindex__search_symbols\` oder \`find_symbol\`
+2. **Symbol suchen?** → \`mcp__pindex__search_symbols\`
 3. **Abhängigkeiten?** → \`mcp__pindex__get_dependencies\`
 4. **Wo wird etwas verwendet?** → \`mcp__pindex__find_usages\`
 5. **Projekt-Überblick?** → \`mcp__pindex__get_project_overview\`
@@ -59,13 +64,33 @@ Dieses Projekt ist mit PindeX indexiert.
 - Wichtige Entscheidungen / Muster → \`mcp__pindex__save_context\` speichern
 - Zu Sessionbeginn → \`mcp__pindex__search_docs\` für gespeicherten Kontext
 
-**Fallback:** Falls ein Tool \`null\` zurückgibt → \`Read\`/\`Grep\` als Fallback.
-${CLAUDE_MD_MARKER}
+**Fallback:** Liefert ein PindeX-Tool kein Ergebnis oder einen Fehler → \`Read\`/\`Grep\` als Fallback.
+${SECTION_END}
 `;
+
+function hasSection(content: string): boolean {
+  return content.includes(SECTION_START) || content.includes(LEGACY_SECTION_END);
+}
+
+/**
+ * Removes the PindeX section: between the start/end markers, or (legacy, no start marker)
+ * from the exact legacy heading to the legacy end marker. Returns null if nothing matched.
+ */
+function stripSection(content: string): string | null {
+  const escape = (t: string) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const patterns = [
+    new RegExp(`\\n?${escape(SECTION_START)}[\\s\\S]*?${escape(SECTION_END)}\\n?`),
+    new RegExp(`\\n?${escape(LEGACY_HEADING)}[\\s\\S]*?${escape(LEGACY_SECTION_END)}\\n?`),
+  ];
+  for (const re of patterns) {
+    if (re.test(content)) return content.replace(re, '');
+  }
+  return null;
+}
 
 /**
  * Appends the PindeX section to the project's CLAUDE.md (or creates the file).
- * Idempotent: skips if the marker is already present, unless force=true.
+ * Idempotent: skips if a section marker is already present, unless force=true.
  * With force=true the existing section is replaced (useful after PindeX updates).
  */
 export function injectClaudeMdSection(
@@ -76,13 +101,10 @@ export function injectClaudeMdSection(
 
   if (existsSync(claudeMdPath)) {
     const existing = readFileSync(claudeMdPath, 'utf-8');
-    if (existing.includes(CLAUDE_MD_MARKER)) {
+    if (hasSection(existing)) {
       if (!force) return 'skipped';
       // Strip the old section and re-inject with current template
-      const stripped = existing.replace(
-        /\n## PindeX[\s\S]*?<!--\s*pindex\s*-->\n?/,
-        '',
-      );
+      const stripped = stripSection(existing) ?? existing;
       writeFileSync(claudeMdPath, stripped.trimEnd() + CLAUDE_MD_SECTION, 'utf-8');
       return 'updated';
     }
@@ -112,19 +134,28 @@ const PINDEX_HOOKS = {
         ],
       },
     ],
-    SessionStart: [
-      {
-        hooks: [
-          {
-            type: 'command',
-            // Auto-start pindex-gui dashboard if not already running
-            command: 'pindex gui',
-          },
-        ],
-      },
-    ],
   },
 };
+
+const OLD_SESSION_START_COMMAND = 'pindex gui';
+
+/** SessionStart entry: starts the dashboard in the background without opening a browser. */
+function sessionStartEntry(): { hooks: { type: string; command: string }[] } {
+  const { command, args } = nodeScriptCommand('cli/index.js');
+  return {
+    hooks: [{ type: 'command', command: `"${command}" "${args[0]}" gui --no-open` }],
+  };
+}
+
+/** True if an existing pindex SessionStart entry still uses the old bare `pindex gui` command. */
+function hasStaleSessionStart(settings: Record<string, unknown>): boolean {
+  const entries = (settings.hooks as Record<string, unknown[]> | undefined)?.SessionStart ?? [];
+  return entries.some((e) => {
+    const entry = e as { _pindex?: string; hooks?: { command?: string }[] };
+    return entry._pindex === HOOK_MARKER &&
+      (entry.hooks ?? []).some((h) => h.command === OLD_SESSION_START_COMMAND);
+  });
+}
 
 /**
  * Writes/merges PindeX hooks (PreToolUse + SessionStart) into .claude/settings.json.
@@ -141,10 +172,9 @@ export function injectClaudeSettings(
 
   if (existsSync(settingsPath)) {
     const raw = readFileSync(settingsPath, 'utf-8');
-    if (raw.includes(HOOK_MARKER) && !force) return 'skipped';
-
     let existing: Record<string, unknown>;
     try { existing = JSON.parse(raw); } catch { existing = {}; }
+    if (raw.includes(HOOK_MARKER) && !force && !hasStaleSessionStart(existing)) return 'skipped';
 
     // Deep-merge hooks
     const existingHooks = existing.hooks as Record<string, unknown[]> | undefined;
@@ -161,7 +191,7 @@ export function injectClaudeSettings(
         SessionStart: [
           ...(existingHooks?.SessionStart ?? [])
             .filter((h) => !JSON.stringify(h).includes(HOOK_MARKER)),
-          { ...PINDEX_HOOKS.hooks.SessionStart[0], _pindex: HOOK_MARKER },
+          { ...sessionStartEntry(), _pindex: HOOK_MARKER },
         ],
       },
     };
@@ -171,7 +201,7 @@ export function injectClaudeSettings(
     const config = {
       hooks: {
         PreToolUse: [{ ...PINDEX_HOOKS.hooks.PreToolUse[0], _pindex: HOOK_MARKER }],
-        SessionStart: [{ ...PINDEX_HOOKS.hooks.SessionStart[0], _pindex: HOOK_MARKER }],
+        SessionStart: [{ ...sessionStartEntry(), _pindex: HOOK_MARKER }],
       },
     };
     writeFileSync(settingsPath, JSON.stringify(config, null, 2) + '\n', 'utf-8');
@@ -268,8 +298,9 @@ export function removeClaudeMdSection(projectRoot: string): 'removed' | 'not_fou
   const claudeMdPath = join(projectRoot, 'CLAUDE.md');
   if (!existsSync(claudeMdPath)) return 'skipped';
   const content = readFileSync(claudeMdPath, 'utf-8');
-  if (!content.includes(CLAUDE_MD_MARKER)) return 'not_found';
-  const stripped = content.replace(/\n## PindeX[\s\S]*?<!--\s*pindex\s*-->\n?/, '');
+  if (!hasSection(content)) return 'not_found';
+  const stripped = stripSection(content);
+  if (stripped === null) return 'not_found';
   writeFileSync(claudeMdPath, stripped, 'utf-8');
   return 'removed';
 }

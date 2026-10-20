@@ -95,8 +95,11 @@ export function findProjectRoot(startDir: string): string {
   return resolve(startDir);
 }
 
-/** A deterministic monitoring port for a project, stored in registry to stay stable. */
-function computeDefaultPort(hash: string): number {
+/** Default port of the aggregated dashboard (`pindex gui`); outside the per-project range (>= 7842). */
+export const GUI_DEFAULT_PORT = 7841;
+
+/** A deterministic monitoring port for a project, stored in registry to stay stable. Never GUI_DEFAULT_PORT. */
+export function computeDefaultPort(hash: string): number {
   return 7842 + (parseInt(hash.slice(0, 4), 16) % 2000);
 }
 

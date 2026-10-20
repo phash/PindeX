@@ -164,6 +164,8 @@ BASELINE_MODE=false                             # disable index (A/B testing)
 TOKEN_PRICE_PER_MILLION=3.00                    # for cost estimates
 PINDEX_PARSE_WORKERS=                           # parse workers (0=sync, empty=auto)
 PINDEX_BIND_HOST=127.0.0.1                      # bind host (loopback default)
+GUI_PORT=7841                                   # pindex gui / pindex-gui dashboard port (default 7841; `pindex gui --no-open` = background only)
+EXPOSE_CORE_TOOLS_ONLY=false                    # 'true' = register only core tools (omits analytics/memory/doc tools)
 PINDEX_LSP=true                                 # opt-in LSP parsing for Python ('false' = force regex)
 FEDERATION_REPOS=/path/a:/path/b               # OS path delimiter (":" posix, ";" Windows) or a JSON array
 # Federation CLI: configure via 'pindex federate add/remove/list' (preferred over editing FEDERATION_REPOS by hand).

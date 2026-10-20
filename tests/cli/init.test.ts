@@ -223,7 +223,7 @@ describe('injectClaudeMdSection', () => {
     expect(result).toBe('created');
     const content = readFileSync(join(tempDir, 'CLAUDE.md'), 'utf-8');
     expect(content).toContain('# CLAUDE.md');
-    expect(content).toContain('<!-- pindex -->');
+    expect(content).toContain('<!-- pindex:start -->');
     expect(content).toContain('PindeX');
   });
 
@@ -235,7 +235,7 @@ describe('injectClaudeMdSection', () => {
     const content = readFileSync(join(tempDir, 'CLAUDE.md'), 'utf-8');
     expect(content).toContain('# My Project');
     expect(content).toContain('Existing content.');
-    expect(content).toContain('<!-- pindex -->');
+    expect(content).toContain('<!-- pindex:start -->');
   });
 
   it('skips if marker is already present (idempotent)', () => {
@@ -252,15 +252,40 @@ describe('injectClaudeMdSection', () => {
   it('replaces existing section when force=true', () => {
     writeFileSync(
       join(tempDir, 'CLAUDE.md'),
-      '# My Project\n\n## PindeX – Old Section\nold content\n<!-- pindex -->\n',
+      '# My Project\n\n## PindeX – Codebase Navigation\nOld Section content\n<!-- pindex -->\n',
       'utf-8',
     );
 
     const result = injectClaudeMdSection(tempDir, { force: true });
     expect(result).toBe('updated');
     const content = readFileSync(join(tempDir, 'CLAUDE.md'), 'utf-8');
-    expect(content).toContain('<!-- pindex -->');
+    expect(content).toContain('<!-- pindex:start -->');
+    expect(content).toContain('<!-- pindex:end -->');
     expect(content).not.toContain('Old Section');
+  });
+
+  it('template has no find_symbol and no null claim', () => {
+    injectClaudeMdSection(tempDir);
+    const content = readFileSync(join(tempDir, 'CLAUDE.md'), 'utf-8');
+    expect(content).not.toContain('find_symbol');
+    expect(content).not.toContain('null');
+  });
+
+  it('wraps the section in start/end markers', () => {
+    injectClaudeMdSection(tempDir);
+    const content = readFileSync(join(tempDir, 'CLAUDE.md'), 'utf-8');
+    expect(content.indexOf('<!-- pindex:start -->')).toBeGreaterThanOrEqual(0);
+    expect(content.indexOf('<!-- pindex:start -->')).toBeLessThan(content.indexOf('<!-- pindex:end -->'));
+  });
+
+  it('force keeps a user heading "## PindeX notes" above the section', () => {
+    injectClaudeMdSection(tempDir);
+    const p = join(tempDir, 'CLAUDE.md');
+    writeFileSync(p, readFileSync(p, 'utf-8').replace('# CLAUDE.md', '# CLAUDE.md\n\n## PindeX notes\nmine\n'), 'utf-8');
+    expect(injectClaudeMdSection(tempDir, { force: true })).toBe('updated');
+    const content = readFileSync(p, 'utf-8');
+    expect(content).toContain('## PindeX notes\nmine');
+    expect(content.match(/pindex:start/g)).toHaveLength(1);
   });
 });
 
@@ -325,6 +350,43 @@ describe('injectClaudeSettings', () => {
 
     const result = injectClaudeSettings(tempDir);
     expect(result).toBe('skipped');
+  });
+
+  it('SessionStart hook is quiet (--no-open) with absolute node + script', () => {
+    injectClaudeSettings(tempDir);
+    const config = JSON.parse(readFileSync(join(tempDir, '.claude', 'settings.json'), 'utf-8'));
+    const cmd: string = config.hooks.SessionStart[0].hooks[0].command;
+    expect(cmd).toContain('--no-open');
+    expect(cmd).toContain(` gui --no-open`);
+    const { command, args } = nodeScriptCommand('cli/index.js');
+    expect(cmd).toBe(`"${command}" "${args[0]}" gui --no-open`);
+  });
+
+  it('upgrades the old bare "pindex gui" SessionStart hook without --force', () => {
+    const claudeDir = join(tempDir, '.claude');
+    mkdirSync(claudeDir, { recursive: true });
+    writeFileSync(
+      join(claudeDir, 'settings.json'),
+      JSON.stringify({
+        hooks: {
+          PreToolUse: [{ _pindex: 'pindex-hook', matcher: 'Read|Glob|Grep', hooks: [] }],
+          SessionStart: [
+            { hooks: [{ type: 'command', command: 'echo mine' }] },
+            { _pindex: 'pindex-hook', hooks: [{ type: 'command', command: 'pindex gui' }] },
+          ],
+        },
+      }),
+      'utf-8',
+    );
+    expect(injectClaudeSettings(tempDir)).toBe('added');
+    const config = JSON.parse(readFileSync(join(claudeDir, 'settings.json'), 'utf-8'));
+    const cmds = config.hooks.SessionStart.map((e: any) => e.hooks[0].command);
+    expect(cmds).toContain('echo mine');
+    expect(cmds.filter((c: string) => c.includes('gui'))).toHaveLength(1);
+    expect(cmds.some((c: string) => c === 'pindex gui')).toBe(false);
+    expect(cmds.some((c: string) => c.includes('--no-open'))).toBe(true);
+    // second run is a no-op
+    expect(injectClaudeSettings(tempDir)).toBe('skipped');
   });
 });
 
@@ -409,6 +471,32 @@ describe('removeClaudeMdSection', () => {
     expect(content).toContain('# My Project');
     expect(content).not.toContain('<!-- pindex -->');
     expect(content).not.toContain('PindeX');
+  });
+
+  it('keeps a user "## PindeX notes" heading above the marked section', () => {
+    writeFileSync(
+      join(tempDir, 'CLAUDE.md'),
+      '# P\n\n## PindeX notes\nmine\n\n<!-- pindex:start -->\n## PindeX – Codebase Navigation\nx\n<!-- pindex:end -->\n\n## After\nkeep\n',
+      'utf-8',
+    );
+    expect(removeClaudeMdSection(tempDir)).toBe('removed');
+    const content = readFileSync(join(tempDir, 'CLAUDE.md'), 'utf-8');
+    expect(content).toContain('## PindeX notes\nmine');
+    expect(content).toContain('## After\nkeep');
+    expect(content).not.toContain('Codebase Navigation');
+    expect(content).not.toContain('pindex:');
+  });
+
+  it('legacy section: strips only from the exact heading, not an earlier "## PindeX notes"', () => {
+    writeFileSync(
+      join(tempDir, 'CLAUDE.md'),
+      '# P\n\n## PindeX notes\nmine\n\n## PindeX – Codebase Navigation\nold\n<!-- pindex -->\n',
+      'utf-8',
+    );
+    expect(removeClaudeMdSection(tempDir)).toBe('removed');
+    const content = readFileSync(join(tempDir, 'CLAUDE.md'), 'utf-8');
+    expect(content).toContain('## PindeX notes\nmine');
+    expect(content).not.toContain('Codebase Navigation');
   });
 });
 

@@ -218,7 +218,7 @@ save_context("Decision: use JWT …", "auth")  # store for future sessions
 pindex-gui
 ```
 
-Opens `http://localhost:7842` — an aggregated dashboard showing token savings, symbol counts, and session stats for **all** registered projects. The savings figures reflect tokens saved on PindeX tool calls; see the note in [How It Works](#how-it-works) for context.
+Opens `http://localhost:7841` — an aggregated dashboard showing token savings, symbol counts, and session stats for **all** registered projects. The savings figures reflect tokens saved on PindeX tool calls; see the note in [How It Works](#how-it-works) for context.
 
 ---
 
@@ -747,7 +747,7 @@ MONITORING_AUTO_OPEN=true node dist/index.js
 pindex-gui
 ```
 
-Opens `http://localhost:7842` — reads **all** registered project databases directly and shows:
+Opens `http://localhost:7841` — reads **all** registered project databases directly and shows:
 
 - Token savings per project (bar chart)
 - Indexed file and symbol counts

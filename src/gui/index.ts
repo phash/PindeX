@@ -4,11 +4,14 @@
  * Starts an aggregated dashboard server and opens the browser.
  */
 import { startGuiServer } from './server.js';
+import { GUI_DEFAULT_PORT } from '../cli/project-detector.js';
+
+const NO_OPEN = process.argv.includes('--no-open');
 
 const portArgIdx = process.argv.indexOf('--port');
 const BASE_PORT = portArgIdx !== -1 && process.argv[portArgIdx + 1]
   ? parseInt(process.argv[portArgIdx + 1], 10)
-  : parseInt(process.env.GUI_PORT ?? '7842', 10);
+  : parseInt(process.env.GUI_PORT ?? String(GUI_DEFAULT_PORT), 10);
 
 async function main(): Promise<void> {
   let server: Awaited<ReturnType<typeof startGuiServer>> | null = null;
@@ -33,7 +36,7 @@ async function main(): Promise<void> {
   const port = server!.port;
   console.log(`\n  PindeX Dashboard  →  http://localhost:${port}\n`);
 
-  try {
+  if (!NO_OPEN) try {
     const { default: open } = await import('open');
     await open(`http://localhost:${port}`);
   } catch {

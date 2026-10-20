@@ -16,7 +16,9 @@ import {
   RegistryLockError,
   findProjectRoot,
   hashProjectPath,
+  GUI_DEFAULT_PORT,
 } from './project-detector.js';
+import { nodeScriptCommand } from './mcp-json.js';
 import { initProject, injectClaudeMdSection, injectClaudeSettings, removeClaudeMdSection, removeClaudeSettings, removeMcpJson, writeMcpJson, injectGitignore } from './init.js';
 import { federateAdd, federateRemove, federateList } from './federate.js';
 import Database from 'better-sqlite3';
@@ -205,7 +207,8 @@ async function main(): Promise<void> {
     case 'gui':
     case 'monitor': {
       const net = await import('node:net');
-      const port = parseInt(process.env.GUI_PORT ?? '7842', 10);
+      const port = parseInt(process.env.GUI_PORT ?? String(GUI_DEFAULT_PORT), 10);
+      const noOpen = args.includes('--no-open');
 
       // Check if pindex-gui is already running
       const isRunning = await new Promise<boolean>((resolve) => {
@@ -214,22 +217,30 @@ async function main(): Promise<void> {
         s.on('error', () => resolve(false));
       });
 
+      // Hook mode (SessionStart): already running -> nothing to do, stay silent.
+      if (isRunning && noOpen) break;
+
       if (!isRunning) {
         const registry = new GlobalRegistry();
         if (registry.list().length === 0) {
-          console.log('No projects registered. Run `pindex` in a project first.');
+          if (!noOpen) console.log('No projects registered. Run `pindex` in a project first.');
           break;
         }
         const { spawn } = await import('node:child_process');
-        const os = await import('node:os');
-        // Spawn without shell:true to avoid a latent shell-injection sink if the
-        // arg list ever grows (SEC-15). On Windows the bin is a .cmd shim, which
-        // requires the explicit extension when not going through a shell.
-        const guiBin = os.platform() === 'win32' ? 'pindex-gui.cmd' : 'pindex-gui';
-        spawn(guiBin, ['--port', String(port)], {
+        // Absolute node + script (no PATH lookup, no shell). The GUI never opens the browser
+        // itself here; this command decides below.
+        const gui = nodeScriptCommand('gui/index.js');
+        const child = spawn(gui.command, [...gui.args, '--port', String(port), '--no-open'], {
           detached: true,
           stdio: 'ignore',
-        }).unref();
+        });
+        child.on('error', (err) => {
+          console.error(`  [pindex] Could not start GUI dashboard: ${err.message}`);
+        });
+        child.unref();
+
+        // Hook mode must return quickly: do not wait for the server.
+        if (noOpen) break;
 
         // Wait for server to be ready (max 3s)
         for (let i = 0; i < 15; i++) {
@@ -244,14 +255,16 @@ async function main(): Promise<void> {
         console.log(`  [pindex] Started GUI dashboard on port ${port}`);
       }
 
-      const { default: open } = await import('open');
-      await open(`http://localhost:${port}`);
+      if (!noOpen) {
+        const { default: open } = await import('open');
+        await open(`http://localhost:${port}`);
+      }
       console.log(`  [pindex] Dashboard: http://localhost:${port}`);
       break;
     }
 
     case 'stats': {
-      console.log('Run `pindex-gui` for full statistics. Or open http://localhost:7842');
+      console.log('Run `pindex-gui` for full statistics. Or open http://localhost:7841');
       break;
     }
 
@@ -368,6 +381,7 @@ async function main(): Promise<void> {
     index --force   Force re-index all files
 
     gui             Open the monitoring dashboard in the browser
+    gui --no-open   Start the dashboard in the background only (used by the SessionStart hook)
     stats           Show token stats overview
 
     migrate         Move all project indexes from ~/.pindex/projects/ to {project}/.pindex/
