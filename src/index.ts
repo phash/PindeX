@@ -8,10 +8,11 @@ import { startMonitoringServer } from './monitoring/server.js';
 import { TokenLogger } from './monitoring/token-logger.js';
 import { createMcpServer } from './server.js';
 import { createSession } from './db/queries.js';
-import { getProjectIndexPath, GlobalRegistry } from './cli/project-detector.js';
+import { getProjectIndexPath, hashProjectPath, GlobalRegistry } from './cli/project-detector.js';
 import { assignName } from './federation/registry-name.js';
 import { SessionObserver } from './memory/observer.js';
 import { applyObservationRetention } from './memory/retention.js';
+import { writePidFile, removePidFile } from './cli/daemon.js';
 import { v4 as uuidv4 } from 'uuid';
 
 // ─── Configuration (from environment variables) ───────────────────────────────
@@ -138,8 +139,19 @@ async function main(): Promise<void> {
   const transport = new StdioServerTransport();
   await server.connect(transport);
 
-  // ─── Graceful Shutdown ──────────────────────────────────────────────────
-  const cleanup = async (): Promise<void> => {
+  // ─── PID file + graceful shutdown ───────────────────────────────────────
+  // Same key the CLI (status/stop/restart) uses: hashProjectPath(projectRoot).
+  const projectHash = hashProjectPath(PROJECT_ROOT);
+  try { writePidFile(process.pid, projectHash); } catch (err) {
+    process.stderr.write(`[pindex] Could not write PID file: ${String(err)}\n`);
+  }
+
+  // Idempotent: stdin end/close, transport close and signals may all fire.
+  let shuttingDown = false;
+  const shutdown = async (): Promise<void> => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    try { removePidFile(projectHash); } catch { /* best effort */ }
     try {
       if (watcher) await watcher.stop();
       await indexer.closePool();
@@ -149,14 +161,15 @@ async function main(): Promise<void> {
       }
       db.close();
     } catch { /* best effort */ }
+    process.exit(0);
   };
 
-  process.on('SIGTERM', () => {
-    cleanup().finally(() => process.exit(0));
-  });
-  process.on('SIGINT', () => {
-    cleanup().finally(() => process.exit(0));
-  });
+  process.on('SIGTERM', () => { void shutdown(); });
+  process.on('SIGINT', () => { void shutdown(); });
+  process.stdin.on('end', () => { void shutdown(); });
+  process.stdin.on('close', () => { void shutdown(); });
+  const previousOnClose = transport.onclose;
+  transport.onclose = () => { previousOnClose?.(); void shutdown(); };
 }
 
 // Catch any unhandled exception / rejection and exit so Claude Code auto-restarts the server.

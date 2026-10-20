@@ -1,7 +1,7 @@
 import { mkdirSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { homedir, platform } from 'node:os';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { getPindexHome, ensurePindexHome, writeFileSecure } from './project-detector.js';
+import { ensurePindexHome, writeFileSecure } from './project-detector.js';
 
 const DEFAULT_CONFIG = {
   version: '1.0.0',
@@ -61,53 +61,16 @@ export function registerMcpServer(): void {
   writeFileSync(claudeConfigPath, JSON.stringify(config, null, 2), 'utf-8');
 }
 
-/** Installs a systemd user service (Linux). */
-export function installSystemdService(execPath: string): void {
-  const serviceDir = join(homedir(), '.config', 'systemd', 'user');
-  if (!existsSync(serviceDir)) mkdirSync(serviceDir, { recursive: true });
-
-  const serviceContent = `[Unit]
-Description=PindeX MCP Codebase Indexer
-After=network.target
-
-[Service]
-Type=simple
-ExecStart=${execPath}
-Restart=on-failure
-StandardOutput=append:${getPindexHome()}/daemon.log
-StandardError=append:${getPindexHome()}/daemon.log
-
-[Install]
-WantedBy=default.target
-`;
-  writeFileSync(join(serviceDir, 'pindex.service'), serviceContent, 'utf-8');
-}
-
 /** Runs the complete one-time setup. */
 export async function runSetup(): Promise<void> {
   console.log('\n  ╔══════════════════════════════════════════╗');
   console.log('  ║        PindeX – Setup                    ║');
   console.log('  ╚══════════════════════════════════════════╝\n');
 
-  // 1. Write global config
-  process.stdout.write('  [1/2] Creating global configuration...');
+  // Write global config
+  process.stdout.write('  Creating global configuration...');
   writeGlobalConfig();
   console.log(' ✓');
-
-  // 2. Set up autostart (Linux only for now)
-  process.stdout.write('  [2/2] Setting up autostart...');
-  const plt = platform();
-  if (plt === 'linux') {
-    try {
-      const execPath = process.execPath + ' ' + process.argv[1];
-      installSystemdService(execPath);
-      console.log(' ✓ (systemd)');
-    } catch {
-      console.log(' ⚠ (skipped – could not write systemd service)');
-    }
-  } else {
-    console.log(` ✓ (${plt} – manual start required)`);
-  }
 
   console.log('\n  ══════════════════════════════════════════');
   console.log('  ✅  Setup complete!\n');

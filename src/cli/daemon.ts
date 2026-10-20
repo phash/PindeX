@@ -36,14 +36,20 @@ export function isDaemonRunning(projectHash?: string): boolean {
   return getDaemonPid(projectHash) !== null;
 }
 
-/** Best-effort check that a PID belongs to a pindex/node process before we signal
+/** True only if a process command line belongs to a pindex server/CLI
+ *  (contains `pindex` or `dist/index.js`). A bare `node` is NOT enough. */
+export function isPindexProcess(cmdline: string): boolean {
+  return /pindex|dist[\\/]index\.js/i.test(cmdline);
+}
+
+/** Best-effort check that a PID belongs to a pindex process before we signal
  *  it, guarding against PID reuse killing an unrelated process (SEC-14). On
  *  platforms without /proc (macOS/Windows) the check is skipped (returns true). */
 function isLikelyPindexProcess(pid: number): boolean {
   try {
-    const cmdline = readFileSync(`/proc/${pid}/cmdline`, 'utf-8');
+    const cmdline = readFileSync(`/proc/${pid}/cmdline`, 'utf-8').replace(/\0/g, ' ').trim();
     if (!cmdline) return true; // empty — cannot tell, do not block
-    return /pindex|node/i.test(cmdline);
+    return isPindexProcess(cmdline);
   } catch {
     return true; // /proc unavailable or unreadable — do not block stop
   }

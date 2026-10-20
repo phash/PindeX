@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { tmpdir } from 'node:os';
 import { mkdirSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { spawn } from 'node:child_process';
 
 // TST-12: daemon PID-file lifecycle tests.
 //
@@ -187,6 +188,31 @@ describe('daemon (TST-12)', () => {
     expect(killSpy).not.toHaveBeenCalledWith(1, 'SIGTERM');
     // Stale PID file is cleaned up on refusal.
     expect(existsSync(pidFile)).toBe(false);
+  });
+
+  it('isPindexProcess matches only pindex / dist/index.js command lines', async () => {
+    const { isPindexProcess } = await import('../../src/cli/daemon.js');
+    expect(isPindexProcess('node /usr/lib/node_modules/pindex/dist/index.js')).toBe(true);
+    expect(isPindexProcess('node /srv/app/dist/index.js')).toBe(true);
+    expect(isPindexProcess('node server.js')).toBe(false);
+    expect(isPindexProcess('/usr/bin/node')).toBe(false);
+  });
+
+  it('stopDaemon does not signal a live unrelated process whose cmdline fails the check', async () => {
+    const { writePidFile, stopDaemon } = await import('../../src/cli/daemon.js');
+    const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 30000)'], { stdio: 'ignore' });
+    try {
+      writePidFile(child.pid!, HASH);
+      vi.spyOn(console, 'log').mockImplementation(() => {});
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+      await stopDaemon(HASH);
+      await new Promise((r) => setTimeout(r, 300));
+      expect(child.exitCode).toBeNull();
+      expect(child.signalCode).toBeNull();
+      expect(() => process.kill(child.pid!, 0)).not.toThrow();
+    } finally {
+      child.kill('SIGKILL');
+    }
   });
 
   it('showStatus prints the running PID when a live daemon exists (with projectPath)', async () => {

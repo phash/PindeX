@@ -109,50 +109,6 @@ describe('writeGlobalConfig', () => {
   });
 });
 
-describe('installSystemdService', () => {
-  let tempHome: string;
-
-  beforeEach(async () => {
-    tempHome = join(tmpdir(), `mcp-systemd-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
-    mkdirSync(tempHome, { recursive: true });
-    const { homedir } = await import('node:os');
-    vi.mocked(homedir).mockReturnValue(tempHome);
-  });
-
-  afterEach(() => {
-    rmSync(tempHome, { recursive: true, force: true });
-    vi.restoreAllMocks();
-  });
-
-  it('writes a pindex.service file under ~/.config/systemd/user with the exec path', async () => {
-    const { installSystemdService } = await import('../../src/cli/setup.js');
-    const execPath = '/usr/bin/node /path/to/pindex-server';
-    installSystemdService(execPath);
-
-    const servicePath = join(tempHome, '.config', 'systemd', 'user', 'pindex.service');
-    expect(existsSync(servicePath)).toBe(true);
-
-    const content = readFileSync(servicePath, 'utf-8');
-    expect(content).toContain('[Unit]');
-    expect(content).toContain('Description=PindeX MCP Codebase Indexer');
-    expect(content).toContain(`ExecStart=${execPath}`);
-    expect(content).toContain('[Install]');
-    expect(content).toContain('WantedBy=default.target');
-    // log path points inside the (temp) pindex home
-    expect(content).toContain(join(tempHome, '.pindex'));
-  });
-
-  it('creates the systemd user directory when missing', async () => {
-    const serviceDir = join(tempHome, '.config', 'systemd', 'user');
-    expect(existsSync(serviceDir)).toBe(false);
-
-    const { installSystemdService } = await import('../../src/cli/setup.js');
-    installSystemdService('/bin/true');
-
-    expect(existsSync(serviceDir)).toBe(true);
-  });
-});
-
 describe('runSetup', () => {
   let tempHome: string;
   let logSpy: ReturnType<typeof vi.spyOn>;
@@ -172,33 +128,18 @@ describe('runSetup', () => {
     vi.restoreAllMocks();
   });
 
-  it('writes config + systemd service on linux (happy path)', async () => {
+  it('writes config but no systemd unit on linux', async () => {
     const { platform } = await import('node:os');
     vi.mocked(platform).mockReturnValue('linux');
 
     const { runSetup } = await import('../../src/cli/setup.js');
+    const setup = await import('../../src/cli/setup.js');
     await runSetup();
 
-    // global config created
     expect(existsSync(join(tempHome, '.pindex', 'config.json'))).toBe(true);
-    // systemd service created
-    expect(existsSync(join(tempHome, '.config', 'systemd', 'user', 'pindex.service'))).toBe(true);
-    // banner printed
+    expect(existsSync(join(tempHome, '.config', 'systemd', 'user', 'pindex.service'))).toBe(false);
+    expect('installSystemdService' in setup).toBe(false);
     expect(logSpy).toHaveBeenCalled();
     expect(writeSpy).toHaveBeenCalled();
-  });
-
-  it('skips systemd on non-linux platforms but still writes config', async () => {
-    const { platform } = await import('node:os');
-    vi.mocked(platform).mockReturnValue('darwin');
-
-    const { runSetup } = await import('../../src/cli/setup.js');
-    await runSetup();
-
-    expect(existsSync(join(tempHome, '.pindex', 'config.json'))).toBe(true);
-    // no systemd service on darwin
-    expect(existsSync(join(tempHome, '.config', 'systemd', 'user', 'pindex.service'))).toBe(false);
-    const printed = logSpy.mock.calls.map((c) => String(c[0])).join('\n');
-    expect(printed).toContain('manual start required');
   });
 });
