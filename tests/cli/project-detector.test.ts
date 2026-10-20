@@ -13,7 +13,7 @@ vi.mock('node:os', async (importOriginal) => {
   };
 });
 
-import { computeDefaultPort, GUI_DEFAULT_PORT, hashProjectPath, getProjectIndexPath, getPindexHome, GlobalRegistry } from '../../src/cli/project-detector.js';
+import { computeDefaultPort, GUI_DEFAULT_PORT, guiPortCandidates, hashProjectPath, getProjectIndexPath, getPindexHome, GlobalRegistry } from '../../src/cli/project-detector.js';
 
 describe('hashProjectPath', () => {
   it('returns an 8-character hex string', () => {
@@ -503,6 +503,18 @@ describe('GlobalRegistry — atomic, locked writes (sandboxed)', () => {
     const list = new Reg().list();
     expect(list[0].name).toBeTruthy();
     expect(readFileSync(regPath, 'utf-8')).toBe(legacy);
+  });
+});
+
+describe('guiPortCandidates', () => {
+  it('falls back below the GUI port (7840..7836), never into the per-project range', () => {
+    expect(guiPortCandidates(GUI_DEFAULT_PORT)).toEqual([7841, 7840, 7839, 7838, 7837, 7836]);
+    for (const p of guiPortCandidates(GUI_DEFAULT_PORT)) expect(p).toBeLessThan(7842);
+  });
+
+  it('keeps a custom preferred port first and does not duplicate a fallback port', () => {
+    expect(guiPortCandidates(9000)).toEqual([9000, 7840, 7839, 7838, 7837, 7836]);
+    expect(guiPortCandidates(7838)).toEqual([7838, 7840, 7839, 7837, 7836]);
   });
 });
 

@@ -19,7 +19,7 @@ import {
 } from '../db/queries.js';
 import { computeAstDiff, type AstDiffResult } from '../memory/ast-diff.js';
 import { Summarizer, type SummarizerOptions } from './summarizer.js';
-import { LspPythonClient } from './lsp-python.js';
+import { LspPythonClient, isLspEnabledByEnv } from './lsp-python.js';
 import { resolveWithinRoot } from '../util/paths.js';
 
 // ─── Default Configuration ────────────────────────────────────────────────────
@@ -96,7 +96,7 @@ export interface IndexerOptions {
   /** 0 = run parsing synchronously on main (test / small-project mode).
    *  undefined = auto-select based on CPU count. */
   maxParseWorkers?: number;
-  /** Enable the LSP-backed Python parser. Default: process.env.PINDEX_LSP !== 'false'. */
+  /** Enable the LSP-backed Python parser. Default: opt-in via PINDEX_LSP=true (see isLspEnabledByEnv). */
   lspEnabled?: boolean;
 }
 
@@ -122,7 +122,9 @@ export class Indexer {
   private readonly documentPatterns: string[];
   private pool: ParsePool | null = null;
   private readonly configuredMaxWorkers: number;
-  private lastImportsCache: Map<string, ParsedImport[]> | null = null;
+  /** Last known parsed imports per indexed code file (project-relative path). Lets edges be
+   *  re-resolved without re-parsing, e.g. when a newly added file satisfies an earlier import. */
+  private readonly importsByFile = new Map<string, ParsedImport[]>();
   private lsp: LspPythonClient | null = null;
 
   constructor(options: IndexerOptions) {
@@ -134,7 +136,7 @@ export class Indexer {
     this.summarizer = new Summarizer(options.summarizerOptions ?? { enabled: false });
     this.documentPatterns = options.documentPatterns ?? DEFAULT_DOCUMENT_PATTERNS;
     this.configuredMaxWorkers = ParsePool.pickDefaultWorkerCount(options.maxParseWorkers);
-    const lspEnabled = options.lspEnabled ?? (process.env.PINDEX_LSP !== 'false');
+    const lspEnabled = options.lspEnabled ?? isLspEnabledByEnv();
     if (lspEnabled) {
       this.lsp = new LspPythonClient({ projectRoot: this.projectRoot, enabled: true });
     }
@@ -174,8 +176,6 @@ export class Indexer {
         (j): j is { absolutePath: string; relativePath: string } => j.absolutePath !== null,
       );
 
-    const importsCache = new Map<string, ParsedImport[]>();
-
     const effectiveWorkers = ParsePool.pickEffectiveWorkerCount(
       jobs.length,
       this.configuredMaxWorkers,
@@ -206,7 +206,10 @@ export class Indexer {
       else if (fileRes.status === 'skipped') result.skipped++;
       result.errors.push(...fileRes.errors);
 
-      importsCache.set(parseResult.relativePath, parseResult.parsed.imports);
+      // Unchanged (skipped) files are cached too, so resolveDependencies need not re-parse them.
+      if (fileRes.status !== 'error' && !this.importsByFile.has(parseResult.relativePath)) {
+        this.importsByFile.set(parseResult.relativePath, parseResult.parsed.imports);
+      }
     }
 
     // Documents stay sequential; they are few and cheap.
@@ -230,12 +233,10 @@ export class Indexer {
         const abs = resolveWithinRoot(this.projectRoot, file.path);
         if (abs !== null && existsSync(abs)) continue;
         deleteFile(this.db, file.path);
+        this.forgetFile(file.path);
         result.removed++;
       }
     }
-
-    // Stash the cache for resolveDependencies.
-    this.lastImportsCache = importsCache;
 
     return result;
   }
@@ -366,6 +367,7 @@ export class Indexer {
       const diff = runInTransaction();
       // indexAll() resolves all edges in one pass afterwards; the single-file
       // (watcher) path has to rebuild this file's outgoing edges itself.
+      this.importsByFile.set(relativePath, parsed.imports);
       if (resolveEdges) this.resolveFileDependencies(relativePath, parsed.imports);
       return { status: isUpdate ? 'updated' : 'indexed', errors: [], diff };
     } catch (err) {
@@ -449,7 +451,7 @@ export class Indexer {
    *  Fast path: pass an importsCache built during indexAll() to skip re-reading
    *  and re-parsing every file. Slow path (no cache) re-parses as before. */
   async resolveDependencies(importsCache?: Map<string, ParsedImport[]>): Promise<void> {
-    const cache = importsCache ?? this.lastImportsCache ?? undefined;
+    const cache = importsCache ?? this.importsByFile;
     const allFiles = getAllFiles(this.db);
     const pathIndex = new Map(allFiles.map((f) => [f.path, f.id]));
     const knownPaths = new Set(pathIndex.keys());
@@ -491,6 +493,33 @@ export class Indexer {
     this.db.transaction(() => {
       this.writeEdges(fileRecord.id, relativePath, imports, pathIndex, knownPaths);
     })();
+  }
+
+  /**
+   * Re-resolves the outgoing edges of every known file with an import that now resolves to
+   * `newPath` (watcher 'add': an import that failed earlier may be satisfiable now). Uses the
+   * cached imports; nothing is re-parsed.
+   */
+  resolveImportersOf(newPath: string): void {
+    const pathIndex = new Map(getAllFiles(this.db).map((f) => [f.path, f.id]));
+    if (!pathIndex.has(newPath)) return;
+    const knownPaths = new Set(pathIndex.keys());
+    this.db.transaction(() => {
+      for (const [path, imports] of this.importsByFile) {
+        if (path === newPath) continue;
+        const fileId = pathIndex.get(path);
+        if (fileId === undefined) continue;
+        const hits = imports.some(
+          (imp) => this.resolveImportPath(path, imp.source, knownPaths) === newPath,
+        );
+        if (hits) this.writeEdges(fileId, path, imports, pathIndex, knownPaths);
+      }
+    })();
+  }
+
+  /** Drops the cached imports of a deleted file. */
+  forgetFile(relativePath: string): void {
+    this.importsByFile.delete(relativePath);
   }
 
   private writeEdges(

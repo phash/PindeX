@@ -62,10 +62,14 @@ const fakeDb = {} as Database.Database;
 function makeStubIndexer(): {
   indexFile: ReturnType<typeof vi.fn>;
   indexDocument: ReturnType<typeof vi.fn>;
+  resolveImportersOf: ReturnType<typeof vi.fn>;
+  forgetFile: ReturnType<typeof vi.fn>;
 } & Pick<Indexer, never> {
   return {
     indexFile: vi.fn().mockResolvedValue({ status: 'indexed', errors: [] }),
     indexDocument: vi.fn().mockResolvedValue({ status: 'indexed', errors: [] }),
+    resolveImportersOf: vi.fn(),
+    forgetFile: vi.fn(),
     ignorePatterns: ['**/node_modules/**', '**/build/**'],
     documentGlobs: ['**/*.md'],
   } as never;
@@ -113,6 +117,36 @@ describe('FileWatcher (TST-01)', () => {
     await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
     expect(indexer.indexFile).toHaveBeenCalledTimes(1);
     expect(indexer.indexFile).toHaveBeenCalledWith('src/new.ts', false);
+  });
+
+  it("re-resolves importers after a new code file is indexed on 'add' (not on 'change')", async () => {
+    const watcher = new FileWatcher({
+      db: fakeDb,
+      indexer: indexer as never as Indexer,
+      projectRoot: '/proj',
+    });
+    await watcher.start();
+
+    chokidarState.emit('add', 'src/new.ts');
+    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
+    expect(indexer.resolveImportersOf).toHaveBeenCalledWith('src/new.ts');
+
+    indexer.resolveImportersOf.mockClear();
+    chokidarState.emit('change', 'src/new.ts');
+    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
+    expect(indexer.resolveImportersOf).not.toHaveBeenCalled();
+  });
+
+  it("forgets the cached imports of a file on 'unlink'", async () => {
+    const watcher = new FileWatcher({
+      db: fakeDb,
+      indexer: indexer as never as Indexer,
+      projectRoot: '/proj',
+    });
+    await watcher.start();
+    chokidarState.emit('unlink', 'src/gone.ts');
+    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
+    expect(indexer.forgetFile).toHaveBeenCalledWith('src/gone.ts');
   });
 
   it("calls indexer.indexFile after the debounce on 'change'", async () => {

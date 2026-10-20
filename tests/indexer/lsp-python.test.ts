@@ -506,3 +506,23 @@ describe('resolvePyrightLangserver', () => {
     ).toBeNull();
   });
 });
+
+describe('LSP opt-in + spawn isolation', () => {
+  it('is enabled only by the exact value "true"', async () => {
+    const { isLspEnabledByEnv } = await import('../../src/indexer/lsp-python.js');
+    expect(isLspEnabledByEnv(undefined)).toBe(false);
+    expect(isLspEnabledByEnv('')).toBe(false);
+    expect(isLspEnabledByEnv('1')).toBe(false);
+    expect(isLspEnabledByEnv('TRUE')).toBe(false);
+    expect(isLspEnabledByEnv('false')).toBe(false);
+    expect(isLspEnabledByEnv('true')).toBe(true);
+  });
+
+  it('spawns pyright with cwd outside the project (os.tmpdir())', async () => {
+    const { pyrightSpawnOptions } = await import('../../src/indexer/lsp-python.js');
+    const { tmpdir } = await import('node:os');
+    const opts = pyrightSpawnOptions();
+    expect(opts.cwd).toBe(tmpdir());
+    expect(opts.stdio).toEqual(['pipe', 'pipe', 'pipe']);
+  });
+});

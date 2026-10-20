@@ -1,4 +1,5 @@
-import { spawn as nodeSpawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { spawn as nodeSpawn, type ChildProcessWithoutNullStreams, type SpawnOptions } from 'node:child_process';
+import { tmpdir } from 'node:os';
 import { existsSync, realpathSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { resolve, join, dirname, delimiter, isAbsolute, sep } from 'node:path';
@@ -13,6 +14,20 @@ import type { DocumentSymbol } from 'vscode-languageserver-protocol';
 import type { ParsedSymbol, ParsedImport } from '../types.js';
 import { mapDocumentSymbols } from './lsp-mapper.js';
 import { parseFile } from './parser.js';
+
+/**
+ * LSP parsing is opt-in: only the exact value 'true' enables it. Pyright reads the project's
+ * pyrightconfig.json and may run the configured Python interpreter, so it must not start
+ * by default on untrusted repositories.
+ */
+export function isLspEnabledByEnv(value: string | undefined = process.env.PINDEX_LSP): boolean {
+  return value === 'true';
+}
+
+/** Spawn options for pyright-langserver: cwd outside the project so nothing is resolved relative to it. */
+export function pyrightSpawnOptions(): SpawnOptions {
+  return { stdio: ['pipe', 'pipe', 'pipe'], cwd: tmpdir() };
+}
 
 export type LspReadyState = 'idle' | 'starting' | 'ready' | 'failed' | 'closed';
 
@@ -46,7 +61,7 @@ export class LspPythonClient {
     this.timeoutMs = options.timeoutMs ?? 5000;
     this.spawnImpl =
       options._spawn ??
-      ((path) => nodeSpawn(path, ['--stdio'], { stdio: ['pipe', 'pipe', 'pipe'] }) as ChildProcessWithoutNullStreams);
+      ((path) => nodeSpawn(path, ['--stdio'], pyrightSpawnOptions()) as ChildProcessWithoutNullStreams);
     this.resolveImpl = options._resolveServerPath ?? (() => resolvePyrightLangserver(this.projectRoot));
   }
 
@@ -77,7 +92,7 @@ export class LspPythonClient {
         process.stderr.write(
           `[pindex] LSP: pyright-langserver not found on PATH or in node_modules; ` +
           `falling back to regex parsing. Install with "npm install pyright" or ` +
-          `set PINDEX_LSP=false to silence this.\n`,
+          `unset PINDEX_LSP to silence this.\n`,
         );
         LspPythonClient.warnedMissing = true;
       }

@@ -1,4 +1,4 @@
-import { writeFileSync, existsSync, mkdirSync, readFileSync, appendFileSync } from 'node:fs';
+import { writeFileSync, existsSync, mkdirSync, readFileSync, appendFileSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   findProjectRoot,
@@ -6,32 +6,42 @@ import {
   GlobalRegistry,
   type RegistryEntry,
 } from './project-detector.js';
-import { mergeMcpServer, serverCommand, nodeScriptCommand } from './mcp-json.js';
+import { mergeMcpServer, serverCommand, nodeScriptCommand, readMcpJson } from './mcp-json.js';
 import { formatFederationRepos } from '../federation/env.js';
 
 // ─── .mcp.json generation ─────────────────────────────────────────────────
+
+/** Env keys pindex derives from the registry; always rewritten (a stale value would break the server). */
+const MANAGED_ENV_KEYS = ['PROJECT_ROOT', 'INDEX_PATH', 'MONITORING_PORT', 'FEDERATION_REPOS'] as const;
+
+/** Defaults written only when the key is not set yet; user edits survive re-runs. */
+const DEFAULT_ENV: Record<string, string> = {
+  AUTO_REINDEX: 'true',
+  GENERATE_SUMMARIES: 'false',
+  MONITORING_AUTO_OPEN: 'false',
+  BASELINE_MODE: 'false',
+};
 
 export function writeMcpJson(
   projectRoot: string,
   entry: RegistryEntry,
 ): void {
-  const federationEnv: Record<string, string> =
-    entry.federatedRepos.length > 0
-      ? { FEDERATION_REPOS: formatFederationRepos(entry.federatedRepos.map((r) => r.path)) }
-      : {};
+  const managed: Record<string, string> = {
+    PROJECT_ROOT: entry.path,
+    INDEX_PATH: getProjectIndexPath(entry.path),
+    MONITORING_PORT: String(entry.monitoringPort),
+  };
+  if (entry.federatedRepos.length > 0) {
+    managed.FEDERATION_REPOS = formatFederationRepos(entry.federatedRepos.map((r) => r.path));
+  }
+
+  // Keep user-set keys (LANGUAGES, PINDEX_LSP, …) from an existing pindex entry.
+  const userEnv = { ...(readMcpJson(projectRoot)?.mcpServers?.pindex?.env ?? {}) };
+  for (const key of MANAGED_ENV_KEYS) delete userEnv[key];
 
   mergeMcpServer(projectRoot, 'pindex', {
     ...serverCommand(),
-    env: {
-      PROJECT_ROOT: entry.path,
-      INDEX_PATH: getProjectIndexPath(entry.path),
-      MONITORING_PORT: String(entry.monitoringPort),
-      AUTO_REINDEX: 'true',
-      GENERATE_SUMMARIES: 'false',
-      MONITORING_AUTO_OPEN: 'false',
-      BASELINE_MODE: 'false',
-      ...federationEnv,
-    },
+    env: { ...DEFAULT_ENV, ...userEnv, ...managed },
   });
 }
 
@@ -123,7 +133,7 @@ export function injectClaudeMdSection(
   }
 }
 
-// ─── .claude/settings.json Hook injection ─────────────────────────────────
+// ─── .claude/settings(.local).json Hook injection ─────────────────────────────────
 
 const HOOK_MARKER = 'pindex-hook';
 
@@ -149,15 +159,18 @@ function isPindexEntry(entry: unknown): boolean {
     (entry as { _pindex?: unknown })._pindex === HOOK_MARKER;
 }
 
-/** Parses settings.json; throws a clear error (file untouched) if it is not a JSON object. */
-function readSettings(settingsPath: string): Record<string, unknown> {
+type Settings = Record<string, unknown>;
+type HookMap = Record<string, unknown[]>;
+
+/** Parses a settings file; throws a clear error (file untouched) if it is not a JSON object. */
+function readSettings(settingsPath: string): Settings {
   const raw = readFileSync(settingsPath, 'utf-8');
   try {
     const parsed = JSON.parse(raw);
     if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
       throw new Error('top-level value is not an object');
     }
-    return parsed as Record<string, unknown>;
+    return parsed as Settings;
   } catch (err) {
     throw new Error(
       `${settingsPath} is not valid JSON (${(err as Error).message}). Fix or remove it manually; PindeX will not overwrite it.`,
@@ -165,7 +178,32 @@ function readSettings(settingsPath: string): Record<string, unknown> {
   }
 }
 
-const OLD_SESSION_START_COMMAND = 'pindex gui';
+function readSettingsIfExists(settingsPath: string): Settings | null {
+  return existsSync(settingsPath) ? readSettings(settingsPath) : null;
+}
+
+function writeSettings(settingsPath: string, settings: Settings): void {
+  writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n', 'utf-8');
+}
+
+function hookEntries(settings: Settings | null, event: string): unknown[] {
+  return (settings?.hooks as HookMap | undefined)?.[event] ?? [];
+}
+
+/**
+ * Returns a copy of `settings` with `event`'s pindex-marked entries replaced by `add`
+ * (or just removed when `add` is null). Empty event arrays and an empty hooks object are dropped.
+ */
+function withPindexHook(settings: Settings, event: string, add: object | null): Settings {
+  const hooks: HookMap = { ...(settings.hooks as HookMap | undefined) };
+  const kept = (hooks[event] ?? []).filter((h) => !isPindexEntry(h));
+  const next = add ? [...kept, { ...add, _pindex: HOOK_MARKER }] : kept;
+  if (next.length > 0) hooks[event] = next;
+  else delete hooks[event];
+  const updated: Settings = { ...settings, hooks };
+  if (Object.keys(hooks).length === 0) delete updated.hooks;
+  return updated;
+}
 
 /** SessionStart entry: starts the dashboard in the background without opening a browser. */
 function sessionStartEntry(): { hooks: { type: string; command: string }[] } {
@@ -175,66 +213,46 @@ function sessionStartEntry(): { hooks: { type: string; command: string }[] } {
   };
 }
 
-/** True if an existing pindex SessionStart entry still uses the old bare `pindex gui` command. */
-function hasStaleSessionStart(settings: Record<string, unknown>): boolean {
-  const entries = (settings.hooks as Record<string, unknown[]> | undefined)?.SessionStart ?? [];
-  return entries.some((e) => {
-    const entry = e as { _pindex?: string; hooks?: { command?: string }[] };
-    return entry._pindex === HOOK_MARKER &&
-      (entry.hooks ?? []).some((h) => h.command === OLD_SESSION_START_COMMAND);
-  });
+/** True if `entries` hold exactly one pindex entry and it runs the current SessionStart command. */
+function hasCurrentSessionStart(entries: unknown[]): boolean {
+  const ours = entries.filter(isPindexEntry) as { hooks?: { command?: string }[] }[];
+  const expected = sessionStartEntry().hooks[0].command;
+  return ours.length === 1 && (ours[0].hooks ?? []).some((h) => h.command === expected);
 }
 
 /**
- * Writes/merges PindeX hooks (PreToolUse + SessionStart) into .claude/settings.json.
- * Idempotent: skips if the hook marker is already present.
+ * Installs the PindeX hooks:
+ * - PreToolUse (portable command) → shared `.claude/settings.json`
+ * - SessionStart (machine-specific absolute node/script paths) → `.claude/settings.local.json`
+ * A pindex SessionStart entry left in settings.json by older versions is moved out.
+ * Idempotent: skips when everything is already up to date, unless force=true.
+ * Both files are parsed before anything is written; malformed JSON is never overwritten.
  */
 export function injectClaudeSettings(
   projectRoot: string,
   { force = false } = {},
 ): 'added' | 'skipped' | 'created' {
   const claudeDir = join(projectRoot, '.claude');
-  const settingsPath = join(claudeDir, 'settings.json');
+  const sharedPath = join(claudeDir, 'settings.json');
+  const localPath = join(claudeDir, 'settings.local.json');
+
+  const shared = readSettingsIfExists(sharedPath);
+  const local = readSettingsIfExists(localPath);
+
+  const upToDate =
+    hookEntries(shared, 'PreToolUse').some(isPindexEntry) &&
+    !hookEntries(shared, 'SessionStart').some(isPindexEntry) &&
+    hasCurrentSessionStart(hookEntries(local, 'SessionStart'));
+  if (upToDate && !force) return 'skipped';
 
   if (!existsSync(claudeDir)) mkdirSync(claudeDir, { recursive: true });
 
-  if (existsSync(settingsPath)) {
-    const existing = readSettings(settingsPath);
-    const eh = existing.hooks as Record<string, unknown[]> | undefined;
-    const alreadyInstalled = [...(eh?.PreToolUse ?? []), ...(eh?.SessionStart ?? [])].some(isPindexEntry);
-    if (alreadyInstalled && !force && !hasStaleSessionStart(existing)) return 'skipped';
+  let nextShared = withPindexHook(shared ?? {}, 'PreToolUse', PINDEX_HOOKS.hooks.PreToolUse[0]);
+  nextShared = withPindexHook(nextShared, 'SessionStart', null);
+  writeSettings(sharedPath, nextShared);
+  writeSettings(localPath, withPindexHook(local ?? {}, 'SessionStart', sessionStartEntry()));
 
-    // Deep-merge hooks
-    const existingHooks = existing.hooks as Record<string, unknown[]> | undefined;
-    const merged = {
-      ...existing,
-      hooks: {
-        ...existingHooks,
-        PreToolUse: [
-          // Remove old pindex hook entries, then re-add
-          ...(existingHooks?.PreToolUse ?? [])
-            .filter((h) => !isPindexEntry(h)),
-          { ...PINDEX_HOOKS.hooks.PreToolUse[0], _pindex: HOOK_MARKER },
-        ],
-        SessionStart: [
-          ...(existingHooks?.SessionStart ?? [])
-            .filter((h) => !isPindexEntry(h)),
-          { ...sessionStartEntry(), _pindex: HOOK_MARKER },
-        ],
-      },
-    };
-    writeFileSync(settingsPath, JSON.stringify(merged, null, 2) + '\n', 'utf-8');
-    return 'added';
-  } else {
-    const config = {
-      hooks: {
-        PreToolUse: [{ ...PINDEX_HOOKS.hooks.PreToolUse[0], _pindex: HOOK_MARKER }],
-        SessionStart: [{ ...sessionStartEntry(), _pindex: HOOK_MARKER }],
-      },
-    };
-    writeFileSync(settingsPath, JSON.stringify(config, null, 2) + '\n', 'utf-8');
-    return 'created';
-  }
+  return shared === null ? 'created' : 'added';
 }
 
 // ─── .gitignore injection ──────────────────────────────────────────────────
@@ -334,31 +352,31 @@ export function removeClaudeMdSection(projectRoot: string): 'removed' | 'not_fou
 }
 
 /**
- * Removes PindeX hooks (PreToolUse + SessionStart) from .claude/settings.json (if present).
- * Returns 'removed' | 'not_found' | 'skipped' (file didn't exist).
+ * Removes PindeX hooks from `.claude/settings.json` (PreToolUse, legacy SessionStart) and
+ * `.claude/settings.local.json` (SessionStart). User entries are kept; a settings.local.json
+ * left empty is deleted. Returns 'removed' | 'not_found' | 'skipped' (neither file exists).
  */
 export function removeClaudeSettings(projectRoot: string): 'removed' | 'not_found' | 'skipped' {
-  const settingsPath = join(projectRoot, '.claude', 'settings.json');
-  if (!existsSync(settingsPath)) return 'skipped';
-  const existing = readSettings(settingsPath);
-  const hooks = existing.hooks as Record<string, unknown[]> | undefined;
-  if (![...(hooks?.PreToolUse ?? []), ...(hooks?.SessionStart ?? [])].some(isPindexEntry)) return 'not_found';
-  const filteredPre = (hooks?.PreToolUse ?? []).filter(
-    (h) => !isPindexEntry(h),
-  );
-  const filteredSession = (hooks?.SessionStart ?? []).filter(
-    (h) => !isPindexEntry(h),
-  );
-  const updated = {
-    ...existing,
-    hooks: { ...hooks, PreToolUse: filteredPre, SessionStart: filteredSession },
-  };
-  const hooksObj = updated.hooks as Record<string, unknown[]>;
-  // Remove empty arrays to keep settings.json clean
-  if (filteredPre.length === 0) delete hooksObj.PreToolUse;
-  if (filteredSession.length === 0) delete hooksObj.SessionStart;
-  if (Object.keys(hooksObj).length === 0) delete (updated as Record<string, unknown>).hooks;
-  writeFileSync(settingsPath, JSON.stringify(updated, null, 2) + '\n', 'utf-8');
+  const sharedPath = join(projectRoot, '.claude', 'settings.json');
+  const localPath = join(projectRoot, '.claude', 'settings.local.json');
+  const shared = readSettingsIfExists(sharedPath);
+  const local = readSettingsIfExists(localPath);
+  if (shared === null && local === null) return 'skipped';
+
+  const hasOurs = (s: Settings | null) =>
+    [...hookEntries(s, 'PreToolUse'), ...hookEntries(s, 'SessionStart')].some(isPindexEntry);
+  const sharedHasOurs = hasOurs(shared);
+  const localHasOurs = hasOurs(local);
+  if (!sharedHasOurs && !localHasOurs) return 'not_found';
+
+  const strip = (s: Settings) =>
+    withPindexHook(withPindexHook(s, 'PreToolUse', null), 'SessionStart', null);
+  if (shared && sharedHasOurs) writeSettings(sharedPath, strip(shared));
+  if (local && localHasOurs) {
+    const next = strip(local);
+    if (Object.keys(next).length === 0) unlinkSync(localPath);
+    else writeSettings(localPath, next);
+  }
   return 'removed';
 }
 

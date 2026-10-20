@@ -63,9 +63,11 @@ export class TokenLogger {
     this.emitter?.emit('token_event', event);
   }
 
-  /** Switches the session that subsequent log() calls are attributed to. */
+  /** Switches the session that subsequent log() calls are attributed to; totals restart at zero. */
   setSessionId(id: string): void {
     this.sessionId = id;
+    this.cumulativeActual = 0;
+    this.cumulativeSavings = 0;
   }
 
   getCurrentSessionId(): string {

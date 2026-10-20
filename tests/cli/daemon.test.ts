@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { tmpdir } from 'node:os';
-import { mkdirSync, rmSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdirSync, rmSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 
@@ -150,6 +150,25 @@ describe('daemon (TST-12)', () => {
 
     expect(existsSync(dir)).toBe(true);
     expect(existsSync(join(dir, 'daemon.pid'))).toBe(true);
+  });
+
+  it('removePidFile with expectedPid removes the file when it holds that pid', async () => {
+    const { writePidFile, removePidFile } = await import('../../src/cli/daemon.js');
+    const { getProjectsDir } = await import('../../src/cli/project-detector.js');
+    writePidFile(process.pid, HASH);
+    const pidFile = join(getProjectsDir(), HASH, 'daemon.pid');
+    removePidFile(HASH, process.pid);
+    expect(existsSync(pidFile)).toBe(false);
+  });
+
+  it('removePidFile with expectedPid keeps a PID file another session overwrote', async () => {
+    const { writePidFile, removePidFile } = await import('../../src/cli/daemon.js');
+    const { getProjectsDir } = await import('../../src/cli/project-detector.js');
+    writePidFile(process.pid + 1, HASH); // newer session took over
+    const pidFile = join(getProjectsDir(), HASH, 'daemon.pid');
+    removePidFile(HASH, process.pid);
+    expect(existsSync(pidFile)).toBe(true);
+    expect(readFileSync(pidFile, 'utf-8').trim()).toBe(String(process.pid + 1));
   });
 
   it('removePidFile is a no-op when the PID file is absent (existsSync false branch)', async () => {

@@ -58,10 +58,15 @@ export function writePidFile(pid: number, projectHash?: string): void {
   writeFileSecure(getPidFilePath(projectHash), String(pid));
 }
 
-/** Removes the PID file. */
-export function removePidFile(projectHash?: string): void {
+/**
+ * Removes the PID file. With `expectedPid` it is removed only if it still holds that PID,
+ * so a shutting-down server never deletes the PID file a newer session has written.
+ */
+export function removePidFile(projectHash?: string, expectedPid?: number): void {
   const pidFile = getPidFilePath(projectHash);
-  if (existsSync(pidFile)) unlinkSync(pidFile);
+  if (!existsSync(pidFile)) return;
+  if (expectedPid !== undefined && readFileSync(pidFile, 'utf-8').trim() !== String(expectedPid)) return;
+  unlinkSync(pidFile);
 }
 
 /** Stops the daemon for the given project gracefully. */

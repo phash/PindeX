@@ -142,7 +142,7 @@ async function main(): Promise<void> {
   const shutdown = async (): Promise<void> => {
     if (shuttingDown) return;
     shuttingDown = true;
-    try { removePidFile(projectHash); } catch { /* best effort */ }
+    try { removePidFile(projectHash, process.pid); } catch { /* best effort */ }
     try {
       if (watcher) await watcher.stop();
       await indexer.closePool();

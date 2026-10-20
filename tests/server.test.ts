@@ -457,8 +457,9 @@ describe('createMcpServer – error & edge-case paths', () => {
       projectRoot: testDir,
       baselineMode: true,
     });
-    const res = await callTool(server, 'search_symbols', { query: 'greet' });
-    expect(res.error).toBe('Index disabled for baseline measurement');
+    const raw = await callRaw(server, 'search_symbols', { query: 'greet' });
+    expect(JSON.parse(raw.content[0].text).error).toBe('Index disabled for baseline measurement');
+    expect(raw.isError).toBe(true);
   });
 
   it('baselineMode still allows get_token_stats and start_comparison', async () => {

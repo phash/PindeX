@@ -45,4 +45,36 @@ describe('import edges are rebuilt on single-file reindex (real parser)', () => 
     await indexer.indexFile('src/a.ts', true);
     expect(edgeCount()).toBe(1);
   });
+
+  it('resolveImportersOf links an earlier unresolved import once the target file is added', async () => {
+    writeFileSync(join(root, 'src', 'a.ts'), `import { c } from './c.js';\nexport const a = c;\n`);
+    const indexer = new Indexer({ db, projectRoot: root });
+    await indexer.indexAll();
+    await indexer.resolveDependencies();
+    expect(edgeCount()).toBe(0); // c.ts does not exist yet
+
+    writeFileSync(join(root, 'src', 'c.ts'), `export const c = 1;\n`);
+    expect((await indexer.indexFile('src/c.ts')).status).toBe('indexed');
+    indexer.resolveImportersOf('src/c.ts');
+
+    const edge = db.prepare(
+      `SELECT f1.path AS a, f2.path AS b FROM dependencies d
+       JOIN files f1 ON d.from_file = f1.id JOIN files f2 ON d.to_file = f2.id`,
+    ).all() as Array<{ a: string; b: string }>;
+    expect(edge).toEqual([{ a: 'src/a.ts', b: 'src/c.ts' }]);
+  });
+
+  it('resolveImportersOf ignores importers that were forgotten (deleted)', async () => {
+    writeFileSync(join(root, 'src', 'a.ts'), `import { c } from './c.js';\nexport const a = c;\n`);
+    const indexer = new Indexer({ db, projectRoot: root });
+    await indexer.indexAll();
+    await indexer.resolveDependencies();
+    indexer.forgetFile('src/a.ts');
+
+    writeFileSync(join(root, 'src', 'c.ts'), `export const c = 1;\n`);
+    await indexer.indexFile('src/c.ts');
+    indexer.resolveImportersOf('src/c.ts');
+    expect(edgeCount()).toBe(0);
+  });
 });
+

@@ -188,6 +188,37 @@ describe('writeMcpJson / removeMcpJson merge behavior', () => {
     expect(config.mcpServers).toEqual({ serena });
   });
 
+  it('re-running keeps user-set env keys but overwrites the pindex-managed ones', () => {
+    const path = join(tempDir, '.mcp.json');
+    writeFileSync(path, JSON.stringify({
+      mcpServers: {
+        pindex: {
+          command: 'old-node',
+          args: ['old.js'],
+          env: {
+            LANGUAGES: 'typescript,python',
+            PINDEX_LSP: 'true',
+            PROJECT_ROOT: '/stale/root',
+            INDEX_PATH: '/stale/index.db',
+            MONITORING_PORT: '1',
+            FEDERATION_REPOS: '/stale/fed',
+          },
+        },
+      },
+    }), 'utf-8');
+
+    writeMcpJson(tempDir, entry());
+    const env = JSON.parse(readFileSync(path, 'utf-8')).mcpServers.pindex.env;
+    expect(env.LANGUAGES).toBe('typescript,python');
+    expect(env.PINDEX_LSP).toBe('true');
+    expect(env.PROJECT_ROOT).toBe(tempDir);
+    expect(env.INDEX_PATH).toBe(join(tempDir, '.pindex', 'index.db'));
+    expect(env.MONITORING_PORT).toBe('7843');
+    // no federated repos any more → managed key is dropped, not kept stale
+    expect(env.FEDERATION_REPOS).toBeUndefined();
+    expect(JSON.parse(readFileSync(path, 'utf-8')).mcpServers.pindex.command).toBe(process.execPath);
+  });
+
   it('does not overwrite an invalid .mcp.json and throws a clear error', () => {
     const path = join(tempDir, '.mcp.json');
     writeFileSync(path, '{ not json', 'utf-8');
@@ -329,8 +360,13 @@ describe('injectClaudeSettings', () => {
     const config = JSON.parse(readFileSync(settingsPath, 'utf-8'));
     expect(config.hooks).toBeDefined();
     expect(config.hooks.PreToolUse).toHaveLength(1);
-    expect(config.hooks.SessionStart).toHaveLength(1);
     expect(config.hooks.PreToolUse[0]._pindex).toBe('pindex-hook');
+    // SessionStart holds machine-specific absolute paths → local, not shared settings
+    expect(config.hooks.SessionStart).toBeUndefined();
+    const local = JSON.parse(readFileSync(join(tempDir, '.claude', 'settings.local.json'), 'utf-8'));
+    expect(local.hooks.SessionStart).toHaveLength(1);
+    expect(local.hooks.SessionStart[0]._pindex).toBe('pindex-hook');
+    expect(local.hooks.PreToolUse).toBeUndefined();
   });
 
   it('merges hooks into existing settings.json', () => {
@@ -349,7 +385,9 @@ describe('injectClaudeSettings', () => {
     expect(config.theme).toBe('dark');
     expect(config.hooks.CustomHook).toBeDefined();
     expect(config.hooks.PreToolUse).toBeDefined();
-    expect(config.hooks.SessionStart).toBeDefined();
+    expect(config.hooks.SessionStart).toBeUndefined();
+    const local = JSON.parse(readFileSync(join(claudeDir, 'settings.local.json'), 'utf-8'));
+    expect(local.hooks.SessionStart).toHaveLength(1);
   });
 
   it('skips if marker is already present (idempotent)', () => {
@@ -358,9 +396,16 @@ describe('injectClaudeSettings', () => {
     writeFileSync(
       join(claudeDir, 'settings.json'),
       JSON.stringify({
+        hooks: { PreToolUse: [{ _pindex: 'pindex-hook', matcher: 'Read|Glob|Grep' }] },
+      }),
+      'utf-8',
+    );
+    const { command, args } = nodeScriptCommand('cli/index.js');
+    writeFileSync(
+      join(claudeDir, 'settings.local.json'),
+      JSON.stringify({
         hooks: {
-          PreToolUse: [{ _pindex: 'pindex-hook', matcher: 'Read|Glob|Grep' }],
-          SessionStart: [{ _pindex: 'pindex-hook' }],
+          SessionStart: [{ _pindex: 'pindex-hook', hooks: [{ type: 'command', command: `"${command}" "${args[0]}" gui --no-open` }] }],
         },
       }),
       'utf-8',
@@ -393,7 +438,7 @@ describe('injectClaudeSettings', () => {
 
   it('SessionStart hook is quiet (--no-open) with absolute node + script', () => {
     injectClaudeSettings(tempDir);
-    const config = JSON.parse(readFileSync(join(tempDir, '.claude', 'settings.json'), 'utf-8'));
+    const config = JSON.parse(readFileSync(join(tempDir, '.claude', 'settings.local.json'), 'utf-8'));
     const cmd: string = config.hooks.SessionStart[0].hooks[0].command;
     expect(cmd).toContain('--no-open');
     expect(cmd).toContain(` gui --no-open`);
@@ -418,14 +463,75 @@ describe('injectClaudeSettings', () => {
       'utf-8',
     );
     expect(injectClaudeSettings(tempDir)).toBe('added');
+    // the user's own SessionStart entry stays in the shared file; ours is gone from it
     const config = JSON.parse(readFileSync(join(claudeDir, 'settings.json'), 'utf-8'));
-    const cmds = config.hooks.SessionStart.map((e: any) => e.hooks[0].command);
-    expect(cmds).toContain('echo mine');
-    expect(cmds.filter((c: string) => c.includes('gui'))).toHaveLength(1);
-    expect(cmds.some((c: string) => c === 'pindex gui')).toBe(false);
-    expect(cmds.some((c: string) => c.includes('--no-open'))).toBe(true);
+    const sharedCmds = config.hooks.SessionStart.map((e: any) => e.hooks[0].command);
+    expect(sharedCmds).toEqual(['echo mine']);
+    // ours moved to settings.local.json in its current (absolute, --no-open) form
+    const local = JSON.parse(readFileSync(join(claudeDir, 'settings.local.json'), 'utf-8'));
+    const localCmds = local.hooks.SessionStart.map((e: any) => e.hooks[0].command);
+    expect(localCmds).toHaveLength(1);
+    expect(localCmds[0]).toContain('--no-open');
     // second run is a no-op
     expect(injectClaudeSettings(tempDir)).toBe('skipped');
+  });
+
+  it('moves an absolute-path pindex SessionStart entry out of settings.json', () => {
+    const claudeDir = join(tempDir, '.claude');
+    mkdirSync(claudeDir, { recursive: true });
+    const { command, args } = nodeScriptCommand('cli/index.js');
+    const abs = `"${command}" "${args[0]}" gui --no-open`;
+    writeFileSync(
+      join(claudeDir, 'settings.json'),
+      JSON.stringify({
+        hooks: {
+          PreToolUse: [{ _pindex: 'pindex-hook', matcher: 'Read|Glob|Grep', hooks: [] }],
+          SessionStart: [{ _pindex: 'pindex-hook', hooks: [{ type: 'command', command: abs }] }],
+        },
+      }),
+      'utf-8',
+    );
+    expect(injectClaudeSettings(tempDir)).toBe('added');
+    const config = JSON.parse(readFileSync(join(claudeDir, 'settings.json'), 'utf-8'));
+    expect(config.hooks.SessionStart).toBeUndefined();
+    expect(config.hooks.PreToolUse).toHaveLength(1);
+    const local = JSON.parse(readFileSync(join(claudeDir, 'settings.local.json'), 'utf-8'));
+    expect(local.hooks.SessionStart[0].hooks[0].command).toBe(abs);
+  });
+
+  it('user entries in settings.local.json survive inject + remove; empty local file is deleted', () => {
+    const claudeDir = join(tempDir, '.claude');
+    mkdirSync(claudeDir, { recursive: true });
+    const mine = { hooks: [{ type: 'command', command: 'echo local-mine' }] };
+    const localPath = join(claudeDir, 'settings.local.json');
+    writeFileSync(localPath, JSON.stringify({ permissions: { allow: ['Bash(ls)'] }, hooks: { SessionStart: [mine] } }), 'utf-8');
+
+    injectClaudeSettings(tempDir);
+    let local = JSON.parse(readFileSync(localPath, 'utf-8'));
+    expect(local.permissions).toEqual({ allow: ['Bash(ls)'] });
+    expect(local.hooks.SessionStart).toHaveLength(2);
+    expect(local.hooks.SessionStart[0]).toEqual(mine);
+
+    expect(removeClaudeSettings(tempDir)).toBe('removed');
+    local = JSON.parse(readFileSync(localPath, 'utf-8'));
+    expect(local).toEqual({ permissions: { allow: ['Bash(ls)'] }, hooks: { SessionStart: [mine] } });
+
+    // without user content the local file disappears entirely on remove
+    rmSync(localPath);
+    injectClaudeSettings(tempDir);
+    expect(existsSync(localPath)).toBe(true);
+    removeClaudeSettings(tempDir);
+    expect(existsSync(localPath)).toBe(false);
+  });
+
+  it('malformed settings.local.json blocks inject without touching either file', () => {
+    const claudeDir = join(tempDir, '.claude');
+    mkdirSync(claudeDir, { recursive: true });
+    const localPath = join(claudeDir, 'settings.local.json');
+    writeFileSync(localPath, '{ broken', 'utf-8');
+    expect(() => injectClaudeSettings(tempDir)).toThrow(/settings\.local\.json is not valid JSON/);
+    expect(readFileSync(localPath, 'utf-8')).toBe('{ broken');
+    expect(existsSync(join(claudeDir, 'settings.json'))).toBe(false);
   });
 });
 
@@ -623,6 +729,30 @@ describe('removeClaudeSettings', () => {
     // SessionStart should be cleaned since it's now empty
     expect(config.hooks.SessionStart).toBeUndefined();
   });
+
+  it('cleans pindex hooks from both settings.json and settings.local.json', () => {
+    injectClaudeSettings(tempDir);
+    const sharedPath = join(tempDir, '.claude', 'settings.json');
+    const localPath = join(tempDir, '.claude', 'settings.local.json');
+    expect(existsSync(localPath)).toBe(true);
+
+    expect(removeClaudeSettings(tempDir)).toBe('removed');
+    expect(JSON.parse(readFileSync(sharedPath, 'utf-8')).hooks).toBeUndefined();
+    expect(existsSync(localPath)).toBe(false);
+    expect(removeClaudeSettings(tempDir)).toBe('not_found');
+  });
+
+  it('removes a pindex entry found only in settings.local.json', () => {
+    const claudeDir = join(tempDir, '.claude');
+    mkdirSync(claudeDir, { recursive: true });
+    writeFileSync(
+      join(claudeDir, 'settings.local.json'),
+      JSON.stringify({ hooks: { SessionStart: [{ _pindex: 'pindex-hook' }] } }),
+      'utf-8',
+    );
+    expect(removeClaudeSettings(tempDir)).toBe('removed');
+    expect(existsSync(join(claudeDir, 'settings.local.json'))).toBe(false);
+  });
 });
 
 describe('removeMcpJson', () => {
@@ -689,6 +819,7 @@ describe('initProject', () => {
     // side-effect files
     expect(existsSync(join(tempDir, 'CLAUDE.md'))).toBe(true);
     expect(existsSync(join(tempDir, '.claude', 'settings.json'))).toBe(true);
+    expect(existsSync(join(tempDir, '.claude', 'settings.local.json'))).toBe(true);
     expect(existsSync(join(tempDir, '.gitignore'))).toBe(true);
 
     // banner printed

@@ -115,4 +115,19 @@ describe('TokenLogger', () => {
     expect(events[0].query).toBe('myQuery');
     expect(events[0].tool).toBe('find_usages');
   });
+
+  it('setSessionId resets the cumulative totals for the new session', () => {
+    insertTestSession(db, 'sess-456', 'baseline', 'Second');
+    const logger = new TokenLogger({ db, sessionId: 'sess-123', emitter });
+    const events: Array<{ session_id: string; cumulative_actual: number; cumulative_savings: number }> = [];
+    emitter.on('token_event', (e) => events.push(e));
+
+    logger.log({ toolName: 'search_symbols', tokensUsed: 50, tokensWithoutIndex: 500 });
+    logger.setSessionId('sess-456');
+    logger.log({ toolName: 'get_symbol', tokensUsed: 80, tokensWithoutIndex: 100 });
+
+    expect(events[1].session_id).toBe('sess-456');
+    expect(events[1].cumulative_actual).toBe(80);
+    expect(events[1].cumulative_savings).toBe(20);
+  });
 });

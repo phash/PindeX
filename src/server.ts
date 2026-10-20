@@ -336,6 +336,7 @@ export function createMcpServer(
     if (state.baselineMode && name !== 'get_token_stats' && name !== 'start_comparison') {
       return {
         content: [{ type: 'text', text: JSON.stringify({ error: 'Index disabled for baseline measurement' }) }],
+        isError: true,
       };
     }
 
@@ -418,6 +419,7 @@ export function createMcpServer(
           const cmp = startComparison(db, cmpInput, monitoringPort);
           result = cmp;
           tokenLogger?.setSessionId(cmp.session_id);
+          // The observer intentionally stays on the original session: memory belongs to the real session.
           state.baselineMode = cmpInput.mode === 'baseline';
           break;
         }

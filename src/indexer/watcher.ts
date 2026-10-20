@@ -99,9 +99,14 @@ export class FileWatcher extends EventEmitter {
 
     if (type === 'add' || type === 'change') {
       try {
-        const result = isDocumentLanguage(detectLanguage(path))
+        const isDoc = isDocumentLanguage(detectLanguage(path));
+        const result = isDoc
           ? await this.indexer.indexDocument(path, false)
           : await this.indexer.indexFile(path, false);
+        // A new file may satisfy imports of already indexed files that failed to resolve before.
+        if (type === 'add' && !isDoc && result.status === 'indexed') {
+          this.indexer.resolveImportersOf(path);
+        }
         this.emit('indexed', path);
         if (this.observer && 'diff' in result && result.diff) {
           this.observer.onFileDiff(result.diff);
@@ -112,6 +117,7 @@ export class FileWatcher extends EventEmitter {
     } else if (type === 'unlink') {
       try {
         deleteFile(this.options.db, path);
+        this.indexer.forgetFile(path);
         this.emit('removed', path);
       } catch (err) {
         this.emit('error', err);

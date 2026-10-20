@@ -82,6 +82,15 @@ export function findProjectRoot(startDir: string): string {
 /** Default port of the aggregated dashboard (`pindex gui`); outside the per-project range (>= 7842). */
 export const GUI_DEFAULT_PORT = 7841;
 
+/** GUI fallback ports when the preferred one is busy: below 7841, so they never collide with
+ *  per-project monitoring ports (7842+). Tried in descending order. */
+export const GUI_FALLBACK_PORTS = [7840, 7839, 7838, 7837, 7836] as const;
+
+/** Ports the GUI tries in order: the preferred port, then the fallback range (without duplicates). */
+export function guiPortCandidates(preferred: number): number[] {
+  return [preferred, ...GUI_FALLBACK_PORTS.filter((p) => p !== preferred)];
+}
+
 /** A deterministic monitoring port for a project, stored in registry to stay stable. Never GUI_DEFAULT_PORT. */
 export function computeDefaultPort(hash: string): number {
   return 7842 + (parseInt(hash.slice(0, 4), 16) % 2000);
