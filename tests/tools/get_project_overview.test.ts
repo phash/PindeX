@@ -235,6 +235,9 @@ describe('getProjectOverview — index_recommendation (TST-14)', () => {
       expect(r.hubs!.length).toBeLessThanOrEqual(10);
       expect(r.communities!.length).toBeGreaterThan(0);
       expect(r.communities![0].size).toBeGreaterThan(1);
+      const all = r.communities!.flatMap((c) => c.topFiles);
+      expect(all).toContain('src/lib/util.ts');
+      expect(r.communities!.some((c) => c.label.startsWith('src'))).toBe(true);
     });
 
     it('omits hubs/communities when the project has no edges', () => {

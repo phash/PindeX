@@ -30,7 +30,8 @@ export function rankHubs(edges: CallEdge[], limit: number): Hub[] {
 /**
  * Deterministic label propagation (synchronous updates). Every file starts with its own
  * label (index in path-sorted order); per sweep each file adopts the neighbour label with the
- * highest summed edge weight, ties to the smallest label. Isolated files are dropped.
+ * highest summed edge weight, ties to the smallest label, but only if that label is smaller
+ * than its current one (monotone, guarantees convergence). Isolated files are dropped.
  * Returned ids are renumbered 0..n-1 by first appearance in path-sorted order.
  */
 export function detectCommunities(
@@ -66,7 +67,8 @@ export function detectCommunities(
           bestW = w;
         }
       }
-      if (best !== labels[i]) {
+      // Monotone guard: labels only ever decrease, so sweeps always converge.
+      if (best < labels[i]) {
         next[i] = best;
         changed = true;
       }

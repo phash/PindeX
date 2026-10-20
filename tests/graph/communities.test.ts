@@ -56,6 +56,28 @@ describe('detectCommunities', () => {
     const m = detectCommunities(['a', 'b', 'lonely'], [['a', 'b', 1]]);
     expect(m.has('lonely')).toBe(false);
     expect(m.size).toBe(2);
+    expect(m.get('a')).toBe(m.get('b'));
+  });
+
+  const distinct = (m: Map<string, number>): number => new Set(m.values()).size;
+
+  it('keeps a connected pair in one community', () => {
+    expect(distinct(detectCommunities(['a', 'b'], [['a', 'b', 1]]))).toBe(1);
+  });
+
+  it('keeps a star in one community', () => {
+    const m = detectCommunities(['a', 'b', 'c', 'd'], [['a', 'b', 1], ['a', 'c', 1], ['a', 'd', 1]]);
+    expect(distinct(m)).toBe(1);
+  });
+
+  it('keeps a path in one community', () => {
+    const m = detectCommunities(['a', 'b', 'c', 'd'], [['a', 'b', 1], ['b', 'c', 1], ['c', 'd', 1]]);
+    expect(distinct(m)).toBe(1);
+  });
+
+  it('keeps a 4-cycle in one community', () => {
+    const m = detectCommunities(['a', 'b', 'c', 'd'], [['a', 'b', 1], ['b', 'c', 1], ['c', 'd', 1], ['d', 'a', 1]]);
+    expect(distinct(m)).toBe(1);
   });
 });
 
