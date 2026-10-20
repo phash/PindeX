@@ -267,7 +267,7 @@ The 5 write/session tools (`reindex`, `save_context`, `get_session_memory`, `sta
 
 **Legacy env var:**
 
-The `FEDERATION_REPOS` env var (colon-separated paths) is still supported for backward compatibility and is what the CLI writes to `.mcp.json`:
+The `FEDERATION_REPOS` env var (paths separated by the OS path delimiter — `:` on macOS/Linux, `;` on Windows — or a JSON array) is still supported for backward compatibility and is what the CLI writes to `.mcp.json`:
 
 ```bash
 FEDERATION_REPOS=/path/to/repo-a:/path/to/repo-b pindex-server
@@ -554,7 +554,7 @@ These are set automatically in the generated `.mcp.json` — you rarely need to 
 | `PINDEX_PARSE_WORKERS` | _(empty)_ | Parse workers (0=sync, empty=auto) |
 | `PINDEX_BIND_HOST` | `127.0.0.1` | Bind host for monitoring/GUI (default loopback) |
 | `PINDEX_LSP` | `true` | opt-in LSP parsing for Python (set to `false` to force regex) |
-| `FEDERATION_REPOS` | _(empty)_ | Colon-separated absolute paths to linked repositories |
+| `FEDERATION_REPOS` | _(empty)_ | Absolute paths separated by the OS path delimiter (`:` posix, `;` Windows) or a JSON array to linked repositories |
 | `DOCUMENT_PATTERNS` | `**/*.md,**/*.markdown,**/*.yaml,**/*.yml,**/*.txt` | Glob patterns for document files to index alongside code |
 | `OBSERVATION_RETENTION` | `permanent` | How long passive session observations are kept: `permanent`, `session`, or `Nd` (e.g. `30d`) |
 
@@ -869,7 +869,7 @@ src/
 │
 └── cli/
     ├── index.ts              # CLI router
-    ├── init.ts               # initProject(), writeMcpJson(), addFederatedRepo()
+    ├── init.ts               # initProject(), writeMcpJson()
     ├── setup.ts              # One-time setup (pindex setup)
     ├── daemon.ts             # Per-project PID-file daemon management
     └── project-detector.ts   # getPindexHome(), findProjectRoot(), GlobalRegistry

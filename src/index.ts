@@ -10,6 +10,7 @@ import { createMcpServer } from './server.js';
 import { createSession } from './db/queries.js';
 import { getProjectIndexPath, hashProjectPath, GlobalRegistry } from './cli/project-detector.js';
 import { assignName } from './federation/registry-name.js';
+import { parseFederationRepos, resolveFederatedName } from './federation/env.js';
 import { SessionObserver } from './memory/observer.js';
 import { applyObservationRetention } from './memory/retention.js';
 import { writePidFile, removePidFile } from './cli/daemon.js';
@@ -33,11 +34,8 @@ const SUMMARIZER_API_KEY = process.env.SUMMARIZER_API_KEY ?? '';
 const SUMMARIZER_BASE_URL = process.env.SUMMARIZER_BASE_URL ?? 'https://api.openai.com/v1';
 const SUMMARIZER_MODEL = process.env.SUMMARIZER_MODEL ?? 'gpt-4o-mini';
 
-// Federated repos: colon- or comma-separated absolute paths
-const FEDERATION_REPOS: string[] = (process.env.FEDERATION_REPOS ?? '')
-  .split(/[:，,]/)
-  .map((p) => p.trim())
-  .filter(Boolean);
+// Federated repos: absolute paths separated by the OS path delimiter, or a JSON array
+const FEDERATION_REPOS: string[] = parseFederationRepos(process.env.FEDERATION_REPOS ?? '');
 
 async function main(): Promise<void> {
   // 1. Open / create the SQLite database
@@ -59,14 +57,7 @@ async function main(): Promise<void> {
     const dbPath = getProjectIndexPath(repoPath);
     try {
       const fedDb = openDatabase(dbPath);
-      const entry = allEntries.find((e) => e.path === repoPath);
-      let name = entry?.name;
-      if (!name) {
-        name = assignName(repoPath, usedNames);
-        process.stderr.write(
-          `[pindex] federated repo '${repoPath}' has no persisted name; using auto-generated '${name}'. Run 'pindex federate add ${repoPath}' to persist.\n`,
-        );
-      }
+      const name = resolveFederatedName(repoPath, primaryEntry, allEntries, usedNames);
       usedNames.add(name);
       return { name, path: repoPath, db: fedDb };
     } catch {

@@ -8,6 +8,7 @@ import {
 } from './project-detector.js';
 import { readMcpJson, mergeMcpServer, type McpServerEntry } from './mcp-json.js';
 import { assignName } from '../federation/registry-name.js';
+import { parseFederationRepos, formatFederationRepos } from '../federation/env.js';
 
 function readPindexServer(projectRoot: string): McpServerEntry {
   const mcp = readMcpJson(projectRoot);
@@ -21,14 +22,6 @@ function readPindexServer(projectRoot: string): McpServerEntry {
   return server;
 }
 
-function parseFederationEnvList(value: string | undefined): string[] {
-  if (!value) return [];
-  return value
-    .split(/[:,]/)
-    .map((s) => s.trim())
-    .filter(Boolean);
-}
-
 export async function federateAdd(
   cwd: string,
   targetPath: string,
@@ -39,6 +32,10 @@ export async function federateAdd(
 
   if (!existsSync(targetRoot)) {
     throw new Error(`Target path does not exist: ${targetRoot}`);
+  }
+
+  if (targetRoot === projectRoot) {
+    throw new Error('Cannot federate the current project with itself.');
   }
 
   const registry = new GlobalRegistry();
@@ -86,9 +83,9 @@ export async function federateAdd(
 
   const server = readPindexServer(projectRoot);
   const env = server.env!;
-  const list = parseFederationEnvList(env.FEDERATION_REPOS);
+  const list = parseFederationRepos(env.FEDERATION_REPOS);
   if (!list.includes(targetRoot)) list.push(targetRoot);
-  env.FEDERATION_REPOS = list.join(':');
+  env.FEDERATION_REPOS = formatFederationRepos(list);
   mergeMcpServer(projectRoot, 'pindex', server);
 
   console.log(
@@ -106,7 +103,7 @@ export async function federateRemove(cwd: string, nameOrPath: string): Promise<v
 
   const existingFederated = (me.federatedRepos ?? []) as FederatedRegistryEntry[];
   const match = existingFederated.find(
-    (f) => f.name === nameOrPath || f.path === nameOrPath,
+    (f) => f.name === nameOrPath || f.path === nameOrPath || f.path === resolve(nameOrPath),
   );
   if (!match) {
     const known = existingFederated.map((f) => f.name).join(', ');
@@ -123,9 +120,9 @@ export async function federateRemove(cwd: string, nameOrPath: string): Promise<v
 
   const server = readPindexServer(projectRoot);
   const env = server.env!;
-  const list = parseFederationEnvList(env.FEDERATION_REPOS).filter((p) => p !== match.path);
+  const list = parseFederationRepos(env.FEDERATION_REPOS).filter((p) => p !== match.path);
   if (list.length > 0) {
-    env.FEDERATION_REPOS = list.join(':');
+    env.FEDERATION_REPOS = formatFederationRepos(list);
   } else {
     delete env.FEDERATION_REPOS;
   }

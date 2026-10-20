@@ -17,7 +17,7 @@ import {
   findProjectRoot,
   hashProjectPath,
 } from './project-detector.js';
-import { initProject, addFederatedRepo, removeFederatedRepo, injectClaudeMdSection, injectClaudeSettings, removeClaudeMdSection, removeClaudeSettings, removeMcpJson, writeMcpJson, injectGitignore } from './init.js';
+import { initProject, injectClaudeMdSection, injectClaudeSettings, removeClaudeMdSection, removeClaudeSettings, removeMcpJson, writeMcpJson, injectGitignore } from './init.js';
 import { federateAdd, federateRemove, federateList } from './federate.js';
 import Database from 'better-sqlite3';
 
@@ -174,7 +174,7 @@ async function main(): Promise<void> {
         console.error('Usage: pindex add <path-to-repo>');
         process.exit(1);
       }
-      await addFederatedRepo(process.cwd(), args[0]);
+      await federateAdd(process.cwd(), args[0], {});
       break;
     }
 
@@ -197,7 +197,7 @@ async function main(): Promise<void> {
         console.log('  Index data (.pindex/ in project folder) kept — delete manually if desired.\n');
       } else {
         // Remove a federated repo link
-        await removeFederatedRepo(process.cwd(), args[0]);
+        await federateRemove(process.cwd(), args[0]);
       }
       break;
     }

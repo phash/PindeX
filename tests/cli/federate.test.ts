@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { parseFederationRepos } from '../../src/federation/env.js';
 import { federateAdd, federateRemove, federateList } from '../../src/cli/federate.js';
 
 describe('pindex federate CLI', () => {
@@ -311,5 +312,42 @@ describe('pindex federate CLI', () => {
       mcpServers: { pindex: { env: { FEDERATION_REPOS?: string } } };
     };
     expect(mcp.mcpServers.pindex.env.FEDERATION_REPOS).toContain(targetDir);
+  });
+
+  it('add keeps foreign servers in .mcp.json and writes the alias', async () => {
+    writeFileSync(
+      join(projectDir, '.mcp.json'),
+      JSON.stringify({ mcpServers: { other: { command: 'x' }, pindex: { env: {} } } }),
+    );
+    await federateAdd(projectDir, targetDir, { name: 'alias' });
+    const mcp = JSON.parse(readFileSync(join(projectDir, '.mcp.json'), 'utf-8')) as {
+      mcpServers: Record<string, unknown>;
+    };
+    expect(mcp.mcpServers.other).toEqual({ command: 'x' });
+    const reg = JSON.parse(readFileSync(join(homeDir, '.pindex', 'registry.json'), 'utf-8')) as {
+      projects: Array<{ path: string; federatedRepos?: Array<{ name: string }> }>;
+    };
+    expect(reg.projects.find((p) => p.path === projectDir)!.federatedRepos![0]!.name).toBe('alias');
+  });
+
+  it('add refuses to federate the current project itself', async () => {
+    await expect(federateAdd(projectDir, projectDir, {})).rejects.toThrow(/itself|current project/i);
+  });
+
+  it('writes FEDERATION_REPOS via formatFederationRepos and appends on a second add', async () => {
+    const third = join(homeDir, 'third');
+    mkdirSync(join(third, '.pindex'), { recursive: true });
+    writeFileSync(join(third, '.mcp.json'), JSON.stringify({ mcpServers: { pindex: { env: {} } } }));
+    const regPath = join(homeDir, '.pindex', 'registry.json');
+    const reg = JSON.parse(readFileSync(regPath, 'utf-8'));
+    reg.projects.push({ hash: 'c', path: third, monitoringPort: 7844, name: 'third', federatedRepos: [] });
+    writeFileSync(regPath, JSON.stringify(reg));
+
+    await federateAdd(projectDir, targetDir, {});
+    await federateAdd(projectDir, third, {});
+    const mcp = JSON.parse(readFileSync(join(projectDir, '.mcp.json'), 'utf-8')) as {
+      mcpServers: { pindex: { env: { FEDERATION_REPOS: string } } };
+    };
+    expect(parseFederationRepos(mcp.mcpServers.pindex.env.FEDERATION_REPOS)).toEqual([targetDir, third]);
   });
 });
