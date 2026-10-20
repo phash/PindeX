@@ -231,8 +231,10 @@ Mehrdeutiger Name ohne `file`:
 
 **Verhalten:**
 - Auflösung je Referenz (erster Treffer gewinnt): (1) Symbol in derselben Datei (`this.x()` nur Methoden) → `EXTRACTED`; (2) per Import (`dependencies.symbol_name`) aus einer Datei, die es definiert → `EXTRACTED`; (3) genau eine Definition projektweit → `INFERRED`; sonst verworfen
+- Member-Aufrufe auf einem anderen Receiver als `this` (`date.format()`) überspringen (1) und (2) — nie `EXTRACTED`, nur (3)
+- `file` darf relativ oder absolut (innerhalb des Repo-Roots) sein
 - `caller` = umschließendes Symbol, `null` auf Modulebene; `project` nur bei mehr als einem Repo
-- Cap: max. 500 Referenzen pro Repo vor der Auflösung
+- Cap: max. 500 Ergebnisse, angewendet nach Auflösung und Filterung auf das Ziel-Symbol (überzählige werden ohne Marker abgeschnitten)
 - Bekannte Grenze: Aliased Imports (`import { a as b }`) — der Aufruf `b()` wird nicht über den Import aufgelöst
 
 ---

@@ -305,6 +305,7 @@ export function replaceSymbolRefs(
   }
 }
 
+/** Refs calling `calleeName`, ordered by path/line. A negative `limit` returns all rows (SQLite `LIMIT -1`). */
 export function getRefsByCallee(
   db: Database.Database,
   calleeName: string,

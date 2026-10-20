@@ -365,7 +365,7 @@ Call sites of a symbol, resolved through the call graph.
 | `symbol` | string | ✓ | Symbol name to look up |
 | `file` | string | | File defining the symbol, to disambiguate same-named definitions |
 
-**Returns:** List of `{ file, line, caller, confidence }` entries (`project` added when federated, max 500 refs per repo). `confidence` is `EXTRACTED` (same file or via import) or `INFERRED` (unique name project-wide). A name defined more than once without `file` returns `{ error: "ambiguous", candidates: [{ file, line, kind }] }`.
+**Returns:** List of `{ file, line, caller, confidence }` entries (`project` added when federated; max 500 results, extra ones are cut without a marker). `confidence` is `EXTRACTED` (same file or via import) or `INFERRED` (unique name project-wide). Member calls on a receiver other than `this` (`date.format()`) are never `EXTRACTED`. `file` may be relative or absolute inside the repo root. A name defined more than once without `file` returns `{ error: "ambiguous", candidates: [{ file, line, kind }] }`.
 
 ---
 

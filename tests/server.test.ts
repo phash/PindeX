@@ -256,7 +256,7 @@ describe('createMcpServer – tools/call dispatch (all tools)', () => {
 
   it('find_usages accepts a file argument', async () => {
     const res = await callTool(server, 'find_usages', { symbol: 'greet', file: './src/app.ts' });
-    expect(res).toHaveLength(1);
+    expect(res).toEqual([{ file: 'src/consumer.ts', line: 3, caller: null, confidence: 'EXTRACTED' }]);
   });
 
   it('get_dependencies returns the import graph', async () => {

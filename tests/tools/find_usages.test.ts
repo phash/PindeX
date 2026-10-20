@@ -160,7 +160,44 @@ describe('findUsages — disambiguation', () => {
     expect(result).toEqual([{ file: 'src/d.ts', line: 21, caller: null, confidence: 'EXTRACTED' }]);
   });
 
+  it('absolute file inside the repo root is relativized', () => {
+    // primary path is '' in test sets; use a federated repo with a real root instead
+    const fed = makeFederatedTestRepoSet({ db: createTestDb(), name: 'other' }, [{ db, name: 'main', path: '/proj' }]);
+    const result = findUsages(fed, { symbol: 'format', file: '/proj/src/a.ts', repos: ['main'] });
+    expect(result).toEqual([{ file: 'src/c.ts', line: 11, caller: null, confidence: 'EXTRACTED', project: 'main' }]);
+  });
+
+  it('absolute file outside the repo root is rejected', () => {
+    const fed = makeFederatedTestRepoSet({ db: createTestDb(), name: 'other' }, [{ db, name: 'main', path: '/proj' }]);
+    expect(findUsages(fed, { symbol: 'format', file: '/elsewhere/src/a.ts', repos: ['main'] })).toEqual([]);
+  });
+
   it('file that defines no such symbol yields no usages', () => {
     expect(findUsages(makeTestRepoSet(db), { symbol: 'format', file: 'src/c.ts' })).toEqual([]);
+  });
+});
+
+describe('findUsages — high-volume names', () => {
+  it('does not lose target call sites behind many refs to a same-named decoy', () => {
+    const db = createTestDb();
+    const decoy = insertTestFile(db, { path: 'src/aaa/decoy.ts' });
+    const target = insertTestFile(db, { path: 'src/zzz/target.ts', hash: 't' });
+    const caller = insertTestFile(db, { path: 'src/zzz/caller.ts', hash: 'c' });
+    insertTestSymbol(db, { fileId: decoy, name: 'run' });
+    insertTestSymbol(db, { fileId: target, name: 'run' });
+    for (let i = 0; i < 600; i++) insertTestRef(db, decoy, 'run', i + 1);
+    insertTestDependency(db, caller, target, 'run');
+    for (const line of [10, 20, 30]) insertTestRef(db, caller, 'run', line);
+
+    const result = usageList(findUsages(makeTestRepoSet(db), { symbol: 'run', file: 'src/zzz/target.ts' }));
+    expect(result.map((u) => u.line)).toEqual([10, 20, 30]);
+  });
+
+  it('caps output at 500 usages', () => {
+    const db = createTestDb();
+    const f = insertTestFile(db, { path: 'src/a.ts' });
+    insertTestSymbol(db, { fileId: f, name: 'run' });
+    for (let i = 0; i < 520; i++) insertTestRef(db, f, 'run', i + 1);
+    expect(usageList(findUsages(makeTestRepoSet(db), { symbol: 'run' }))).toHaveLength(500);
   });
 });

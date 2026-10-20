@@ -76,21 +76,37 @@ function resolveOne(
   symbols: SymbolIndex,
   imports: Map<string, number[]>,
 ): { to: SymbolNode; confidence: Confidence } | 'ambiguous' | null {
-  // (1) defined in the caller's own file (`this.x()` only matches methods)
-  const local = symbols.byFileAndName.get(key(ref.file_id, ref.callee_name)) ?? [];
-  const sameFile = ref.receiver === 'this' ? local.filter((s) => s.kind === 'method') : local;
-  if (sameFile.length > 0) return { to: sameFile[0], confidence: 'EXTRACTED' };
-
-  // (2) imported by name from a file that defines it
-  for (const toFile of imports.get(key(ref.file_id, ref.callee_name)) ?? []) {
-    const target = symbols.byFileAndName.get(key(toFile, ref.callee_name));
-    if (target && target.length > 0) return { to: target[0], confidence: 'EXTRACTED' };
+  // Member call on some other object (`date.format()`): its type is unknown, so
+  // same-file and import hints don't apply — only a unique name can resolve it.
+  const foreignReceiver = ref.receiver !== null && ref.receiver !== 'this';
+  if (!foreignReceiver) {
+    const hit = resolveLocally(ref, symbols, imports);
+    if (hit) return { to: hit, confidence: 'EXTRACTED' };
   }
 
   // (3) exactly one definition project-wide
   const global = symbols.byName.get(ref.callee_name) ?? [];
   if (global.length === 1) return { to: global[0], confidence: 'INFERRED' };
   return global.length > 1 ? 'ambiguous' : null;
+}
+
+/** Steps (1) same file and (2) import. */
+function resolveLocally(
+  ref: SymbolRefRow,
+  symbols: SymbolIndex,
+  imports: Map<string, number[]>,
+): SymbolNode | null {
+  // (1) defined in the caller's own file (`this.x()` only matches methods)
+  const local = symbols.byFileAndName.get(key(ref.file_id, ref.callee_name)) ?? [];
+  const sameFile = ref.receiver === 'this' ? local.filter((s) => s.kind === 'method') : local;
+  if (sameFile.length > 0) return sameFile[0];
+
+  // (2) imported by name from a file that defines it
+  for (const toFile of imports.get(key(ref.file_id, ref.callee_name)) ?? []) {
+    const target = symbols.byFileAndName.get(key(toFile, ref.callee_name));
+    if (target && target.length > 0) return target[0];
+  }
+  return null;
 }
 
 /** Resolves call references to their target symbols. Pure: reads symbols and
@@ -130,6 +146,6 @@ export function findSymbolCandidates(db: Database.Database, name: string, file?:
     name: s.name,
     kind: s.kind,
     file: s.file_path,
-    line: s.start_line,
+    line: s.start_line ?? 0,
   }));
 }

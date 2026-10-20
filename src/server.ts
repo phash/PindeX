@@ -106,7 +106,7 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'find_usages',
-    description: 'Call sites of a symbol (EXTRACTED = via import/same file, INFERRED = unique name). Pass file to disambiguate.',
+    description: 'Call sites of a symbol (EXTRACTED = via import/same file, INFERRED = unique name). Pass file to disambiguate. Max 500 results.',
     inputSchema: {
       type: 'object',
       properties: {

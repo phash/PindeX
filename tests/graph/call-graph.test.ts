@@ -97,6 +97,35 @@ describe('call graph resolution', () => {
     expect(edges[0].confidence).toBe('EXTRACTED');
   });
 
+  it('member call on a non-this receiver never resolves via same file or import', () => {
+    const a = insertTestFile(db, { path: 'src/a.ts' });
+    const b = insertTestFile(db, { path: 'src/b.ts', hash: 'b' });
+    insertTestSymbol(db, { fileId: a, name: 'format' });
+    insertTestDependency(db, a, b, 'parse');
+    insertTestSymbol(db, { fileId: b, name: 'parse' });
+    insertTestSymbol(db, { fileId: a, name: 'parse' });
+    insertTestRef(db, a, 'format', 5, { receiver: 'date' });
+    insertTestRef(db, a, 'parse', 6, { receiver: 'JSON' });
+
+    const { edges, ambiguous } = buildCallGraph(db);
+    // format: unique project-wide → INFERRED, not EXTRACTED despite same-file definition
+    expect(edges).toHaveLength(1);
+    expect(edges[0]).toMatchObject({ line: 5, confidence: 'INFERRED' });
+    // parse: two definitions, import + same-file ignored for member call → ambiguous
+    expect(ambiguous).toBe(1);
+  });
+
+  it('this receiver still resolves EXTRACTED to a same-file method', () => {
+    const a = insertTestFile(db, { path: 'src/a.ts' });
+    const b = insertTestFile(db, { path: 'src/b.ts', hash: 'b' });
+    const m = insertTestSymbol(db, { fileId: a, name: 'n', kind: 'method' });
+    insertTestSymbol(db, { fileId: b, name: 'n', kind: 'method' });
+    insertTestRef(db, a, 'n', 3, { receiver: 'this' });
+    const { edges } = buildCallGraph(db);
+    expect(edges).toHaveLength(1);
+    expect(edges[0]).toMatchObject({ confidence: 'EXTRACTED', to: { id: m } });
+  });
+
   it('survives a reindex of the target file (symbols deleted + re-inserted)', () => {
     const a = insertTestFile(db, { path: 'src/a.ts' });
     const c = insertTestFile(db, { path: 'src/c.ts', hash: 'c' });
@@ -138,5 +167,7 @@ describe('findSymbolCandidates', () => {
     const scoped = findSymbolCandidates(db, 'format', './src\\b.ts');
     expect(scoped).toEqual([{ id: expect.any(Number), name: 'format', kind: 'function', file: 'src/b.ts', line: 3 }]);
     expect(findSymbolCandidates(db, 'nope')).toEqual([]);
+    db.prepare('UPDATE symbols SET start_line = NULL').run();
+    expect(findSymbolCandidates(db, 'format').map((s) => s.line)).toEqual([0, 0]);
   });
 });
