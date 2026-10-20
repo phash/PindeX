@@ -9,20 +9,29 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    name: test (${{ matrix.os }}, node ${{ matrix.node }})
+    runs-on: ${{ matrix.os }}
+    # Windows is experimental until verified on a real run.
+    continue-on-error: ${{ matrix.os == 'windows-latest' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        node: [20, 22, 24]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: ${{ matrix.node }}
       - run: npm ci
-      - name: Type-check
+      - name: Type-check (src + tests)
         run: npm run lint
       - name: Build
         run: npm run build
-      - name: Unit tests
-        run: npm test
+      - name: Unit tests (with enforced coverage)
+        run: npm run test:coverage
       - name: Integration tests (real tree-sitter bindings)
         run: npm run test:integration
       - name: Production dependency audit
+        if: matrix.os == 'ubuntu-latest' && matrix.node == 20
         run: npm audit --omit=dev --audit-level=high

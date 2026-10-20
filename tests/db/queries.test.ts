@@ -127,6 +127,8 @@ describe('Symbol queries', () => {
         startLine: 1,
         endLine: 5,
         isExported: true,
+        isAsync: false,
+        hasTryCatch: false,
       });
       const symbols = getSymbolsByFileId(db, fileId);
       expect(symbols).toHaveLength(1);

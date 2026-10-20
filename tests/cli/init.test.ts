@@ -715,7 +715,7 @@ describe('initProject', () => {
       new __detectorMock.GlobalRegistry().setFederatedRepos(tempDir, [{ path: repoDir, name: 'fed' }]);
       logSpy.mockClear();
       await initProject(tempDir);
-      const printed = logSpy.mock.calls.map((c) => String(c[0])).join('\n');
+      const printed = logSpy.mock.calls.map((c: unknown[]) => String(c[0])).join('\n');
       expect(printed).toContain('Federated repos');
     } finally {
       rmSync(repoDir, { recursive: true, force: true });

@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+// @ts-expect-error -- plain JS ESM module without a declaration file
 import { escHtml } from '../../src/monitoring/ui/esc.js';
 
 describe('escHtml (SEC-02 / SEC-07)', () => {

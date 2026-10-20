@@ -12,6 +12,8 @@ const sym = (name: string, sig: string, kind = 'function'): ParsedSymbol => ({
   startLine: 1,
   endLine: 10,
   isExported: true,
+  isAsync: false,
+  hasTryCatch: false,
 });
 
 describe('hashSignature', () => {
