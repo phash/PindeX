@@ -185,3 +185,21 @@ describe('extractReferences — real tree-sitter', () => {
     expect(parsed.references).toHaveLength(1);
   });
 });
+
+describe('large files — real tree-sitter', () => {
+  it('parses sources longer than 32,767 UTF-16 code units (incl. surrogate pairs)', () => {
+    const body = Array.from({ length: 1200 }, (_, i) => `export function fn${i}() { return '😀 ${i}'; }`).join('\n');
+    const src = `import { x } from './x.js';\n${body}\n`;
+    expect(src.length).toBeGreaterThan(40_000);
+    const parsed = parseFile('big.ts', src);
+    expect(parsed.symbols).toHaveLength(1200);
+    expect(parsed.symbols[1199].name).toBe('fn1199');
+    expect(parsed.imports).toHaveLength(1);
+  });
+
+  it('parses large Vue script blocks', () => {
+    const body = Array.from({ length: 1200 }, (_, i) => `function fn${i}() { return '😀 ${i}'; }`).join('\n');
+    const parsed = parseFile('big.vue', `<script>\n${body}\n</script>`);
+    expect(parsed.symbols).toHaveLength(1200);
+  });
+});
