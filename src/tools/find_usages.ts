@@ -17,7 +17,6 @@ export function findUsages(repoSet: RepoSet, input: FindUsagesInput): UsageResul
         all.push({
           file: u.file_path,
           line: u.used_at_line,
-          context: `${u.file_path}:${u.used_at_line}`,
           project: repo.name,
         });
       }

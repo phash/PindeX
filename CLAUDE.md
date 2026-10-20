@@ -126,7 +126,7 @@ npm run build            # compile src/ → dist/
 | `find_usages` | All locations where a symbol is used |
 | `get_dependencies` | Import graph for a file (imports / imported_by / both) |
 | `get_api_endpoints` | Extracted HTTP/REST endpoints (Express-style route symbols) in the codebase |
-| `get_project_overview` | Project-level stats, entry points, module list + session memory summary |
+| `get_project_overview` | Project-level stats, entry points, directory groups (full mode) + session memory summary |
 | `reindex` | Rebuild index for one file or the entire project |
 | `get_token_stats` | Token usage statistics for a session |
 | `start_comparison` | Start A/B session (indexed vs baseline) |

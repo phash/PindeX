@@ -276,6 +276,45 @@ describe('createMcpServer – tools/call dispatch (all tools)', () => {
     expect(res.endpoints[0].path).toBe('/users/:id');
   });
 
+  it('returns unknown repo errors verbatim as a user-facing error', async () => {
+    const raw = await callRaw(server, 'search_symbols', { query: 'greet', repos: ['nope'] });
+    expect(raw.isError).toBe(true);
+    expect(JSON.parse(raw.content[0].text).error).toMatch(/unknown repo/i);
+  });
+
+  it('keeps unexpected errors generic', async () => {
+    db.exec('DROP TABLE symbols');
+    const raw = await callRaw(server, 'get_api_endpoints', {});
+    expect(raw.isError).toBe(true);
+    expect(JSON.parse(raw.content[0].text)).toEqual({ error: "Tool 'get_api_endpoints' failed" });
+  });
+
+  it('every tool response is valid, compact JSON (no pretty-printing)', async () => {
+    const argsByTool: Record<string, Record<string, unknown>> = {
+      search_symbols: { query: 'greet' },
+      get_symbol: { name: 'greet' },
+      get_context: { file: 'src/app.ts', line: 2 },
+      get_file_summary: { file: 'src/app.ts' },
+      find_usages: { symbol: 'greet' },
+      get_dependencies: { target: 'src/app.ts' },
+      get_project_overview: {},
+      get_api_endpoints: {},
+      reindex: {},
+      get_token_stats: {},
+      start_comparison: { label: 'x', mode: 'indexed' },
+      search_docs: { query: 'greeting' },
+      get_doc_chunk: { file: 'src/app.ts' },
+      save_context: { content: 'fact' },
+      get_session_memory: {},
+    };
+    for (const [tool, args] of Object.entries(argsByTool)) {
+      const raw = await callRaw(server, tool, args);
+      const text = raw.content[0].text;
+      expect(() => JSON.parse(text), tool).not.toThrow();
+      expect(text, tool).not.toContain('\n  ');
+    }
+  });
+
   it('reindex runs and returns counts', async () => {
     const res = await callTool(server, 'reindex', {});
     expect(typeof res.indexed).toBe('number');

@@ -25,6 +25,11 @@ describe('findUsages', () => {
     insertTestUsage(db, symbolId, callerB, 42);
   });
 
+  it('does not repeat file:line in a context field', () => {
+    const result = findUsages(makeTestRepoSet(db), { symbol: 'validateToken' });
+    expect(result.every((u) => !('context' in u))).toBe(true);
+  });
+
   it('returns all usages of a symbol', () => {
     const result = findUsages(makeTestRepoSet(db), { symbol: 'validateToken' });
     expect(result).toHaveLength(2);

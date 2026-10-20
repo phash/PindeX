@@ -13,6 +13,7 @@ export function searchSymbols(
   const filters = { isAsync: input.isAsync, hasTryCatch: input.hasTryCatch };
 
   const repos = repoSet.filter(input.repos);
+  const multiRepo = repoSet.filter().length > 1;
   const all: SymbolSearchResult[] = [];
 
   for (const repo of repos) {
@@ -22,13 +23,13 @@ export function searchSymbols(
           name: row.name,
           kind: row.kind,
           signature: row.signature,
-          summary: row.summary,
           file: row.file_path,
           line: row.start_line,
-          isAsync: row.is_async === 1,
-          hasTryCatch: row.has_try_catch === 1,
-          project: repo.name,
         };
+        if (row.summary) result.summary = row.summary;
+        if (row.is_async === 1) result.isAsync = true;
+        if (row.has_try_catch === 1) result.hasTryCatch = true;
+        if (multiRepo) result.project = repo.name;
 
         if (input.snippet && repo.path) {
           const absPath = resolveWithinRoot(repo.path, row.file_path);
@@ -50,5 +51,5 @@ export function searchSymbols(
     }
   }
 
-  return dedupByKey(all, (r) => `${r.project}::${r.name}::${r.kind}`).slice(0, limit * Math.max(repos.length, 1));
+  return dedupByKey(all, (r) => `${r.project ?? ''}::${r.file}::${r.line}::${r.name}`).slice(0, limit * Math.max(repos.length, 1));
 }

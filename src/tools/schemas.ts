@@ -19,7 +19,7 @@ const safeRelPath = z
 
 export const SearchSymbolsSchema = z.object({
   query: z.string().min(1),
-  limit: z.number().int().positive().optional(),
+  limit: z.number().int().positive().max(100).optional(),
   isAsync: z.boolean().optional(),
   hasTryCatch: z.boolean().optional(),
   snippet: z.boolean().optional(),
@@ -35,7 +35,7 @@ export const GetSymbolSchema = z.object({
 export const GetContextSchema = z.object({
   file: z.string().min(1),
   line: z.number().int().positive(),
-  range: z.number().int().positive().optional(),
+  range: z.number().int().positive().max(200).optional(),
   repos: reposField,
 });
 
@@ -75,7 +75,7 @@ export const StartComparisonSchema = z.object({
 
 export const SearchDocsSchema = z.object({
   query: z.string().min(1),
-  limit: z.number().int().positive().optional(),
+  limit: z.number().int().positive().max(100).optional(),
   type: z.enum(['docs', 'context', 'all']).optional(),
   repos: reposField,
 });

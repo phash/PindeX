@@ -382,10 +382,10 @@ Import graph for a file — what it imports, what imports it, or both.
 
 ### `get_project_overview`
 
-Project-wide statistics — no parameters required.
+Project-wide statistics. Optional `mode`: `brief` (counts only) or `full` (default, adds directory groups).
 When federation is active, also includes stats for each linked repository.
 
-**Returns:** Total file count, dominant language, entry points (`index`, `main`, `app` files), module list with symbol counts, an `index_recommendation` field (see [When Is PindeX Worth Using?](#when-is-pindex-worth-using)), and (if federated) per-repo breakdowns.
+**Returns:** Total file count, dominant language, entry points (`index`, `main`, `app` files), in full mode directory groups (top two path segments, max 50) with file and symbol counts, an `index_recommendation` field (see [When Is PindeX Worth Using?](#when-is-pindex-worth-using)), and (if federated) per-repo breakdowns.
 
 ---
 

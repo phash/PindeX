@@ -22,7 +22,6 @@ export function getApiEndpoints(
     return {
       method,
       path,
-      handler: row.name,
       file: row.file_path,
       line: row.start_line,
     };

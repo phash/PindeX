@@ -1,4 +1,5 @@
 import type Database from 'better-sqlite3';
+import { UserInputError } from '../tools/errors.js';
 
 /** A single indexed repository (primary or federated) inside a RepoSet. */
 export interface Repo {
@@ -47,7 +48,7 @@ export class RepoSet {
       if (!known.includes(name)) {
         // Do not enumerate known repo names in the error: that list leaks every
         // federated project name into the LLM context / shared transcripts (SEC-09).
-        throw new Error(`Unknown repo name: '${name}'`);
+        throw new UserInputError(`Unknown repo name: '${name}'`);
       }
     }
     return this.repos.filter((r) => wanted.has(r.name));

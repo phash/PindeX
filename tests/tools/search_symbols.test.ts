@@ -65,6 +65,27 @@ describe('searchSymbols', () => {
   });
 });
 
+describe('searchSymbols — compact output', () => {
+  it('returns same-named symbols from different files', () => {
+    const db = createTestDb();
+    const a = insertTestFile(db, { path: 'src/a.ts' });
+    const b = insertTestFile(db, { path: 'src/b.ts' });
+    insertTestSymbol(db, { fileId: a, name: 'handler', kind: 'function', signature: 'handler()' });
+    insertTestSymbol(db, { fileId: b, name: 'handler', kind: 'function', signature: 'handler()' });
+    const result = searchSymbols(makeTestRepoSet(db), { query: 'handler' });
+    expect(result.map((r) => r.file).sort()).toEqual(['src/a.ts', 'src/b.ts']);
+  });
+
+  it('omits isAsync, hasTryCatch, null summary and project for a plain single-repo row', () => {
+    const db = createTestDb();
+    const a = insertTestFile(db, { path: 'src/a.ts' });
+    insertTestSymbol(db, { fileId: a, name: 'plainFn', kind: 'function', signature: 'plainFn()' });
+    const [row] = searchSymbols(makeTestRepoSet(db), { query: 'plainFn' });
+    expect(row).toBeDefined();
+    for (const k of ['isAsync', 'hasTryCatch', 'summary', 'project']) expect(k in row).toBe(false);
+  });
+});
+
 describe('searchSymbols — federation', () => {
   let primaryDb: Database.Database;
   let federatedDb: Database.Database;
