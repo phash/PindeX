@@ -12,6 +12,8 @@ import {
   getProjectIndexPath,
   getProjectsDir,
   GlobalRegistry,
+  RegistryCorruptError,
+  RegistryLockError,
   findProjectRoot,
   hashProjectPath,
 } from './project-detector.js';
@@ -382,6 +384,12 @@ async function main(): Promise<void> {
 }
 
 main().catch((err: unknown) => {
-  console.error('Error:', err instanceof Error ? err.message : err);
+  if (err instanceof RegistryLockError) {
+    console.error(`Error: ${err.message}\nHint: remove ~/.pindex/registry.json.lock if no pindex process is running.`);
+  } else if (err instanceof RegistryCorruptError) {
+    console.error(`Error: ${err.message}\nHint: fix or delete ~/.pindex/registry.json.`);
+  } else {
+    console.error('Error:', err instanceof Error ? err.message : err);
+  }
   process.exit(1);
 });

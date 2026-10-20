@@ -231,6 +231,9 @@ export class GlobalRegistry {
         if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
         try {
           if (Date.now() - statSync(this.lockPath).mtimeMs > STALE_LOCK_MS) {
+            // Known race: two waiters may both judge the same lock stale; one can then
+            // unlink the lock the other just re-created. Accepted: needs a >5 s dead holder
+            // plus simultaneous takeover, and writes stay atomic (rename) regardless.
             unlinkSync(this.lockPath);
             continue;
           }
