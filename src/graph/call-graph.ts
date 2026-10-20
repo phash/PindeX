@@ -1,7 +1,8 @@
 import type Database from 'better-sqlite3';
 import { getAllRefs, getSymbolsByName, type SymbolRefRow } from '../db/queries.js';
 
-/** EXTRACTED = resolved via the caller's own file or an import; INFERRED = unique name project-wide. */
+/** EXTRACTED = resolved via the caller's own file or an import; INFERRED = unique name project-wide
+ *  (for member calls on another object additionally: same file or an import relation to its file). */
 export type Confidence = 'EXTRACTED' | 'INFERRED';
 
 export interface SymbolNode {
@@ -19,6 +20,8 @@ export interface CallEdge {
   to: SymbolNode;
   line: number;
   confidence: Confidence;
+  /** Call site was a member call on some other object (`x.f()`, x ≠ this). */
+  foreignReceiver: boolean;
 }
 
 export interface ResolveResult {
@@ -27,11 +30,36 @@ export interface ResolveResult {
   ambiguous: number;
 }
 
+/** Kinds a call or `new` can target; interfaces, types, enums etc. never resolve. */
+export const CALLABLE_KINDS: ReadonlySet<string> = new Set(['function', 'method', 'class', 'const']);
+
+/** Common method names of built-in/library objects (arrays, strings, maps, promises, streams,
+ *  sqlite statements, emitters). Member calls with these names on a foreign receiver are too
+ *  noisy for structural ranking (hubs, community weights); find_usages still reports them. */
+export const BUILTIN_METHOD_NAMES: ReadonlySet<string> = new Set([
+  'filter', 'map', 'forEach', 'reduce', 'find', 'some', 'every', 'includes', 'indexOf',
+  'push', 'pop', 'shift', 'unshift', 'slice', 'splice', 'concat', 'join', 'split', 'replace',
+  'trim', 'toString', 'get', 'set', 'has', 'delete', 'add', 'clear', 'keys', 'values',
+  'entries', 'all', 'run', 'prepare', 'exec', 'log', 'warn', 'error', 'then', 'catch',
+  'finally', 'emit', 'on', 'once', 'write', 'end', 'close', 'send',
+]);
+
 interface SymbolIndex {
+  /** All symbols (callers may be of any kind). */
   byId: Map<number, SymbolNode>;
-  /** `${fileId}\0${name}` → symbols, in deterministic candidate order. */
+  /** Symbol id → file id. */
+  fileOf: Map<number, number>;
+  /** `${fileId}\0${name}` → callable symbols, in deterministic candidate order. */
   byFileAndName: Map<string, SymbolNode[]>;
+  /** name → callable symbols. */
   byName: Map<string, SymbolNode[]>;
+}
+
+interface ImportIndex {
+  /** `${fromFile}\0${symbolName}` → imported-from file ids. */
+  byName: Map<string, number[]>;
+  /** `${fromFile}>${toFile}` for every dependency row (any symbol). */
+  filePairs: Set<string>;
 }
 
 const key = (fileId: number, name: string): string => `${fileId}\0${name}`;
@@ -51,50 +79,74 @@ function loadSymbols(db: Database.Database): SymbolIndex {
     )
     .all() as Array<{ id: number; name: string; kind: string; file_id: number; start_line: number | null; file_path: string }>;
 
-  const index: SymbolIndex = { byId: new Map(), byFileAndName: new Map(), byName: new Map() };
+  const index: SymbolIndex = { byId: new Map(), fileOf: new Map(), byFileAndName: new Map(), byName: new Map() };
   for (const r of rows) {
     const node: SymbolNode = { id: r.id, name: r.name, kind: r.kind, file: r.file_path, line: r.start_line ?? 0 };
     index.byId.set(node.id, node);
+    index.fileOf.set(node.id, r.file_id);
+    if (!CALLABLE_KINDS.has(r.kind)) continue;
     pushTo(index.byFileAndName, key(r.file_id, r.name), node);
     pushTo(index.byName, r.name, node);
   }
   return index;
 }
 
-/** `${fromFile}\0${symbolName}` → imported-from file ids. */
-function loadImports(db: Database.Database): Map<string, number[]> {
+function loadImports(db: Database.Database): ImportIndex {
   const rows = db
-    .prepare('SELECT from_file, to_file, symbol_name FROM dependencies WHERE symbol_name IS NOT NULL ORDER BY id')
-    .all() as Array<{ from_file: number; to_file: number; symbol_name: string }>;
-  const imports = new Map<string, number[]>();
-  for (const r of rows) pushTo(imports, key(r.from_file, r.symbol_name), r.to_file);
+    .prepare('SELECT from_file, to_file, symbol_name FROM dependencies ORDER BY id')
+    .all() as Array<{ from_file: number; to_file: number; symbol_name: string | null }>;
+  const imports: ImportIndex = { byName: new Map(), filePairs: new Set() };
+  for (const r of rows) {
+    imports.filePairs.add(`${r.from_file}>${r.to_file}`);
+    if (r.symbol_name !== null) pushTo(imports.byName, key(r.from_file, r.symbol_name), r.to_file);
+  }
   return imports;
+}
+
+/** True for `arr.filter()`-style edges whose callee name is a common built-in method —
+ *  usually an unrelated library call that merely shares a project method's name. */
+export function isBuiltinMethodNoise(edge: CallEdge): boolean {
+  return edge.foreignReceiver && BUILTIN_METHOD_NAMES.has(edge.to.name);
+}
+
+/** Member call on some other object (`date.format()`), i.e. receiver type unknown. */
+export function isForeignReceiver(receiver: string | null): boolean {
+  return receiver !== null && receiver !== 'this';
 }
 
 function resolveOne(
   ref: SymbolRefRow,
   symbols: SymbolIndex,
-  imports: Map<string, number[]>,
+  imports: ImportIndex,
 ): { to: SymbolNode; confidence: Confidence } | 'ambiguous' | null {
   // Member call on some other object (`date.format()`): its type is unknown, so
   // same-file and import hints don't apply — only a unique name can resolve it.
-  const foreignReceiver = ref.receiver !== null && ref.receiver !== 'this';
-  if (!foreignReceiver) {
+  const foreign = isForeignReceiver(ref.receiver);
+  if (!foreign) {
     const hit = resolveLocally(ref, symbols, imports);
     if (hit) return { to: hit, confidence: 'EXTRACTED' };
   }
 
   // (3) exactly one definition project-wide
   const global = symbols.byName.get(ref.callee_name) ?? [];
-  if (global.length === 1) return { to: global[0], confidence: 'INFERRED' };
-  return global.length > 1 ? 'ambiguous' : null;
+  if (global.length > 1) return 'ambiguous';
+  if (global.length === 0) return null;
+  const target = global[0];
+  // `arr.filter()` must not land on some unrelated `RepoSet.filter`: a foreign receiver
+  // only resolves when the caller's file is the target's file or depends on it.
+  if (foreign) {
+    const targetFile = symbols.fileOf.get(target.id);
+    const related = targetFile === ref.file_id || imports.filePairs.has(`${ref.file_id}>${targetFile}`);
+    if (!related) return null;
+  }
+  return { to: target, confidence: 'INFERRED' };
 }
 
 /** Steps (1) same file and (2) import. */
 function resolveLocally(
   ref: SymbolRefRow,
   symbols: SymbolIndex,
-  imports: Map<string, number[]>,
+  imports: ImportIndex,
 ): SymbolNode | null {
   // (1) defined in the caller's own file (`this.x()` only matches methods)
   const local = symbols.byFileAndName.get(key(ref.file_id, ref.callee_name)) ?? [];
@@ -102,7 +154,7 @@ function resolveLocally(
   if (sameFile.length > 0) return sameFile[0];
 
   // (2) imported by name from a file that defines it
-  for (const toFile of imports.get(key(ref.file_id, ref.callee_name)) ?? []) {
+  for (const toFile of imports.byName.get(key(ref.file_id, ref.callee_name)) ?? []) {
     const target = symbols.byFileAndName.get(key(toFile, ref.callee_name));
     if (target && target.length > 0) return target[0];
   }
@@ -129,6 +181,7 @@ export function resolveRefs(db: Database.Database, refs: SymbolRefRow[]): Resolv
       to: resolved.to,
       line: ref.line,
       confidence: resolved.confidence,
+      foreignReceiver: isForeignReceiver(ref.receiver),
     });
   }
   return { edges, ambiguous };
@@ -138,10 +191,10 @@ export function buildCallGraph(db: Database.Database): ResolveResult {
   return resolveRefs(db, getAllRefs(db));
 }
 
-/** Definitions of `name`, optionally restricted to one (normalized) file path.
- *  Order: exported first, then path, then start line. */
+/** Callable definitions of `name` (see CALLABLE_KINDS), optionally restricted to one
+ *  (normalized) file path. Order: exported first, then path, then start line. */
 export function findSymbolCandidates(db: Database.Database, name: string, file?: string): SymbolNode[] {
-  return getSymbolsByName(db, name, file).map((s) => ({
+  return getSymbolsByName(db, name, file).filter((s) => CALLABLE_KINDS.has(s.kind)).map((s) => ({
     id: s.id,
     name: s.name,
     kind: s.kind,

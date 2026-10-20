@@ -12,7 +12,7 @@ import {
   countPriorSessions,
   getAntiPatternEvents,
 } from '../db/queries.js';
-import { buildCallGraph } from '../graph/call-graph.js';
+import { buildCallGraph, isBuiltinMethodNoise } from '../graph/call-graph.js';
 import { rankHubs, detectCommunities, summarizeCommunities } from '../graph/communities.js';
 import type { RepoSet } from '../federation/repo-set.js';
 
@@ -20,13 +20,15 @@ const MAX_MODULE_GROUPS = 50;
 const MAX_HUBS = 10;
 const MAX_COMMUNITIES = 8;
 
-/** Hubs + file communities from call edges and import dependencies; undefined without call edges. */
+/** Hubs + file communities from call edges and import dependencies; undefined without call edges.
+ *  Built-in-named member calls on foreign receivers (`arr.filter()`) are left out of both. */
 function computeGraphInsights(
   db: Database.Database,
   files: Array<{ path: string }>,
 ): Pick<ProjectOverviewSnapshot, 'hubs' | 'communities'> | undefined {
-  const { edges } = buildCallGraph(db);
-  if (edges.length === 0) return undefined;
+  const all = buildCallGraph(db).edges;
+  if (all.length === 0) return undefined;
+  const edges = all.filter((e) => !isBuiltinMethodNoise(e));
 
   const pairWeights = new Map<string, number>();
   const bump = (a: string, b: string): void => {

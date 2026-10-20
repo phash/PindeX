@@ -240,6 +240,23 @@ describe('getProjectOverview — index_recommendation (TST-14)', () => {
       expect(r.communities!.some((c) => c.label.startsWith('src'))).toBe(true);
     });
 
+    it('hubs ignore foreign-receiver calls with built-in method names', () => {
+      const g = createTestDb();
+      const rs = insertTestFile(g, { path: 'src/repo-set.ts' });
+      insertTestSymbol(g, { fileId: rs, name: 'filter', kind: 'method', startLine: 1, endLine: 2 });
+      insertTestSymbol(g, { fileId: rs, name: 'primaryOf', kind: 'method', startLine: 3, endLine: 4 });
+      for (let i = 0; i < 3; i++) {
+        const f = insertTestFile(g, { path: `src/c${i}.ts` });
+        insertTestDependency(g, f, rs);
+        insertTestRef(g, f, 'filter', 5, { receiver: 'repos' });
+      }
+      const caller = insertTestFile(g, { path: 'src/main.ts' });
+      insertTestDependency(g, caller, rs);
+      insertTestRef(g, caller, 'primaryOf', 2, { receiver: 'repos' });
+      const r = getProjectOverview(makeTestRepoSet(g), '/p', 'default', { mode: 'full' });
+      expect(r.hubs).toEqual([{ symbol: 'primaryOf', file: 'src/repo-set.ts', callerFiles: 1 }]);
+    });
+
     it('omits hubs/communities when the project has no edges', () => {
       const plain = createTestDb();
       insertTestFile(plain, { path: 'src/a.ts' });

@@ -115,6 +115,36 @@ describe('call graph resolution', () => {
     expect(ambiguous).toBe(1);
   });
 
+  it('foreign-receiver call to a unique name needs an import relation to the target file', () => {
+    const repoSet = insertTestFile(db, { path: 'src/federation/repo-set.ts' });
+    const plain = insertTestFile(db, { path: 'src/plain.ts', hash: 'p' });
+    const user = insertTestFile(db, { path: 'src/user.ts', hash: 'u' });
+    const filter = insertTestSymbol(db, { fileId: repoSet, name: 'filter', kind: 'method' });
+    insertTestDependency(db, user, repoSet, 'RepoSet'); // imports a different name from that file
+    insertTestRef(db, plain, 'filter', 3, { receiver: 'arr' });
+    insertTestRef(db, user, 'filter', 8, { receiver: 'repoSet' });
+
+    const { edges, ambiguous } = buildCallGraph(db);
+    expect(ambiguous).toBe(0);
+    expect(edges).toHaveLength(1);
+    expect(edges[0]).toMatchObject({ fromFile: 'src/user.ts', confidence: 'INFERRED', to: { id: filter } });
+  });
+
+  it('resolution ignores non-callable kinds (interface/type) of the same name', () => {
+    const a = insertTestFile(db, { path: 'src/a.ts' });
+    const b = insertTestFile(db, { path: 'src/b.ts', hash: 'b' });
+    const cls = insertTestSymbol(db, { fileId: a, name: 'Foo', kind: 'class' });
+    insertTestSymbol(db, { fileId: b, name: 'Foo', kind: 'interface' });
+    insertTestSymbol(db, { fileId: b, name: 'Bar', kind: 'type' });
+    insertTestRef(db, b, 'Foo', 4, { kind: 'new' });
+    insertTestRef(db, b, 'Bar', 5);
+
+    const { edges, ambiguous } = buildCallGraph(db);
+    expect(ambiguous).toBe(0);
+    expect(edges).toHaveLength(1);
+    expect(edges[0]).toMatchObject({ confidence: 'INFERRED', to: { id: cls, kind: 'class' } });
+  });
+
   it('this receiver still resolves EXTRACTED to a same-file method', () => {
     const a = insertTestFile(db, { path: 'src/a.ts' });
     const b = insertTestFile(db, { path: 'src/b.ts', hash: 'b' });
@@ -169,6 +199,18 @@ describe('findSymbolCandidates', () => {
     expect(findSymbolCandidates(db, 'nope')).toEqual([]);
     db.prepare('UPDATE symbols SET start_line = NULL').run();
     expect(findSymbolCandidates(db, 'format').map((s) => s.line)).toEqual([0, 0]);
+  });
+});
+
+describe('findSymbolCandidates — callable kinds only', () => {
+  it('excludes interfaces, types and enums', () => {
+    const db = createTestDb();
+    const a = insertTestFile(db, { path: 'src/a.ts' });
+    insertTestSymbol(db, { fileId: a, name: 'Foo', kind: 'class' });
+    insertTestSymbol(db, { fileId: a, name: 'Foo', kind: 'interface', startLine: 20 });
+    insertTestSymbol(db, { fileId: a, name: 'E', kind: 'enum' });
+    expect(findSymbolCandidates(db, 'Foo').map((s) => s.kind)).toEqual(['class']);
+    expect(findSymbolCandidates(db, 'E')).toEqual([]);
   });
 });
 
