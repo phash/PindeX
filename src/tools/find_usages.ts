@@ -9,7 +9,7 @@ import { resolveWithinRoot } from '../util/paths.js';
 export const MAX_USAGES = 500;
 
 /** Maps the user's `file` to the index's repo-relative form; null = escapes the root. */
-function fileKeyFor(repo: Repo, file: string | undefined): string | undefined | null {
+export function fileKeyFor(repo: Repo, file: string | undefined): string | undefined | null {
   if (!file || !repo.path) return file;
   const abs = resolveWithinRoot(repo.path, file);
   if (!abs) return null;

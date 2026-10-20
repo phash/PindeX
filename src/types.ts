@@ -284,6 +284,23 @@ export interface FindUsagesAmbiguous {
   candidates: Array<{ file: string; line: number; kind: string; project?: string }>;
 }
 
+export interface GetCallPathInput {
+  from: string;
+  to: string;
+  from_file?: string;
+  to_file?: string;
+  /** Default 6, max 12. */
+  max_depth?: number;
+}
+
+export type GetCallPathOutput =
+  | {
+      path: Array<{ from: string; to: string; file: string; line: number; confidence: 'EXTRACTED' | 'INFERRED' }> | null;
+      hops: number;
+    }
+  | { error: 'ambiguous'; side: 'from' | 'to'; candidates: Array<{ file: string; line: number; kind: string }> }
+  | { error: 'not_found'; side: 'from' | 'to' };
+
 export interface GetDependenciesInput {
   target: string;
   direction?: 'imports' | 'imported_by' | 'both';

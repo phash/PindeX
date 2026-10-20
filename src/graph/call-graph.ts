@@ -149,3 +149,42 @@ export function findSymbolCandidates(db: Database.Database, name: string, file?:
     line: s.start_line ?? 0,
   }));
 }
+
+/** Shortest directed call chain `fromId → … → toId` of at most `maxDepth` edges (BFS,
+ *  so cycles terminate). Module-level edges (`from === null`) are not traversable.
+ *  Returns null when unreachable within the depth; `[]` when `fromId === toId`. */
+export function shortestPath(
+  edges: CallEdge[],
+  fromId: number,
+  toId: number,
+  maxDepth: number,
+): CallEdge[] | null {
+  if (fromId === toId) return [];
+  const outgoing = new Map<number, CallEdge[]>();
+  for (const e of edges) if (e.from) pushTo(outgoing, e.from.id, e);
+
+  const via = new Map<number, CallEdge>(); // node → edge that first reached it
+  const seen = new Set<number>([fromId]);
+  let frontier = [fromId];
+  for (let depth = 1; depth <= maxDepth && frontier.length > 0; depth++) {
+    const next: number[] = [];
+    for (const id of frontier) {
+      for (const e of outgoing.get(id) ?? []) {
+        if (seen.has(e.to.id)) continue;
+        seen.add(e.to.id);
+        via.set(e.to.id, e);
+        if (e.to.id === toId) {
+          const path: CallEdge[] = [];
+          for (let cur: CallEdge | undefined = e; cur; cur = cur.from ? via.get(cur.from.id) : undefined) {
+            path.unshift(cur);
+            if (cur.from?.id === fromId) break;
+          }
+          return path;
+        }
+        next.push(e.to.id);
+      }
+    }
+    frontier = next;
+  }
+  return null;
+}

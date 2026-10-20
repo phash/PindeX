@@ -102,7 +102,8 @@ Dieses Projekt ist mit PindeX indexiert.
 2. **Symbol suchen?** → \`mcp__pindex__search_symbols\`
 3. **Abhängigkeiten?** → \`mcp__pindex__get_dependencies\`
 4. **Wo wird etwas verwendet?** → \`mcp__pindex__find_usages\`
-5. **Projekt-Überblick?** → \`mcp__pindex__get_project_overview\`
+5. **Wie hängen A und B zusammen?** → \`mcp__pindex__get_call_path\`
+6. **Projekt-Überblick?** → \`mcp__pindex__get_project_overview\`
 
 **VERBOTEN** (solange PindeX verfügbar):
 - \`Read\` auf Quellcode-Dateien ohne vorherigen \`get_file_summary\`-Aufruf

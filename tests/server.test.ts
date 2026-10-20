@@ -87,10 +87,10 @@ describe('createMcpServer – tools/list', () => {
         'search_symbols', 'get_symbol', 'get_context', 'get_file_summary',
         'find_usages', 'get_dependencies', 'get_project_overview', 'get_api_endpoints',
         'reindex', 'get_token_stats', 'start_comparison', 'search_docs',
-        'get_doc_chunk', 'save_context', 'get_session_memory',
+        'get_doc_chunk', 'save_context', 'get_session_memory', 'get_call_path',
       ]),
     );
-    expect(names).toHaveLength(15);
+    expect(names).toHaveLength(16);
     // Every entry must carry a JSON input schema.
     for (const tool of res.tools) {
       expect(tool.inputSchema.type).toBe('object');
@@ -309,6 +309,7 @@ describe('createMcpServer – tools/call dispatch (all tools)', () => {
       get_doc_chunk: { file: 'src/app.ts' },
       save_context: { content: 'fact' },
       get_session_memory: {},
+      get_call_path: { from: 'greet', to: 'greet' },
     };
     for (const [tool, args] of Object.entries(argsByTool)) {
       const raw = await callRaw(server, tool, args);

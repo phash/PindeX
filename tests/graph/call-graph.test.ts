@@ -8,7 +8,7 @@ import {
   insertTestRef,
 } from '../helpers/fixtures.js';
 import { deleteSymbolsByFileId, getAllRefs } from '../../src/db/queries.js';
-import { buildCallGraph, resolveRefs, findSymbolCandidates } from '../../src/graph/call-graph.js';
+import { buildCallGraph, resolveRefs, findSymbolCandidates, shortestPath, type CallEdge } from '../../src/graph/call-graph.js';
 
 describe('call graph resolution', () => {
   let db: Database.Database;
@@ -169,5 +169,34 @@ describe('findSymbolCandidates', () => {
     expect(findSymbolCandidates(db, 'nope')).toEqual([]);
     db.prepare('UPDATE symbols SET start_line = NULL').run();
     expect(findSymbolCandidates(db, 'format').map((s) => s.line)).toEqual([0, 0]);
+  });
+});
+
+describe('shortestPath', () => {
+  const node = (id: number) => ({ id, name: `n${id}`, kind: 'function', file: 'f.ts', line: id });
+  const edge = (from: number | null, to: number): CallEdge => ({
+    from: from === null ? null : node(from),
+    fromFile: 'f.ts',
+    to: node(to),
+    line: 1,
+    confidence: 'EXTRACTED',
+  });
+
+  it('prefers the shortest route', () => {
+    const edges = [edge(1, 2), edge(2, 3), edge(3, 4), edge(1, 4)];
+    expect(shortestPath(edges, 1, 4, 6)?.map((e) => e.to.id)).toEqual([4]);
+  });
+
+  it('returns null for unreachable targets and terminates on cycles', () => {
+    expect(shortestPath([edge(1, 2), edge(2, 1)], 1, 9, 6)).toBeNull();
+  });
+
+  it('respects maxDepth and skips module-level edges', () => {
+    expect(shortestPath([edge(1, 2), edge(2, 3)], 1, 3, 1)).toBeNull();
+    expect(shortestPath([edge(null, 2)], 1, 2, 6)).toBeNull();
+  });
+
+  it('returns an empty path when from equals to', () => {
+    expect(shortestPath([], 1, 1, 6)).toEqual([]);
   });
 });

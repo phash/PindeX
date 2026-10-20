@@ -14,6 +14,7 @@ import {
   GetDocChunkSchema,
   SaveContextSchema,
   GetSessionMemorySchema,
+  GetCallPathSchema,
   TOOL_SCHEMAS,
 } from '../../src/tools/schemas.js';
 
@@ -399,7 +400,7 @@ describe('repos param on federation-aware tool schemas', () => {
 // ─── TOOL_SCHEMAS map ───────────────────────────────────────────────────────
 
 describe('TOOL_SCHEMAS', () => {
-  it('contains schemas for all 14 tools (excluding get_api_endpoints)', () => {
+  it('contains schemas for all 15 tools (excluding get_api_endpoints)', () => {
     const expectedTools = [
       'search_symbols',
       'get_symbol',
@@ -415,6 +416,7 @@ describe('TOOL_SCHEMAS', () => {
       'get_doc_chunk',
       'save_context',
       'get_session_memory',
+      'get_call_path',
     ];
     expect(Object.keys(TOOL_SCHEMAS).sort()).toEqual(expectedTools.sort());
   });
@@ -434,5 +436,18 @@ describe('input bounds', () => {
     expect(SearchSymbolsSchema.safeParse({ query: 'x', limit: 101 }).success).toBe(false);
     expect(SearchSymbolsSchema.safeParse({ query: 'x', limit: 100 }).success).toBe(true);
     expect(SearchDocsSchema.safeParse({ query: 'x', limit: 101 }).success).toBe(false);
+  });
+});
+
+describe('GetCallPathSchema', () => {
+  it('accepts from/to with optional files and max_depth up to 12', () => {
+    expect(GetCallPathSchema.safeParse({ from: 'a', to: 'b' }).success).toBe(true);
+    expect(GetCallPathSchema.safeParse({ from: 'a', to: 'b', from_file: 'x.ts', to_file: 'y.ts', max_depth: 12 }).success).toBe(true);
+  });
+
+  it('rejects max_depth 13, max_depth 0 and a missing to', () => {
+    expect(GetCallPathSchema.safeParse({ from: 'a', to: 'b', max_depth: 13 }).success).toBe(false);
+    expect(GetCallPathSchema.safeParse({ from: 'a', to: 'b', max_depth: 0 }).success).toBe(false);
+    expect(GetCallPathSchema.safeParse({ from: 'a' }).success).toBe(false);
   });
 });

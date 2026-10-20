@@ -369,6 +369,22 @@ Call sites of a symbol, resolved through the call graph.
 
 ---
 
+### `get_call_path`
+
+Shortest call chain from symbol A to symbol B, resolved through the call graph.
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `from` | string | ✓ | Caller symbol name |
+| `to` | string | ✓ | Callee symbol name |
+| `from_file` | string | | File defining `from`, to disambiguate |
+| `to_file` | string | | File defining `to`, to disambiguate |
+| `max_depth` | number | | Max call hops (default 6, max 12) |
+
+**Returns:** `{ path: [{ from, to, file, line, confidence }], hops }`, or `{ path: null, hops: 0 }` when no chain exists within `max_depth`. Module-level calls are not traversed. An ambiguous or unknown endpoint returns `{ error: "ambiguous", side, candidates }` / `{ error: "not_found", side }`. Primary repo only (no `repos` param).
+
+---
+
 ### `get_dependencies`
 
 Import graph for a file — what it imports, what imports it, or both.
@@ -844,6 +860,7 @@ src/
 │   ├── get_context.ts
 │   ├── get_file_summary.ts
 │   ├── find_usages.ts
+│   ├── get_call_path.ts
 │   ├── get_dependencies.ts
 │   ├── get_project_overview.ts  # federation-aware stats
 │   ├── reindex.ts

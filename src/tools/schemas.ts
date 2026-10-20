@@ -50,6 +50,14 @@ export const FindUsagesSchema = z.object({
   repos: reposField,
 });
 
+export const GetCallPathSchema = z.object({
+  from: z.string().min(1),
+  to: z.string().min(1),
+  from_file: z.string().min(1).optional(),
+  to_file: z.string().min(1).optional(),
+  max_depth: z.number().int().min(1).max(12).optional(),
+});
+
 export const GetDependenciesSchema = z.object({
   target: z.string().min(1),
   direction: z.enum(['imports', 'imported_by', 'both']).optional(),
@@ -108,6 +116,7 @@ export const TOOL_SCHEMAS: Record<string, z.ZodSchema> = {
   get_context: GetContextSchema,
   get_file_summary: GetFileSummarySchema,
   find_usages: FindUsagesSchema,
+  get_call_path: GetCallPathSchema,
   get_dependencies: GetDependenciesSchema,
   get_project_overview: GetProjectOverviewSchema,
   reindex: ReindexSchema,

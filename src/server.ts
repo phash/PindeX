@@ -12,6 +12,7 @@ import { getSymbol } from './tools/get_symbol.js';
 import { getContext } from './tools/get_context.js';
 import { getFileSummary } from './tools/get_file_summary.js';
 import { findUsages } from './tools/find_usages.js';
+import { getCallPath } from './tools/get_call_path.js';
 import { getDependencies } from './tools/get_dependencies.js';
 import { getProjectOverview } from './tools/get_project_overview.js';
 import { reindex } from './tools/reindex.js';
@@ -35,6 +36,7 @@ import type {
   GetFileSummaryInput,
   GetFileSummaryOutput,
   FindUsagesInput,
+  GetCallPathInput,
   GetDependenciesInput,
   GetProjectOverviewInput,
   ReindexInput,
@@ -114,6 +116,21 @@ const TOOL_DEFINITIONS = [
         file: { type: 'string', description: 'File defining the symbol (when the name is ambiguous)' },
       },
       required: ['symbol'],
+    },
+  },
+  {
+    name: 'get_call_path',
+    description: 'Shortest call chain from symbol A to symbol B (max_depth default 6). Edges tagged EXTRACTED/INFERRED. Primary repo only (no repos param).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        from: { type: 'string', description: 'Caller symbol name' },
+        to: { type: 'string', description: 'Callee symbol name' },
+        from_file: { type: 'string', description: 'File defining `from` (when the name is ambiguous)' },
+        to_file: { type: 'string', description: 'File defining `to` (when the name is ambiguous)' },
+        max_depth: { type: 'number', description: 'Max call hops (default 6, max 12)' },
+      },
+      required: ['from', 'to'],
     },
   },
   {
@@ -238,7 +255,7 @@ const TOOL_DEFINITIONS = [
 /** Core tools exposed when EXPOSE_CORE_TOOLS_ONLY=true (omits analytics/memory/doc tools). */
 const CORE_TOOL_NAMES = new Set([
   'search_symbols', 'get_symbol', 'get_context', 'get_file_summary',
-  'find_usages', 'get_dependencies', 'get_project_overview', 'get_api_endpoints',
+  'find_usages', 'get_call_path', 'get_dependencies', 'get_project_overview', 'get_api_endpoints',
 ]);
 
 /** A secondary project whose index is searched alongside the primary DB (federation). */
@@ -390,6 +407,11 @@ export function createMcpServer(
         case 'find_usages': {
           result = findUsages(repoSet, args as FindUsagesInput);
           heuristicMultiplier = 10;
+          break;
+        }
+        case 'get_call_path': {
+          result = getCallPath(repoSet, args as GetCallPathInput);
+          heuristicMultiplier = 15;
           break;
         }
         case 'get_dependencies': {
