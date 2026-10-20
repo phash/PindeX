@@ -188,6 +188,26 @@ describe('writeMcpJson / removeMcpJson merge behavior', () => {
     expect(config.mcpServers).toEqual({ serena });
   });
 
+  it('dropped-key warning never prints key names with control characters', () => {
+    const path = join(tempDir, '.mcp.json');
+    writeFileSync(path, JSON.stringify({
+      mcpServers: { pindex: { env: { 'EVIL\u001b[2J': 'x', 'a-b': 'y', NODE_OPTIONS: 'z' } } },
+    }), 'utf-8');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    let printed = '';
+    try {
+      writeMcpJson(tempDir, entry());
+      printed = warn.mock.calls.map((c: unknown[]) => String(c[0])).join('\n');
+    } finally {
+      warn.mockRestore();
+    }
+    expect(printed).toContain('NODE_OPTIONS');
+    expect(printed).toContain('+2 other key(s)');
+    expect(printed).not.toContain('\u001b');
+    expect(printed).not.toContain('EVIL');
+    expect(printed).not.toContain('a-b');
+  });
+
   it('re-running keeps allowlisted env keys but overwrites the pindex-managed ones', () => {
     const path = join(tempDir, '.mcp.json');
     writeFileSync(path, JSON.stringify({
@@ -578,6 +598,20 @@ describe('injectClaudeSettings', () => {
     expect(existsSync(localPath)).toBe(false);
   });
 
+  it('invalid hooks shape in settings.local.json leaves BOTH files untouched', () => {
+    const claudeDir = join(tempDir, '.claude');
+    mkdirSync(claudeDir, { recursive: true });
+    const sharedPath = join(claudeDir, 'settings.json');
+    const localPath = join(claudeDir, 'settings.local.json');
+    const shared = JSON.stringify({ theme: 'dark' });
+    const local = JSON.stringify({ hooks: { SessionStart: { not: 'an array' } } });
+    writeFileSync(sharedPath, shared, 'utf-8');
+    writeFileSync(localPath, local, 'utf-8');
+    expect(() => injectClaudeSettings(tempDir)).toThrow();
+    expect(readFileSync(sharedPath, 'utf-8')).toBe(shared);
+    expect(readFileSync(localPath, 'utf-8')).toBe(local);
+  });
+
   it('malformed settings.local.json blocks inject without touching either file', () => {
     const claudeDir = join(tempDir, '.claude');
     mkdirSync(claudeDir, { recursive: true });
@@ -618,15 +652,31 @@ describe('injectGitignore', () => {
     expect(content).toContain('.pindex/');
   });
 
-  it('skips if .pindex/ already present (idempotent)', () => {
-    writeFileSync(join(tempDir, '.gitignore'), 'node_modules/\n.pindex/\n', 'utf-8');
+  it('skips if .pindex/ and settings.local.json are already present (idempotent)', () => {
+    writeFileSync(join(tempDir, '.gitignore'), 'node_modules/\n.pindex/\n.claude/settings.local.json\n', 'utf-8');
 
     const result = injectGitignore(tempDir);
     expect(result).toBe('already_present');
   });
 
+  it('also ignores .claude/settings.local.json (absolute paths) and adds only what is missing', () => {
+    writeFileSync(join(tempDir, '.gitignore'), '.pindex/\n', 'utf-8');
+    expect(injectGitignore(tempDir)).toBe('added');
+    const content = readFileSync(join(tempDir, '.gitignore'), 'utf-8');
+    expect(content.split('\n').filter((l) => l === '.claude/settings.local.json')).toHaveLength(1);
+    expect(content.split('\n').filter((l) => l === '.pindex/')).toHaveLength(1);
+    expect(injectGitignore(tempDir)).toBe('already_present');
+  });
+
+  it('creates .gitignore with both entries', () => {
+    injectGitignore(tempDir);
+    const lines = readFileSync(join(tempDir, '.gitignore'), 'utf-8').split('\n');
+    expect(lines).toContain('.pindex/');
+    expect(lines).toContain('.claude/settings.local.json');
+  });
+
   it('detects .pindex without trailing slash', () => {
-    writeFileSync(join(tempDir, '.gitignore'), '.pindex\n', 'utf-8');
+    writeFileSync(join(tempDir, '.gitignore'), '.pindex\n.claude/settings.local.json\n', 'utf-8');
 
     const result = injectGitignore(tempDir);
     expect(result).toBe('already_present');

@@ -369,4 +369,57 @@ describe('pindex federate CLI', () => {
     expect(mcp.mcpServers.pindex.env.PROJECT_ROOT).toBe(projectDir);
     expect(parseFederationRepos(mcp.mcpServers.pindex.env.FEDERATION_REPOS)).toEqual([fresh]);
   });
+
+  for (const autoRegister of [false, true]) {
+    it(`add (autoRegister=${autoRegister}) rebuilds a shipped pindex entry: real command, allowlisted env only`, async () => {
+      writeFileSync(
+        join(projectDir, '.mcp.json'),
+        JSON.stringify({
+          mcpServers: {
+            other: { command: 'x' },
+            pindex: {
+              command: '/evil',
+              args: ['--pwn'],
+              env: { NODE_OPTIONS: '--require ./evil.js', LANGUAGES: 'python', PROJECT_ROOT: '/elsewhere' },
+            },
+          },
+        }),
+      );
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        await federateAdd(projectDir, targetDir, { autoRegister });
+      } finally {
+        warn.mockRestore();
+      }
+      const mcp = JSON.parse(readFileSync(join(projectDir, '.mcp.json'), 'utf-8'));
+      const pindex = mcp.mcpServers.pindex;
+      expect(pindex.command).toBe(process.execPath);
+      expect(pindex.args[0].replace(/\\/g, '/')).toMatch(/dist\/index\.js$/);
+      expect(pindex.env.NODE_OPTIONS).toBeUndefined();
+      expect(pindex.env.LANGUAGES).toBe('python');
+      expect(pindex.env.PROJECT_ROOT).toBe(projectDir);
+      expect(parseFederationRepos(pindex.env.FEDERATION_REPOS)).toEqual([targetDir]);
+      expect(mcp.mcpServers.other).toEqual({ command: 'x' });
+    });
+  }
+
+  it('remove rebuilds the pindex entry too (no shipped command/env survives)', async () => {
+    await federateAdd(projectDir, targetDir, {});
+    const p = join(projectDir, '.mcp.json');
+    const mcp = JSON.parse(readFileSync(p, 'utf-8'));
+    mcp.mcpServers.pindex.command = '/evil';
+    mcp.mcpServers.pindex.env.NODE_OPTIONS = '--require ./evil.js';
+    writeFileSync(p, JSON.stringify(mcp));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await federateRemove(projectDir, 'target');
+    } finally {
+      warn.mockRestore();
+    }
+    const after = JSON.parse(readFileSync(p, 'utf-8')).mcpServers.pindex;
+    expect(after.command).toBe(process.execPath);
+    expect(after.env.NODE_OPTIONS).toBeUndefined();
+    expect(after.env.FEDERATION_REPOS).toBeUndefined();
+  });
 });
+

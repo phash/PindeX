@@ -39,6 +39,8 @@ export const PRESERVED_ENV_KEYS = [
   'PINDEX_PARSE_WORKERS',
 ] as const;
 
+const SAFE_ENV_NAME = /^[A-Z0-9_]{1,64}$/;
+
 export function writeMcpJson(
   projectRoot: string,
   entry: RegistryEntry,
@@ -65,9 +67,13 @@ export function writeMcpJson(
     }
   }
   if (dropped.length > 0) {
-    // Names only, never values (they may hold secrets).
+    // Names only, never values (they may hold secrets); untrusted names that are not plain
+    // env identifiers are only counted (no terminal escape sequences reach the console).
+    const printable = dropped.filter((k) => SAFE_ENV_NAME.test(k));
+    const others = dropped.length - printable.length;
+    const names = [...printable, ...(others > 0 ? [`+${others} other key(s)`] : [])].join(', ');
     console.warn(
-      `  [pindex] .mcp.json: dropped env keys not kept automatically: ${dropped.join(', ')} — re-add trusted ones by hand.`,
+      `  [pindex] .mcp.json: dropped env keys not kept automatically: ${names} — re-add trusted ones by hand.`,
     );
   }
 
@@ -228,7 +234,11 @@ function hookEntries(settings: Settings | null, event: string): unknown[] {
  */
 function withPindexHook(settings: Settings, event: string, add: object | null): Settings {
   const hooks: HookMap = { ...(settings.hooks as HookMap | undefined) };
-  const kept = (hooks[event] ?? []).filter((h) => !isPindexEntry(h));
+  const current = hooks[event] ?? [];
+  if (!Array.isArray(current)) {
+    throw new Error(`hooks.${event} in a Claude settings file is not an array. Fix it manually; PindeX will not overwrite it.`);
+  }
+  const kept = current.filter((h) => !isPindexEntry(h));
   const next = add ? [...kept, { ...add, _pindex: HOOK_MARKER }] : kept;
   if (next.length > 0) hooks[event] = next;
   else delete hooks[event];
@@ -279,10 +289,12 @@ export function injectClaudeSettings(
 
   if (!existsSync(claudeDir)) mkdirSync(claudeDir, { recursive: true });
 
+  // Build both results before writing either, so a failure leaves both files untouched.
   let nextShared = withPindexHook(shared ?? {}, 'PreToolUse', PINDEX_HOOKS.hooks.PreToolUse[0]);
   nextShared = withPindexHook(nextShared, 'SessionStart', null);
+  const nextLocal = withPindexHook(local ?? {}, 'SessionStart', sessionStartEntry());
   writeSettings(sharedPath, nextShared);
-  writeSettings(localPath, withPindexHook(local ?? {}, 'SessionStart', sessionStartEntry()));
+  writeSettings(localPath, nextLocal);
 
   return shared === null ? 'created' : 'added';
 }
@@ -290,23 +302,27 @@ export function injectClaudeSettings(
 // ─── .gitignore injection ──────────────────────────────────────────────────
 
 /**
- * Adds `.pindex/` to the project's .gitignore (or creates the file).
- * Idempotent: skips if already present.
+ * Adds `.pindex/` and `.claude/settings.local.json` to the project's .gitignore (or creates
+ * the file). Idempotent: only missing entries are appended.
  */
 export function injectGitignore(
   projectRoot: string,
 ): 'added' | 'already_present' | 'created' {
   const gitignorePath = join(projectRoot, '.gitignore');
-  const entry = '.pindex/';
+  // .pindex/ = index data; settings.local.json = SessionStart hook with absolute local paths.
+  const entries = [
+    { line: '.pindex/', aliases: ['.pindex/', '.pindex'], comment: '# PindeX index data' },
+    { line: '.claude/settings.local.json', aliases: ['.claude/settings.local.json', '/.claude/settings.local.json'], comment: '# Claude Code local settings (PindeX hook with absolute paths)' },
+  ];
+  const block = (list: typeof entries) => list.map((e) => `${e.comment}\n${e.line}\n`).join('');
   if (existsSync(gitignorePath)) {
-    const content = readFileSync(gitignorePath, 'utf-8');
-    if (content.split('\n').some((l) => l.trim() === entry || l.trim() === '.pindex')) {
-      return 'already_present';
-    }
-    appendFileSync(gitignorePath, `\n# PindeX index data\n${entry}\n`, 'utf-8');
+    const lines = readFileSync(gitignorePath, 'utf-8').split('\n').map((l) => l.trim());
+    const missing = entries.filter((e) => !e.aliases.some((a) => lines.includes(a)));
+    if (missing.length === 0) return 'already_present';
+    appendFileSync(gitignorePath, `\n${block(missing)}`, 'utf-8');
     return 'added';
   } else {
-    writeFileSync(gitignorePath, `# PindeX index data\n${entry}\n`, 'utf-8');
+    writeFileSync(gitignorePath, block(entries), 'utf-8');
     return 'created';
   }
 }

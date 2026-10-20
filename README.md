@@ -173,7 +173,7 @@ PindeX will:
 5. Inject a PindeX workflow section into `CLAUDE.md` (created if missing)
 6. Install two Claude Code hooks (both marked with `"_pindex": "pindex-hook"`; your own hooks are kept):
    - `PreToolUse` in the shared `.claude/settings.json` — reminds Claude to prefer PindeX tools over `Read`/`Glob`/`Grep` (portable command, safe to commit)
-   - `SessionStart` in `.claude/settings.local.json` — starts the dashboard in the background (`gui --no-open`). It contains machine-specific absolute paths (`node` + `dist/cli/index.js`), so it lives in the local, uncommitted settings file. A pindex `SessionStart` entry left in `settings.json` by older versions is moved there automatically
+   - `SessionStart` in `.claude/settings.local.json` — starts the dashboard in the background (`gui --no-open`). It contains machine-specific absolute paths (`node` + `dist/cli/index.js`), so it lives in the local settings file, which `pindex` adds to `.gitignore` (together with `.pindex/`). A pindex `SessionStart` entry left in `settings.json` by older versions is moved there automatically
 
 Output:
 ```
