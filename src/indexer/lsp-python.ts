@@ -2,7 +2,7 @@ import { spawn as nodeSpawn, type ChildProcessWithoutNullStreams, type SpawnOpti
 import { tmpdir } from 'node:os';
 import { existsSync, realpathSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { resolve, join, dirname, delimiter, isAbsolute, sep } from 'node:path';
+import nodePath, { type PlatformPath } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
   StreamMessageReader,
@@ -151,7 +151,7 @@ export class LspPythonClient {
       await Promise.race([
         this.connection.sendRequest('initialize', {
           processId: process.pid,
-          rootUri: pathToFileURL(resolve(this.projectRoot)).href,
+          rootUri: pathToFileURL(nodePath.resolve(this.projectRoot)).href,
           capabilities: { textDocument: { documentSymbol: { hierarchicalDocumentSymbolSupport: true } } },
         }),
         exitPromise,
@@ -187,7 +187,7 @@ export class LspPythonClient {
   ): Promise<{ symbols: ParsedSymbol[]; imports: ParsedImport[] } | null> {
     if (!this.connection || this._state !== 'ready') return null;
 
-    const uri = pathToFileURL(resolve(this.projectRoot, relPath)).href;
+    const uri = pathToFileURL(nodePath.resolve(this.projectRoot, relPath)).href;
 
     const connection = this.connection;
     try {
@@ -288,6 +288,8 @@ export interface PyrightResolveDeps {
   exists: (path: string) => boolean;
   realpath: (path: string) => string;
   pathEnv: string;
+  /** Path flavour (posix/win32); defaults to the host's. Injectable so both are testable anywhere. */
+  path?: PlatformPath;
 }
 
 const defaultResolveDeps = (): PyrightResolveDeps => ({
@@ -307,6 +309,7 @@ export function resolvePyrightLangserver(
   projectRoot: string,
   deps: PyrightResolveDeps = defaultResolveDeps(),
 ): string | null {
+  const { resolve, join, dirname, delimiter, isAbsolute, sep } = deps.path ?? nodePath;
   const bin = 'pyright-langserver';
   try {
     const pkgJson = deps.resolvePackageJson();

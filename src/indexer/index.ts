@@ -11,9 +11,11 @@ import {
   upsertDependency,
   deleteSymbolsByFileId,
   deleteOutgoingDependencies,
+  replaceSymbolRefs,
   getAllFiles,
   deleteFile,
   getFileByPath,
+  getSymbolsByFileId,
   insertDocumentChunk,
   deleteDocumentChunksByFileId,
 } from '../db/queries.js';
@@ -325,8 +327,15 @@ export class Indexer {
     const symbolSummaries = new Map<string, string | null>();
 
     if (this.generateSummaries) {
-      fileSummary = await this.summarizer.summarizeFile(relativePath, content);
+      // hash NULL = forced re-parse (schema v6 migration), not a content change:
+      // keep existing summaries instead of paying for new LLM calls.
+      const reuse = existing && existing.hash === null ? this.existingSummaries(existing.id) : null;
+      fileSummary = existing?.summary && reuse
+        ? existing.summary
+        : await this.summarizer.summarizeFile(relativePath, content);
       const symbolEntries = parsed.symbols.map(async (sym) => {
+        const kept = reuse?.get(sym.name);
+        if (kept) return [sym.name, kept] as const;
         const snippet = content.split('\n').slice(sym.startLine - 1, sym.endLine).join('\n');
         const summary = await this.summarizer.summarizeSymbol(sym.signature, snippet);
         return [sym.name, summary] as const;
@@ -348,8 +357,9 @@ export class Indexer {
         const fileRecord = getFileByPath(this.db, relativePath)!;
         const diff = computeAstDiff(this.db, relativePath, parsed.symbols);
         deleteSymbolsByFileId(this.db, fileRecord.id);
+        const symbolIdByKey = new Map<string, number>();
         for (const sym of parsed.symbols) {
-          upsertSymbol(this.db, {
+          const symbolId = upsertSymbol(this.db, {
             fileId: fileRecord.id,
             name: sym.name,
             kind: sym.kind,
@@ -361,7 +371,11 @@ export class Indexer {
             isAsync: sym.isAsync,
             hasTryCatch: sym.hasTryCatch,
           });
+          // Two symbols with the same name on the same start line (e.g. overloads written on
+          // one line) collide here; refs then attach to the last one, which is acceptable.
+          symbolIdByKey.set(`${sym.name}:${sym.startLine}`, symbolId);
         }
+        replaceSymbolRefs(this.db, fileRecord.id, parsed.references, symbolIdByKey);
         deleteOutgoingDependencies(this.db, fileRecord.id);
         return diff;
       });
@@ -377,6 +391,15 @@ export class Indexer {
         errors: [`Failed to index ${relativePath}: ${String(err)}`],
       };
     }
+  }
+
+  /** Non-empty symbol summaries of an indexed file, by symbol name (first one wins). */
+  private existingSummaries(fileId: number): Map<string, string> {
+    const byName = new Map<string, string>();
+    for (const s of getSymbolsByFileId(this.db, fileId)) {
+      if (s.summary && !byName.has(s.name)) byName.set(s.name, s.summary);
+    }
+    return byName;
   }
 
   /** Indexes (or re-indexes) a single document file given its project-relative path. */

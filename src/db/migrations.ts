@@ -44,16 +44,38 @@ const migrations: Migration[] = [
     up: (db) => {
       // UNIQUE constraints to make INSERT OR IGNORE work correctly
       // + missing indexes for query performance
+      // The usages table is gone from initSchema (dropped in v6), so on a fresh
+      // DB it does not exist here; its indexes only matter for upgrades.
+      const hasUsages = db
+        .prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='usages'")
+        .get();
+      if (hasUsages) {
+        db.exec(`
+          CREATE UNIQUE INDEX IF NOT EXISTS idx_usages_unique
+            ON usages(symbol_id, used_in_file, used_at_line);
+          CREATE INDEX IF NOT EXISTS idx_usages_used_in_file
+            ON usages(used_in_file);
+        `);
+      }
       db.exec(`
         CREATE UNIQUE INDEX IF NOT EXISTS idx_dependencies_unique
           ON dependencies(from_file, to_file, symbol_name);
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_usages_unique
-          ON usages(symbol_id, used_in_file, used_at_line);
-        CREATE INDEX IF NOT EXISTS idx_usages_used_in_file
-          ON usages(used_in_file);
         CREATE INDEX IF NOT EXISTS idx_session_events_type_session
           ON session_events(event_type, session_id);
       `);
+    },
+  },
+  {
+    version: 6,
+    up: (db) => {
+      // Call graph: symbol_refs replaces the never-populated usages table.
+      initSchema(db); // creates symbol_refs + indexes (IF NOT EXISTS)
+      db.exec('DROP TABLE IF EXISTS usages');
+      // Force a re-parse on the next indexAll so existing installs fill symbol_refs
+      // (the indexer skips files whose hash is unchanged). Only tree-sitter languages
+      // produce refs; docs and regex-parsed files keep their hash (and LLM summaries).
+      db.exec(`UPDATE files SET hash = NULL
+               WHERE language IN ('typescript', 'tsx', 'javascript', 'jsx', 'vue', 'svelte')`);
     },
   },
 ];

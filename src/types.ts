@@ -6,7 +6,8 @@ export interface FileRecord {
   language: string;
   summary: string | null;
   last_indexed: string;
-  hash: string;
+  /** NULL forces a re-parse on the next indexAll (set by the v6 migration for code files). */
+  hash: string | null;
   raw_token_estimate: number;
 }
 
@@ -33,13 +34,6 @@ export interface SymbolRecord {
   is_exported: 0 | 1;
   is_async: 0 | 1;
   has_try_catch: 0 | 1;
-}
-
-export interface UsageRecord {
-  id: number;
-  symbol_id: number;
-  used_in_file: number;
-  used_at_line: number;
 }
 
 export interface SessionRecord {
@@ -146,10 +140,25 @@ export interface ParsedImport {
   symbols: string[];
 }
 
+export interface ParsedReference {
+  /** 'foo' for foo(), a.foo(), new foo(). */
+  callee: string;
+  /** 'this', 'a', 'a.b'; null for bare calls. Truncated to 60 chars. */
+  receiver: string | null;
+  kind: 'call' | 'new';
+  /** 1-based line of the call. */
+  line: number;
+  /** Name of the innermost enclosing ParsedSymbol; null at module level. */
+  caller: string | null;
+  /** startLine of the enclosing symbol; null at module level. */
+  callerLine: number | null;
+}
+
 export interface ParsedFile {
   language: string;
   symbols: ParsedSymbol[];
   imports: ParsedImport[];
+  references: ParsedReference[];
   rawTokenEstimate: number;
 }
 
@@ -255,14 +264,50 @@ export interface GetFileSummaryOutput {
 
 export interface FindUsagesInput {
   symbol: string;
+  /** Defining file, to pick one of several same-named symbols. */
+  file?: string;
+  /** Max usages returned (default 100, max 500). */
+  limit?: number;
   repos?: string[];
 }
 
 export interface UsageResult {
   file: string;
   line: number;
-  project: string;
+  /** Enclosing symbol of the call site; null for module-level calls. */
+  caller: string | null;
+  confidence: 'EXTRACTED' | 'INFERRED';
+  /** Only set when more than one repo is configured (federation). */
+  project?: string;
 }
+
+/** Returned by find_usages when the symbol name has several definitions and no `file` was given. */
+export interface FindUsagesAmbiguous {
+  error: 'ambiguous';
+  candidates: Array<{ file: string; line: number; kind: string; project?: string }>;
+}
+
+/** Returned by find_usages when no callable definition of the name exists (in `file`, if given). */
+export interface FindUsagesNotFound {
+  error: 'not_found';
+}
+
+export interface GetCallPathInput {
+  from: string;
+  to: string;
+  from_file?: string;
+  to_file?: string;
+  /** Default 6, max 12. */
+  max_depth?: number;
+}
+
+export type GetCallPathOutput =
+  | {
+      path: Array<{ from: string; to: string; file: string; line: number; confidence: 'EXTRACTED' | 'INFERRED' }> | null;
+      hops: number;
+    }
+  | { error: 'ambiguous'; side: 'from' | 'to'; candidates: Array<{ file: string; line: number; kind: string }> }
+  | { error: 'not_found'; side: 'from' | 'to' };
 
 export interface GetDependenciesInput {
   target: string;
@@ -322,6 +367,10 @@ export interface ProjectOverviewSnapshot {
     /** Only files that have a summary; omitted when none do. */
     summaries?: Array<{ path: string; summary: string }>;
   }>;
+  /** Most widely called symbols (max 10); full mode with call edges only. */
+  hubs?: Array<{ symbol: string; file: string; callerFiles: number }>;
+  /** File clusters from dependency + call edges (max 8); full mode with call edges only. */
+  communities?: Array<{ id: number; label: string; size: number; topFiles: string[] }>;
   stats: { totalFiles: number; totalSymbols: number };
   session_memory?: SessionMemorySummary;
   index_recommendation?: IndexRecommendation;

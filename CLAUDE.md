@@ -110,7 +110,7 @@ npm run build            # compile src/ → dist/
 - **DB**: SQLite via `better-sqlite3` — FTS5 virtual table with triggers for symbol search
 - **Parser**: `tree-sitter` + `tree-sitter-typescript` — AST-based symbol/import extraction
 - **Indexer**: MD5-hash-based incremental reindexing, glob file discovery
-- **MCP Tools**: 15 tools registered via `@modelcontextprotocol/sdk` (Zod-validierte Inputs)
+- **MCP Tools**: 16 tools registered via `@modelcontextprotocol/sdk` (Zod-validierte Inputs)
 - **Monitoring**: per-project Express + WebSocket server, per-project deterministic port
 - **GUI**: `pindex-gui` binary — aggregated Express dashboard reading all project DBs directly
 - **CLI**: `pindex` (init/add/remove/status), per-project daemon management
@@ -124,10 +124,11 @@ npm run build            # compile src/ → dist/
 | `get_symbol` | Symbol details: signature, location, file dependencies + memory context |
 | `get_context` | Line-range snippet from a file (token-efficient) |
 | `get_file_summary` | File overview: symbols, imports, exports + memory context |
-| `find_usages` | All locations where a symbol is used |
+| `find_usages` | Call sites of a symbol with `caller` + confidence (`EXTRACTED`/`INFERRED`); `file` disambiguates, ambiguous names return candidates, unknown → `not_found`; default 100 results (`limit` ≤ 500) |
+| `get_call_path` | Shortest call chain from symbol A to B (`from`/`to`, `from_file`/`to_file`, `max_depth` default 6, max 12); edges tagged `EXTRACTED`/`INFERRED`; primary repo only |
 | `get_dependencies` | Import graph for a file (imports / imported_by / both) |
 | `get_api_endpoints` | Extracted HTTP/REST endpoints (Express-style route symbols) in the codebase |
-| `get_project_overview` | Project-level stats, entry points, directory groups (full mode) + session memory summary |
+| `get_project_overview` | Project-level stats, entry points, directory groups, hub symbols (top 10 by distinct caller files) and file communities (max 8; full mode, only with call edges) + session memory summary |
 | `reindex` | Rebuild index for one file or the entire project |
 | `get_token_stats` | Token usage statistics for a session |
 | `start_comparison` | Start A/B session (indexed vs baseline) |
@@ -169,6 +170,7 @@ EXPOSE_CORE_TOOLS_ONLY=false                    # 'true' = register only core to
 PINDEX_LSP=                                     # opt-in Pyright LSP for Python: only 'true' enables it (default off = regex)
 # Trust: with PINDEX_LSP=true pyright reads the project's pyrightconfig.json and may run the configured
 # Python interpreter — enable only for trusted repos. Pyright is spawned with cwd=os.tmpdir().
+PINDEX_HOOK_STRICT=1                            # PreToolUse hook: deny the first whole-file Read per session (outline as reason) instead of advising
 FEDERATION_REPOS=/path/a:/path/b               # OS path delimiter (":" posix, ";" Windows) or a JSON array
 # Federation CLI: configure via 'pindex federate add/remove/list' (preferred over editing FEDERATION_REPOS by hand).
 # 9 read-only tools (search_symbols, find_usages, get_symbol, get_file_summary, get_context,
@@ -305,7 +307,8 @@ Dieses Projekt ist mit PindeX indexiert.
 2. **Symbol suchen?** → `mcp__pindex__search_symbols` oder `find_symbol`
 3. **Abhängigkeiten?** → `mcp__pindex__get_dependencies`
 4. **Wo wird etwas verwendet?** → `mcp__pindex__find_usages`
-5. **Projekt-Überblick?** → `mcp__pindex__get_project_overview`
+5. **Wie hängen A und B zusammen?** → `mcp__pindex__get_call_path`
+6. **Projekt-Überblick?** → `mcp__pindex__get_project_overview`
 
 **VERBOTEN** (solange PindeX verfügbar):
 - `Read` auf Quellcode-Dateien ohne vorherigen `get_file_summary`-Aufruf

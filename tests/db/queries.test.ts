@@ -5,7 +5,7 @@ import {
   insertTestFile,
   insertTestSymbol,
   insertTestDependency,
-  insertTestUsage,
+  insertTestRef,
   insertTestSession,
   insertTestTokenLog,
 } from '../helpers/fixtures.js';
@@ -22,7 +22,9 @@ import {
   sanitizeFtsQuery,
   getDependenciesByFile,
   getImportedByFile,
-  getUsagesBySymbol,
+  replaceSymbolRefs,
+  getRefsByCallee,
+  getAllRefs,
   insertTokenLog,
   getSessionStats,
   createSession,
@@ -30,7 +32,6 @@ import {
   listSessions,
   deleteSymbolsByFileId,
   upsertDependency,
-  upsertUsage,
   deleteOutgoingDependencies,
   getRecentFileChangeEvents,
   insertSessionEvent,
@@ -272,40 +273,73 @@ describe('Dependency queries', () => {
   });
 });
 
-describe('Usage queries', () => {
+describe('symbol_refs queries', () => {
   let db: Database.Database;
   let fileId: number;
-  let symbolId: number;
+  let symA: number;
 
   beforeEach(() => {
     db = createTestDb();
     fileId = insertTestFile(db, { path: 'src/app.ts' });
-    symbolId = insertTestSymbol(db, { fileId, name: 'getUser' });
+    symA = insertTestSymbol(db, { fileId, name: 'handler' });
   });
 
-  describe('upsertUsage', () => {
-    it('inserts a usage record', () => {
-      const callerFileId = insertTestFile(db, { path: 'src/caller.ts' });
-      upsertUsage(db, { symbolId, usedInFile: callerFileId, usedAtLine: 42 });
-      const usages = getUsagesBySymbol(db, symbolId);
-      expect(usages).toHaveLength(1);
-      expect(usages[0].used_at_line).toBe(42);
-    });
+  const ref = (callee: string, line: number, caller: string | null = null, callerLine: number | null = null) => ({
+    callee, receiver: null, kind: 'call' as const, line, caller, callerLine,
   });
 
-  describe('getUsagesBySymbol', () => {
-    it('returns empty array when no usages', () => {
-      expect(getUsagesBySymbol(db, symbolId)).toHaveLength(0);
-    });
+  it('replaceSymbolRefs replaces the previous set for the file', () => {
+    replaceSymbolRefs(db, fileId, [ref('a', 1), ref('b', 2)], new Map());
+    replaceSymbolRefs(db, fileId, [ref('c', 3)], new Map());
+    const rows = getAllRefs(db);
+    expect(rows.map((r) => r.callee_name)).toEqual(['c']);
+  });
 
-    it('returns all usages for a symbol', () => {
-      const callerA = insertTestFile(db, { path: 'src/callerA.ts' });
-      const callerB = insertTestFile(db, { path: 'src/callerB.ts' });
-      insertTestUsage(db, symbolId, callerA, 10);
-      insertTestUsage(db, symbolId, callerB, 20);
-      const usages = getUsagesBySymbol(db, symbolId);
-      expect(usages).toHaveLength(2);
-    });
+  it('fills caller_symbol_id via name:startLine key, null for module level', () => {
+    replaceSymbolRefs(
+      db, fileId,
+      [ref('x', 5, 'handler', 3), ref('y', 9)],
+      new Map([['handler:3', symA]]),
+    );
+    const rows = getAllRefs(db);
+    const x = rows.find((r) => r.callee_name === 'x')!;
+    const y = rows.find((r) => r.callee_name === 'y')!;
+    expect(x.caller_symbol_id).toBe(symA);
+    expect(x.caller_name).toBe('handler');
+    expect(x.file_path).toBe('src/app.ts');
+    expect(y.caller_symbol_id).toBeNull();
+    expect(y.caller_name).toBeNull();
+  });
+
+  it('distinguishes same-named callers by start line', () => {
+    const m1 = insertTestSymbol(db, { fileId, name: 'run', startLine: 2, endLine: 4 });
+    const m2 = insertTestSymbol(db, { fileId, name: 'run', startLine: 10, endLine: 12 });
+    replaceSymbolRefs(
+      db, fileId,
+      [ref('p', 3, 'run', 2), ref('q', 11, 'run', 10)],
+      new Map([['run:2', m1], ['run:10', m2]]),
+    );
+    const rows = getAllRefs(db);
+    expect(rows.find((r) => r.callee_name === 'p')!.caller_symbol_id).toBe(m1);
+    expect(rows.find((r) => r.callee_name === 'q')!.caller_symbol_id).toBe(m2);
+  });
+
+  it('getRefsByCallee filters by callee and honours limit', () => {
+    insertTestRef(db, fileId, 'target', 1, { receiver: 'this', kind: 'new' });
+    insertTestRef(db, fileId, 'target', 2);
+    insertTestRef(db, fileId, 'other', 3);
+    const rows = getRefsByCallee(db, 'target');
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toMatchObject({ receiver: 'this', kind: 'new', line: 1 });
+    expect(getRefsByCallee(db, 'target', 1)).toHaveLength(1);
+  });
+
+  it('deleting the file cascades to its refs; deleting a caller symbol nulls it', () => {
+    insertTestRef(db, fileId, 'target', 1, { callerSymbolId: symA });
+    db.prepare('DELETE FROM symbols WHERE id = ?').run(symA);
+    expect(getAllRefs(db)[0].caller_symbol_id).toBeNull();
+    db.prepare('DELETE FROM files WHERE id = ?').run(fileId);
+    expect(getAllRefs(db)).toHaveLength(0);
   });
 });
 

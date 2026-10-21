@@ -12,6 +12,7 @@ import { getSymbol } from './tools/get_symbol.js';
 import { getContext } from './tools/get_context.js';
 import { getFileSummary } from './tools/get_file_summary.js';
 import { findUsages } from './tools/find_usages.js';
+import { getCallPath } from './tools/get_call_path.js';
 import { getDependencies } from './tools/get_dependencies.js';
 import { getProjectOverview } from './tools/get_project_overview.js';
 import { reindex } from './tools/reindex.js';
@@ -35,6 +36,7 @@ import type {
   GetFileSummaryInput,
   GetFileSummaryOutput,
   FindUsagesInput,
+  GetCallPathInput,
   GetDependenciesInput,
   GetProjectOverviewInput,
   ReindexInput,
@@ -106,13 +108,30 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'find_usages',
-    description: 'All call sites of a symbol across the codebase.',
+    description: 'Call sites of a symbol as {file,line,caller,confidence} (EXTRACTED = via import/same file, INFERRED = unique name). Ambiguous name → {error:"ambiguous",candidates}: retry with file. Unknown → {error:"not_found"}. Default 100 results (limit up to 500).',
     inputSchema: {
       type: 'object',
       properties: {
         symbol: { type: 'string', description: 'Symbol name' },
+        file: { type: 'string', description: 'File defining the symbol (when the name is ambiguous)' },
+        limit: { type: 'number', description: 'Max results (default 100, max 500)' },
       },
       required: ['symbol'],
+    },
+  },
+  {
+    name: 'get_call_path',
+    description: 'Shortest call chain from symbol A to symbol B (max_depth default 6). Edges tagged EXTRACTED/INFERRED. Primary repo only (no repos param).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        from: { type: 'string', description: 'Caller symbol name' },
+        to: { type: 'string', description: 'Callee symbol name' },
+        from_file: { type: 'string', description: 'File defining `from` (when the name is ambiguous)' },
+        to_file: { type: 'string', description: 'File defining `to` (when the name is ambiguous)' },
+        max_depth: { type: 'number', description: 'Max call hops (default 6, max 12)' },
+      },
+      required: ['from', 'to'],
     },
   },
   {
@@ -129,11 +148,11 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'get_project_overview',
-    description: 'Project stats and entry points. brief=counts only; full=directory groups.',
+    description: 'Project stats and entry points. brief=counts only; full=directory groups + hub symbols + file communities.',
     inputSchema: {
       type: 'object',
       properties: {
-        mode: { type: 'string', enum: ['brief', 'full'], description: 'brief=counts only; full=directory groups (default)' },
+        mode: { type: 'string', enum: ['brief', 'full'], description: 'brief=counts only; full=directory groups, hubs, communities (default)' },
       },
       required: [],
     },
@@ -237,7 +256,7 @@ const TOOL_DEFINITIONS = [
 /** Core tools exposed when EXPOSE_CORE_TOOLS_ONLY=true (omits analytics/memory/doc tools). */
 const CORE_TOOL_NAMES = new Set([
   'search_symbols', 'get_symbol', 'get_context', 'get_file_summary',
-  'find_usages', 'get_dependencies', 'get_project_overview', 'get_api_endpoints',
+  'find_usages', 'get_call_path', 'get_dependencies', 'get_project_overview', 'get_api_endpoints',
 ]);
 
 /** A secondary project whose index is searched alongside the primary DB (federation). */
@@ -389,6 +408,11 @@ export function createMcpServer(
         case 'find_usages': {
           result = findUsages(repoSet, args as FindUsagesInput);
           heuristicMultiplier = 10;
+          break;
+        }
+        case 'get_call_path': {
+          result = getCallPath(repoSet, args as GetCallPathInput);
+          heuristicMultiplier = 15;
           break;
         }
         case 'get_dependencies': {

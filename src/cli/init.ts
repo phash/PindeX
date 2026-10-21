@@ -102,7 +102,8 @@ Dieses Projekt ist mit PindeX indexiert.
 2. **Symbol suchen?** → \`mcp__pindex__search_symbols\`
 3. **Abhängigkeiten?** → \`mcp__pindex__get_dependencies\`
 4. **Wo wird etwas verwendet?** → \`mcp__pindex__find_usages\`
-5. **Projekt-Überblick?** → \`mcp__pindex__get_project_overview\`
+5. **Wie hängen A und B zusammen?** → \`mcp__pindex__get_call_path\`
+6. **Projekt-Überblick?** → \`mcp__pindex__get_project_overview\`
 
 **VERBOTEN** (solange PindeX verfügbar):
 - \`Read\` auf Quellcode-Dateien ohne vorherigen \`get_file_summary\`-Aufruf
@@ -175,23 +176,6 @@ export function injectClaudeMdSection(
 
 const HOOK_MARKER = 'pindex-hook';
 
-const PINDEX_HOOKS = {
-  hooks: {
-    PreToolUse: [
-      {
-        matcher: 'Read|Glob|Grep',
-        hooks: [
-          {
-            type: 'command',
-            // Remind Claude to prefer PindeX tools for source-code exploration
-            command: `node -e "const f=process.env.CLAUDE_TOOL_INPUT_FILE_PATH||''; const src=/\\.(ts|tsx|js|jsx|py|java|go|rs|cs|cpp|c|rb|swift|kt)$/i.test(f); if(src) process.stdout.write('[PindeX] Bevorzuge get_file_summary / get_context / search_symbols statt direktem Read. Nur als Fallback Read nutzen.\\n')"`,
-          },
-        ],
-      },
-    ],
-  },
-};
-
 function isPindexEntry(entry: unknown): boolean {
   return typeof entry === 'object' && entry !== null &&
     (entry as { _pindex?: unknown })._pindex === HOOK_MARKER;
@@ -255,18 +239,30 @@ function sessionStartEntry(): { hooks: { type: string; command: string }[] } {
   };
 }
 
-/** True if `entries` hold exactly one pindex entry and it runs the current SessionStart command. */
-function hasCurrentSessionStart(entries: unknown[]): boolean {
+/**
+ * PreToolUse entry: on a whole-file Read, `cli/hook-main.js` injects a symbol outline.
+ * Absolute node/script paths → settings.local.json. Hard 5 s timeout (seconds); the hook fails open.
+ */
+function preToolUseEntry(): { matcher: string; hooks: { type: string; command: string; timeout: number }[] } {
+  const { command, args } = nodeScriptCommand('cli/hook-main.js');
+  return {
+    matcher: 'Read',
+    hooks: [{ type: 'command', command: `"${command}" "${args[0]}"`, timeout: 5 }],
+  };
+}
+
+/** True if `entries` hold exactly one pindex entry and it runs `expected`. */
+function hasCurrentCommand(entries: unknown[], expected: string): boolean {
   const ours = entries.filter(isPindexEntry) as { hooks?: { command?: string }[] }[];
-  const expected = sessionStartEntry().hooks[0].command;
   return ours.length === 1 && (ours[0].hooks ?? []).some((h) => h.command === expected);
 }
 
 /**
  * Installs the PindeX hooks:
- * - PreToolUse (portable command) → shared `.claude/settings.json`
- * - SessionStart (machine-specific absolute node/script paths) → `.claude/settings.local.json`
- * A pindex SessionStart entry left in settings.json by older versions is moved out.
+ * - PreToolUse (outline on whole-file Read) and SessionStart (dashboard) both carry machine-specific
+ *   absolute node/script paths → `.claude/settings.local.json`
+ * Pindex entries left in the shared settings.json by older versions (the broken
+ * CLAUDE_TOOL_INPUT_FILE_PATH PreToolUse, SessionStart) are removed — upgrade needs no --force.
  * Idempotent: skips when everything is already up to date, unless force=true.
  * Both files are parsed before anything is written; malformed JSON is never overwritten.
  */
@@ -282,21 +278,27 @@ export function injectClaudeSettings(
   const local = readSettingsIfExists(localPath);
 
   const upToDate =
-    hookEntries(shared, 'PreToolUse').some(isPindexEntry) &&
+    !hookEntries(shared, 'PreToolUse').some(isPindexEntry) &&
     !hookEntries(shared, 'SessionStart').some(isPindexEntry) &&
-    hasCurrentSessionStart(hookEntries(local, 'SessionStart'));
+    hasCurrentCommand(hookEntries(local, 'PreToolUse'), preToolUseEntry().hooks[0].command) &&
+    hasCurrentCommand(hookEntries(local, 'SessionStart'), sessionStartEntry().hooks[0].command);
   if (upToDate && !force) return 'skipped';
 
   if (!existsSync(claudeDir)) mkdirSync(claudeDir, { recursive: true });
 
   // Build both results before writing either, so a failure leaves both files untouched.
-  let nextShared = withPindexHook(shared ?? {}, 'PreToolUse', PINDEX_HOOKS.hooks.PreToolUse[0]);
+  let nextShared = withPindexHook(shared ?? {}, 'PreToolUse', null);
   nextShared = withPindexHook(nextShared, 'SessionStart', null);
-  const nextLocal = withPindexHook(local ?? {}, 'SessionStart', sessionStartEntry());
-  writeSettings(sharedPath, nextShared);
+  const nextLocal = withPindexHook(
+    withPindexHook(local ?? {}, 'PreToolUse', preToolUseEntry()),
+    'SessionStart',
+    sessionStartEntry(),
+  );
+  // The shared file is only touched when it exists (an old pindex entry may need removing).
+  if (shared !== null) writeSettings(sharedPath, nextShared);
   writeSettings(localPath, nextLocal);
 
-  return shared === null ? 'created' : 'added';
+  return shared === null && local === null ? 'created' : 'added';
 }
 
 // ─── .gitignore injection ──────────────────────────────────────────────────
@@ -400,8 +402,8 @@ export function removeClaudeMdSection(projectRoot: string): 'removed' | 'not_fou
 }
 
 /**
- * Removes PindeX hooks from `.claude/settings.json` (PreToolUse, legacy SessionStart) and
- * `.claude/settings.local.json` (SessionStart). User entries are kept; a settings.local.json
+ * Removes PindeX hooks from `.claude/settings.json` (legacy PreToolUse/SessionStart) and
+ * `.claude/settings.local.json` (PreToolUse, SessionStart). User entries are kept; a settings.local.json
  * left empty is deleted. Returns 'removed' | 'not_found' | 'skipped' (neither file exists).
  */
 export function removeClaudeSettings(projectRoot: string): 'removed' | 'not_found' | 'skipped' {

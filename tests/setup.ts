@@ -1,5 +1,5 @@
 import { vi } from 'vitest';
-import { mkdirSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -8,9 +8,16 @@ import { join } from 'node:path';
 // that reaches getPindexHome()/GlobalRegistry lands in a throwaway directory.
 // One directory per vitest worker slot, wiped on start: bounded footprint even if
 // the forked worker is killed before an exit handler can run.
-const sandboxHome = join(tmpdir(), `pindex-test-home-${process.env.VITEST_POOL_ID ?? 'x'}`);
-rmSync(sandboxHome, { recursive: true, force: true });
-mkdirSync(sandboxHome, { recursive: true });
+// On Windows a file still held by the previous test file in this worker (SQLite, lock)
+// makes the wipe fail with EPERM; then fall back to a fresh directory instead.
+const slotHome = join(tmpdir(), `pindex-test-home-${process.env.VITEST_POOL_ID ?? 'x'}`);
+let sandboxHome = slotHome;
+try {
+  rmSync(slotHome, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+  mkdirSync(slotHome, { recursive: true });
+} catch {
+  sandboxHome = mkdtempSync(`${slotHome}-`);
+}
 process.env.HOME = sandboxHome;
 process.env.USERPROFILE = sandboxHome;
 process.on('exit', () => { try { rmSync(sandboxHome, { recursive: true, force: true }); } catch { /* best-effort */ } });

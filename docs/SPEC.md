@@ -1,12 +1,12 @@
 # PindeX – MCP Tool Spezifikation
 
-Stand: 2026-03-03 (v1.3.0, 14 Tools + Zod-Validierung)
+Stand: 2026-10-21 (16 Tools + Zod-Validierung)
 
 ---
 
 ## Übersicht
 
-PindeX stellt 14 MCP-Tools über das **stdio-Transport** bereit. Alle Tool-Inputs werden zur Laufzeit mit **Zod-Schemas** validiert (`src/tools/schemas.ts`). Bei ungültigen Eingaben wird eine strukturierte Fehlermeldung zurückgegeben, bevor die Tool-Logik ausgeführt wird.
+PindeX stellt 16 MCP-Tools über das **stdio-Transport** bereit. Alle Tool-Inputs werden zur Laufzeit mit **Zod-Schemas** validiert (`src/tools/schemas.ts`). Bei ungültigen Eingaben wird eine strukturierte Fehlermeldung zurückgegeben, bevor die Tool-Logik ausgeführt wird.
 
 **Transport:** stdio (JSON-RPC über stdin/stdout)
 **Protokoll:** [Model Context Protocol (MCP)](https://modelcontextprotocol.io)
@@ -16,15 +16,15 @@ PindeX stellt 14 MCP-Tools über das **stdio-Transport** bereit. Alle Tool-Input
 
 | Kategorie | Tools | Beschreibung |
 |---|---|---|
-| **Code-Exploration** | `search_symbols`, `get_symbol`, `get_context`, `get_file_summary`, `find_usages`, `get_dependencies`, `get_api_endpoints` | Navigation und Analyse des indexierten Code |
+| **Code-Exploration** | `search_symbols`, `get_symbol`, `get_context`, `get_file_summary`, `find_usages`, `get_call_path`, `get_dependencies`, `get_api_endpoints` | Navigation und Analyse des indexierten Code |
 | **Projekt-Management** | `get_project_overview`, `reindex` | Projektweite Statistiken und Re-Indexierung |
 | **Dokumente & Kontext** | `search_docs`, `get_doc_chunk`, `save_context` | Dokumenten-Suche und persistenter Wissens-Speicher |
 | **Analytics & Memory** | `get_token_stats`, `start_comparison`, `get_session_memory` | Token-Tracking, A/B-Tests, passive Beobachtungen |
 
 ### Kern-Tools (Core)
 
-Bei aktivierter `EXPOSE_CORE_TOOLS_ONLY`-Option werden nur folgende 8 Tools exponiert:
-`search_symbols`, `get_symbol`, `get_context`, `get_file_summary`, `find_usages`, `get_dependencies`, `get_project_overview`, `get_api_endpoints`
+Bei aktivierter `EXPOSE_CORE_TOOLS_ONLY`-Option werden nur folgende 9 Tools exponiert:
+`search_symbols`, `get_symbol`, `get_context`, `get_file_summary`, `find_usages`, `get_call_path`, `get_dependencies`, `get_project_overview`, `get_api_endpoints`
 
 ---
 
@@ -206,29 +206,71 @@ Liest einen Zeilen-Bereich aus einer Datei direkt von der Festplatte. Token-effi
 
 ### `find_usages`
 
-Alle Stellen in der Codebase an denen ein Symbol verwendet wird.
+Aufrufstellen eines Symbols, aufgelöst über den Call-Graph (`symbol_refs` + `dependencies`).
 
 **Input:**
 
 | Parameter | Typ | Pflicht | Default | Beschreibung |
 |---|---|---|---|---|
 | `symbol` | string (min 1) | ✓ | — | Symbol-Name |
+| `file` | string (min 1) | | — | Definierende Datei, falls der Name mehrfach definiert ist |
+| `limit` | int 1..500 | | 100 | Max. Anzahl Ergebnisse |
 
 **Output:**
 
 ```json
-{
-  "symbol": "upsertFile",
-  "usages": [
-    { "file": "src/indexer/index.ts", "line": 226, "context": "upsertFile(this.db, {" },
-    { "file": "src/indexer/index.ts", "line": 309, "context": "upsertFile(this.db, {" }
-  ]
-}
+[
+  { "file": "src/indexer/index.ts", "line": 226, "caller": "indexFile", "confidence": "EXTRACTED" }
+]
 ```
 
+Mehrdeutiger Name ohne `file`:
+
+```json
+{ "error": "ambiguous", "candidates": [{ "file": "src/a.ts", "line": 2, "kind": "function" }] }
+```
+
+Unbekannter Name (bzw. keine Definition in `file`): `{ "error": "not_found" }`
+
 **Verhalten:**
-- Suche über `usages`-Tabelle (vorbefüllte Referenzen)
-- `context` enthält die Zeile an der Verwendungsstelle
+- Nur aufrufbare Definitionen zählen (Kinds `function`, `method`, `class`, `const`) — für Kandidaten und Auflösung; `interface`/`type`/`enum` gleichen Namens machen einen Namen nicht mehrdeutig
+- Auflösung je Referenz (erster Treffer gewinnt): (1) Symbol in derselben Datei (`this.x()` nur Methoden) → `EXTRACTED`; (2) per Import (`dependencies.symbol_name`) aus einer Datei, die es definiert → `EXTRACTED`; (3) genau eine Definition projektweit → `INFERRED`; sonst verworfen
+- Member-Aufrufe auf einem anderen Receiver als `this` (`date.format()`) überspringen (1) und (2) — nie `EXTRACTED`, nur (3), und auch das nur, wenn die aufrufende Datei die Datei des Ziels ist oder irgendeine `dependencies`-Zeile zu ihr hat (sonst verworfen, nicht als mehrdeutig gezählt). So landet `arr.filter()` nicht auf einem fremden `RepoSet.filter`
+- `file` darf relativ oder absolut (innerhalb des Repo-Roots) sein
+- `caller` = umschließendes Symbol, `null` auf Modulebene; `project` nur bei mehr als einem Repo
+- Cap: Default 100, per `limit` bis 500 Ergebnisse, angewendet nach Auflösung und Filterung auf das Ziel-Symbol (überzählige werden ohne Marker abgeschnitten)
+- Bekannte Grenze: Aliased Imports (`import { a as b }`) — der Aufruf `b()` wird nicht über den Import aufgelöst
+
+---
+
+### `get_call_path`
+
+Kürzeste Aufrufkette von Symbol A nach Symbol B über den Call-Graph (BFS, nur primäres Repo, kein `repos`-Parameter).
+
+**Input:**
+
+| Parameter | Typ | Pflicht | Default | Beschreibung |
+|---|---|---|---|---|
+| `from` | string (min 1) | ✓ | — | Aufrufendes Symbol |
+| `to` | string (min 1) | ✓ | — | Aufgerufenes Symbol |
+| `from_file` | string (min 1) | | — | Definierende Datei von `from` (bei Mehrdeutigkeit) |
+| `to_file` | string (min 1) | | — | Definierende Datei von `to` (bei Mehrdeutigkeit) |
+| `max_depth` | int 1..12 | | 6 | Max. Anzahl Kanten |
+
+**Output:**
+
+```json
+{ "path": [{ "from": "createMcpServer", "to": "searchSymbols", "file": "src/server.ts", "line": 389, "confidence": "EXTRACTED" }], "hops": 1 }
+```
+
+- Nicht erreichbar innerhalb `max_depth`: `{ "path": null, "hops": 0 }`
+- `from` und `to` sind dasselbe Symbol: `{ "path": [], "hops": 0 }`
+- Endpunkt mehrdeutig: `{ "error": "ambiguous", "side": "from" | "to", "candidates": [{ "file", "line", "kind" }] }`
+- Endpunkt unbekannt: `{ "error": "not_found", "side": "from" | "to" }`
+
+**Verhalten:**
+- Kanten wie bei `find_usages` aufgelöst (`EXTRACTED`/`INFERRED`); Aufrufe auf Modulebene (ohne umschließendes Symbol) sind nicht traversierbar
+- Zyklen terminieren (jeder Knoten wird höchstens einmal besucht)
 
 ---
 
@@ -322,7 +364,19 @@ Projektweite Statistiken. Bei aktivierter Federation auch für verlinkte Repos.
 }
 ```
 
+Zusätzlich in `mode: "full"`, sobald Call-Kanten existieren:
+
+```json
+{
+  "hubs": [{ "symbol": "resolveWithinRoot", "file": "src/util/paths.ts", "callerFiles": 9 }],
+  "communities": [{ "id": 0, "label": "src/tools", "size": 14, "topFiles": ["src/server.ts", "src/tools/schemas.ts"] }]
+}
+```
+
 **Verhalten:**
+- `hubs`: Top 10 Symbole nach Anzahl unterschiedlicher aufrufender Dateien (Tie: Name, dann Datei)
+- `communities`: Top 8 Datei-Cluster per deterministischer Label-Propagation über Import-Paare (Gewicht 1) und Call-Kanten (Gewicht 1 je Kante); isolierte Dateien entfallen. `label` = gemeinsamer Verzeichnis-Präfix, wenn er mindestens 2 Segmente hat (z.B. `src/db`), sonst der repo-relative Pfad der Datei mit dem höchsten Grad, die kein Test ist (nicht unter `tests/`/`test/`, kein `.test.`/`.spec.`); `topFiles` max. 3
+- Für beide werden Member-Aufrufe auf fremden Receivern mit Built-in-Methodennamen (`filter`, `map`, `replace`, `get`, `all`, `run`, … — `BUILTIN_METHOD_NAMES` in `src/graph/call-graph.ts`) ignoriert; `find_usages` meldet sie weiterhin
 - `index_recommendation` berechnet ob sich der Index für dieses Projekt lohnt
 - `memory_summary` aggregiert Session-Beobachtungen
 - `entry_points` erkennt Dateien mit `index`, `main`, `app` im Namen
@@ -555,6 +609,19 @@ Passive Session-Beobachtungen abfragen — automatisch generiert durch Tool-Aufr
 - Beobachtungen werden als `stale` markiert wenn das verlinkte Symbol sich seit der Beobachtung geändert hat
 - `stale_reason` beschreibt den Grund
 - Stale-Beobachtungen werden als Warnungen in `get_symbol` und `get_file_summary` ausgegeben
+
+---
+
+## PreToolUse-Hook (`pindex hook`)
+
+`pindex` trägt in `.claude/settings.local.json` einen Claude-Code-`PreToolUse`-Hook (Matcher `Read`, `timeout: 5`) ein, der `pindex hook` mit dem Hook-JSON auf stdin aufruft.
+
+**Verhalten:**
+- Nur `Read` ohne `offset`/`limit` auf eine indexierte, seit dem Indexieren unveränderte Code-Datei (Hash-Vergleich) innerhalb des Projekt-Roots
+- Ausgabe: `{"hookSpecificOutput":{"hookEventName":"PreToolUse","additionalContext":"[PindeX] <rel> (<n> lines) symbols: name(kind)@start-end, …"}}` — max. 40 Symbole (`… +N more`), max. 4096 Zeichen, gefolgt von einem Hinweis auf `get_context`
+- `PINDEX_HOOK_STRICT=1`: der erste solche Read pro Session und Datei wird mit `permissionDecision: "deny"` und der Outline als `permissionDecisionReason` abgelehnt; Zustand unter `~/.pindex/hook-state/` (nach 7 Tagen bereinigt)
+- Keine Ausgabe (Read läuft unverändert) bei Dokumenten, nicht indexierten oder geänderten Dateien, Dateien ohne Symbole und bei jedem Fehler (fail open); Exit-Code immer 0
+- Alte No-op-Hook-Einträge werden beim erneuten Aufruf von `pindex` ersetzt
 
 ---
 

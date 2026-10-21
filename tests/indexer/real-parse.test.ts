@@ -128,3 +128,78 @@ describe('parseFile symbol extraction with REAL tree-sitter (Task 10)', () => {
     expect(names('class O { m(){ const x = class { n(){} }; } }')).toEqual(['O', 'm']);
   });
 });
+
+describe('extractReferences — real tree-sitter', () => {
+  it('records a bare call with its enclosing function', () => {
+    const { references } = parseFile('x.ts', 'function a(){ b(); }');
+    expect(references).toEqual([
+      { callee: 'b', receiver: null, kind: 'call', line: 1, caller: 'a', callerLine: 1 },
+    ]);
+  });
+
+  it('records this.method() inside a class method with the method as caller', () => {
+    const { references } = parseFile('x.ts', 'class K {\n  m(){ this.n(); }\n  n(){}\n}');
+    expect(references).toEqual([
+      { callee: 'n', receiver: 'this', kind: 'call', line: 2, caller: 'm', callerLine: 2 },
+    ]);
+  });
+
+  it('records module-level new expressions with null caller', () => {
+    const { references } = parseFile('x.ts', 'const x = new Foo();');
+    expect(references).toEqual([
+      { callee: 'Foo', receiver: null, kind: 'new', line: 1, caller: null, callerLine: null },
+    ]);
+  });
+
+  it('attributes calls in an arrow-function const to that const', () => {
+    const { references } = parseFile('x.ts', 'export const h = () => util.fmt(1);');
+    expect(references).toEqual([
+      { callee: 'fmt', receiver: 'util', kind: 'call', line: 1, caller: 'h', callerLine: 1 },
+    ]);
+  });
+
+  it('skips non-identifier callees without crashing', () => {
+    const { references } = parseFile('x.ts', 'foo()();\narr[0]();');
+    expect(references.map((r) => r.callee)).toEqual(['foo']);
+  });
+
+  it('dedupes identical references and truncates long receivers', () => {
+    const long = 'a'.repeat(80);
+    const { references } = parseFile('x.ts', `function f(){ g(); g(); ${long}.z(); }`);
+    expect(references.filter((r) => r.callee === 'g')).toHaveLength(1);
+    expect(references.find((r) => r.callee === 'z')!.receiver).toHaveLength(60);
+  });
+
+  it('extracts references from Vue script blocks', () => {
+    const { references } = parseFile('x.vue', '<script>\nfunction a(){ b(); }\n</script>');
+    expect(references.map((r) => [r.callee, r.caller])).toEqual([['b', 'a']]);
+  });
+
+  it('returns empty references for regex-parsed languages', () => {
+    expect(parseFile('x.py', 'def a():\n    b()\n').references).toEqual([]);
+  });
+
+  it('survives structuredClone (worker postMessage path)', () => {
+    const parsed = parseFile('x.ts', 'function a(){ b(); }');
+    expect(structuredClone(parsed).references).toEqual(parsed.references);
+    expect(parsed.references).toHaveLength(1);
+  });
+});
+
+describe('large files — real tree-sitter', () => {
+  it('parses sources longer than 32,767 UTF-16 code units (incl. surrogate pairs)', () => {
+    const body = Array.from({ length: 1200 }, (_, i) => `export function fn${i}() { return '😀 ${i}'; }`).join('\n');
+    const src = `import { x } from './x.js';\n${body}\n`;
+    expect(src.length).toBeGreaterThan(40_000);
+    const parsed = parseFile('big.ts', src);
+    expect(parsed.symbols).toHaveLength(1200);
+    expect(parsed.symbols[1199].name).toBe('fn1199');
+    expect(parsed.imports).toHaveLength(1);
+  });
+
+  it('parses large Vue script blocks', () => {
+    const body = Array.from({ length: 1200 }, (_, i) => `function fn${i}() { return '😀 ${i}'; }`).join('\n');
+    const parsed = parseFile('big.vue', `<script>\n${body}\n</script>`);
+    expect(parsed.symbols).toHaveLength(1200);
+  });
+});

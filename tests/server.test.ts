@@ -30,8 +30,8 @@ import {
   insertTestSymbol,
   insertTestSession,
   insertTestTokenLog,
-  insertTestUsage,
   insertTestDependency,
+  insertTestRef,
 } from './helpers/fixtures.js';
 import { insertDocumentChunk } from '../src/db/queries.js';
 
@@ -87,10 +87,10 @@ describe('createMcpServer – tools/list', () => {
         'search_symbols', 'get_symbol', 'get_context', 'get_file_summary',
         'find_usages', 'get_dependencies', 'get_project_overview', 'get_api_endpoints',
         'reindex', 'get_token_stats', 'start_comparison', 'search_docs',
-        'get_doc_chunk', 'save_context', 'get_session_memory',
+        'get_doc_chunk', 'save_context', 'get_session_memory', 'get_call_path',
       ]),
     );
-    expect(names).toHaveLength(15);
+    expect(names).toHaveLength(16);
     // Every entry must carry a JSON input schema.
     for (const tool of res.tools) {
       expect(tool.inputSchema.type).toBe('object');
@@ -185,7 +185,7 @@ describe('createMcpServer – tools/call dispatch (all tools)', () => {
     // A second file that imports app.ts (for dependency graph) and uses greet.
     const consumerId = insertTestFile(db, { path: 'src/consumer.ts', language: 'typescript', hash: 'def456' });
     insertTestDependency(db, consumerId, fileId, 'greet');
-    insertTestUsage(db, symbolId, consumerId, 7);
+    insertTestRef(db, consumerId, 'greet', 3);
 
     // A document chunk so search_docs / get_doc_chunk have content (uses the
     // real query helper so the FTS5 triggers fire).
@@ -251,9 +251,12 @@ describe('createMcpServer – tools/call dispatch (all tools)', () => {
 
   it('find_usages returns call sites', async () => {
     const res = await callTool(server, 'find_usages', { symbol: 'greet' });
-    // Shape can be array of usages or grouped per-repo; just assert it parsed.
-    expect(res).toBeTruthy();
-    expect(JSON.stringify(res)).toContain('consumer.ts');
+    expect(res).toEqual([{ file: 'src/consumer.ts', line: 3, caller: null, confidence: 'EXTRACTED' }]);
+  });
+
+  it('find_usages accepts a file argument', async () => {
+    const res = await callTool(server, 'find_usages', { symbol: 'greet', file: './src/app.ts' });
+    expect(res).toEqual([{ file: 'src/consumer.ts', line: 3, caller: null, confidence: 'EXTRACTED' }]);
   });
 
   it('get_dependencies returns the import graph', async () => {
@@ -306,6 +309,7 @@ describe('createMcpServer – tools/call dispatch (all tools)', () => {
       get_doc_chunk: { file: 'src/app.ts' },
       save_context: { content: 'fact' },
       get_session_memory: {},
+      get_call_path: { from: 'greet', to: 'greet' },
     };
     for (const [tool, args] of Object.entries(argsByTool)) {
       const raw = await callRaw(server, tool, args);

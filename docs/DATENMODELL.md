@@ -1,6 +1,6 @@
 # PindeX – Datenmodell
 
-Stand: 2026-03-03 (Schema-Version 5)
+Stand: 2026-10-21 (Schema-Version 6)
 
 ---
 
@@ -13,7 +13,7 @@ PindeX speichert alle Index-Daten in einer einzelnen **SQLite-Datenbank** pro Pr
 │                        SQLite DB                            │
 │                                                             │
 │  ┌─────────┐   1:N   ┌──────────┐   1:N   ┌────────────┐  │
-│  │  files   │────────►│ symbols  │────────►│  usages    │  │
+│  │  files   │────────►│ symbols  │────────►│symbol_refs │  │
 │  └─────────┘         └──────────┘         └────────────┘  │
 │       │                    │                               │
 │       │ 1:N               FTS5                             │
@@ -55,7 +55,7 @@ Zentrale Tabelle — jede indexierte Datei (Code + Dokumente) wird hier registri
 | `language` | TEXT NOT NULL | Erkannte Sprache (`typescript`, `javascript`, `markdown`, etc.) |
 | `summary` | TEXT | LLM-generierte Zusammenfassung (null wenn deaktiviert) |
 | `last_indexed` | DATETIME | Zeitstempel der letzten Indexierung |
-| `hash` | TEXT | MD5-Hash des Datei-Inhalts (für inkrementelles Reindexing) |
+| `hash` | TEXT | MD5-Hash des Datei-Inhalts (für inkrementelles Reindexing); NULL erzwingt ein Neu-Parsen beim nächsten `indexAll` |
 | `raw_token_estimate` | INTEGER | Geschätzte Token-Anzahl des Roh-Inhalts |
 
 **Inkrementelles Reindexing:** Beim Indexieren wird der MD5-Hash verglichen. Nur bei Änderung werden Symbole/Chunks neu geschrieben.
@@ -104,21 +104,23 @@ Import-Graph: welche Datei importiert welche andere Datei und welches Symbol.
 
 ---
 
-### `usages`
+### `symbol_refs`
 
-Verwendungsorte eines Symbols in der Codebase.
+Call-Graph-Kanten: Aufrufstellen (`foo()`, `a.foo()`, `new Foo()`), pro Datei bei jedem Re-Index komplett ersetzt. Ab Schema v6 (ersetzt die nie befüllte Tabelle `usages`).
 
 | Spalte | Typ | Beschreibung |
 |---|---|---|
 | `id` | INTEGER PK | Auto-Increment |
-| `symbol_id` | INTEGER NOT NULL | FK → `symbols(id)`, CASCADE DELETE |
-| `used_in_file` | INTEGER NOT NULL | FK → `files(id)`, CASCADE DELETE |
-| `used_at_line` | INTEGER | Zeilennummer der Verwendung |
+| `file_id` | INTEGER NOT NULL | FK → `files(id)`, CASCADE DELETE (Datei, die den Aufruf enthält) |
+| `caller_symbol_id` | INTEGER | FK → `symbols(id)`, SET NULL; `NULL` bei Aufrufen auf Modulebene |
+| `callee_name` | TEXT NOT NULL | Name des aufgerufenen Symbols (ungeprüft, rein syntaktisch) |
+| `receiver` | TEXT | `this`, `a`, `a.b` (max. 60 Zeichen); `NULL` bei freien Aufrufen |
+| `kind` | TEXT NOT NULL | `call` oder `new` |
+| `line` | INTEGER NOT NULL | 1-basierte Zeile des Aufrufs |
 
 **Indexe:**
-- `idx_usages_symbol` — alle Verwendungen eines Symbols
-- `idx_usages_used_in_file` — alle Symbole die in einer Datei verwendet werden
-- `idx_usages_unique` — UNIQUE(symbol_id, used_in_file, used_at_line)
+- `idx_symbol_refs_callee` — alle Aufrufer eines Namens
+- `idx_symbol_refs_file` — alle Aufrufe einer Datei
 
 ---
 
@@ -321,9 +323,8 @@ Für jede der drei FTS5-Tabellen existieren drei Trigger:
 | `idx_dependencies_from` | dependencies | from_file | Normal |
 | `idx_dependencies_to` | dependencies | to_file | Normal |
 | `idx_dependencies_unique` | dependencies | from_file, to_file, symbol_name | UNIQUE |
-| `idx_usages_symbol` | usages | symbol_id | Normal |
-| `idx_usages_used_in_file` | usages | used_in_file | Normal |
-| `idx_usages_unique` | usages | symbol_id, used_in_file, used_at_line | UNIQUE |
+| `idx_symbol_refs_callee` | symbol_refs | callee_name | Normal |
+| `idx_symbol_refs_file` | symbol_refs | file_id | Normal |
 | `idx_token_log_session` | token_log | session_id | Normal |
 | `idx_documents_file_id` | documents | file_id | Normal |
 | `idx_context_entries_session` | context_entries | session_id | Normal |
@@ -342,11 +343,12 @@ PindeX verwendet **`PRAGMA user_version`** für Schema-Versionierung. Migratione
 
 | Version | Änderungen |
 |---|---|
-| 1 | Initiales Schema: `files`, `symbols`, `dependencies`, `usages`, `token_log`, `sessions`, `symbols_fts` |
+| 1 | Initiales Schema: `files`, `symbols`, `dependencies`, `usages` (ab v6 entfernt), `token_log`, `sessions`, `symbols_fts` |
 | 2 | Dokument-Indexierung: `documents`, `context_entries`, `documents_fts`, `context_entries_fts` |
 | 3 | Session Memory: `ast_snapshots`, `session_observations`, `session_events` |
 | 4 | AST-Flags: `is_async` und `has_try_catch` Spalten auf `symbols` |
 | 5 | Performance: UNIQUE-Constraints auf `dependencies` und `usages`, zusätzliche Indexe |
+| 6 | Call-Graph: `symbol_refs` ersetzt `usages` (DROP); `files.hash` wird für Code-Dateien mit Tree-sitter-Parser (`typescript`, `tsx`, `javascript`, `jsx`, `vue`, `svelte`) auf NULL gesetzt, damit das nächste `indexAll` sie neu parst und `symbol_refs` füllt. Vorhandene LLM-Summaries werden dabei übernommen (Datei-Summary, Symbol-Summaries per gleichem Namen) |
 
 **Migrationsstrategie:**
 - Migrationen sind additiv (kein Datenverlust)
@@ -359,7 +361,7 @@ PindeX verwendet **`PRAGMA user_version`** für Schema-Versionierung. Migratione
 ## Relationen (ER-Diagramm)
 
 ```
-files ──< symbols ──< usages
+files ──< symbols ──< symbol_refs (caller_symbol_id)
   │           │
   │           └──── symbols_fts (FTS5, trigger-sync)
   │
@@ -378,4 +380,4 @@ context_entries ──── context_entries_fts (FTS5, trigger-sync)
 ast_snapshots (standalone, UNIQUE(file_path, symbol_name))
 ```
 
-**CASCADE DELETE:** Alle FK-Beziehungen nutzen `ON DELETE CASCADE`. Wird eine Datei aus `files` gelöscht, werden automatisch alle zugehörigen `symbols`, `dependencies`, `usages` und `documents` entfernt.
+**CASCADE DELETE:** Alle FK-Beziehungen nutzen `ON DELETE CASCADE`. Wird eine Datei aus `files` gelöscht, werden automatisch alle zugehörigen `symbols`, `dependencies`, `symbol_refs` und `documents` entfernt.

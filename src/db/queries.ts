@@ -3,7 +3,6 @@ import { normalizeRelPath } from '../util/paths.js';
 import type {
   FileRecord,
   SymbolRecord,
-  UsageRecord,
   SessionRecord,
   SymbolKind,
   DocumentChunkRecord,
@@ -12,6 +11,7 @@ import type {
   SessionEventRecord,
   ObservationType,
   SessionEventType,
+  ParsedReference,
 } from '../types.js';
 
 /** Normalize any path to forward slashes (POSIX convention). */
@@ -262,46 +262,62 @@ export function deleteOutgoingDependencies(
   db.prepare('DELETE FROM dependencies WHERE from_file = ?').run(fileId);
 }
 
-// ─── Usage Queries ────────────────────────────────────────────────────────────
+// ─── Call Reference Queries ───────────────────────────────────────────────────
 
-export interface UpsertUsageInput {
-  symbolId: number;
-  usedInFile: number;
-  usedAtLine: number;
-}
-
-export function upsertUsage(
-  db: Database.Database,
-  input: UpsertUsageInput,
-): void {
-  db.prepare(`
-    INSERT OR IGNORE INTO usages (symbol_id, used_in_file, used_at_line)
-    VALUES (@symbolId, @usedInFile, @usedAtLine)
-  `).run(input);
-}
-
-export interface UsageWithFile extends UsageRecord {
+export interface SymbolRefRow {
+  id: number;
+  file_id: number;
   file_path: string;
+  caller_symbol_id: number | null;
+  caller_name: string | null;
+  callee_name: string;
+  receiver: string | null;
+  kind: 'call' | 'new';
+  line: number;
 }
 
-export function getUsagesBySymbol(
+const SYMBOL_REF_SELECT = `
+  SELECT r.id, r.file_id, f.path AS file_path, r.caller_symbol_id, s.name AS caller_name,
+         r.callee_name, r.receiver, r.kind, r.line
+  FROM symbol_refs r
+  JOIN files f ON r.file_id = f.id
+  LEFT JOIN symbols s ON r.caller_symbol_id = s.id`;
+
+/** Replaces all call references of a file. `symbolIdByKey` maps
+ *  `${name}:${startLine}` to a symbol id so same-named symbols stay distinct. */
+export function replaceSymbolRefs(
   db: Database.Database,
-  symbolId: number,
-  limit = 200,
-): UsageWithFile[] {
-  return db
-    .prepare(
-      `SELECT u.*, f.path AS file_path
-       FROM usages u JOIN files f ON u.used_in_file = f.id
-       WHERE u.symbol_id = ?
-       ORDER BY f.path, u.used_at_line
-       LIMIT ?`,
-    )
-    .all(symbolId, limit) as UsageWithFile[];
+  fileId: number,
+  refs: ParsedReference[],
+  symbolIdByKey: Map<string, number>,
+): void {
+  db.prepare('DELETE FROM symbol_refs WHERE file_id = ?').run(fileId);
+  const insert = db.prepare(`
+    INSERT INTO symbol_refs (file_id, caller_symbol_id, callee_name, receiver, kind, line)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `);
+  for (const ref of refs) {
+    const callerId =
+      ref.caller !== null && ref.callerLine !== null
+        ? (symbolIdByKey.get(`${ref.caller}:${ref.callerLine}`) ?? null)
+        : null;
+    insert.run(fileId, callerId, ref.callee, ref.receiver, ref.kind, ref.line);
+  }
 }
 
-export function deleteUsagesByFile(db: Database.Database, fileId: number): void {
-  db.prepare('DELETE FROM usages WHERE used_in_file = ?').run(fileId);
+/** Refs calling `calleeName`, ordered by path/line. A negative `limit` returns all rows (SQLite `LIMIT -1`). */
+export function getRefsByCallee(
+  db: Database.Database,
+  calleeName: string,
+  limit = 500,
+): SymbolRefRow[] {
+  return db
+    .prepare(`${SYMBOL_REF_SELECT} WHERE r.callee_name = ? ORDER BY f.path, r.line LIMIT ?`)
+    .all(calleeName, limit) as SymbolRefRow[];
+}
+
+export function getAllRefs(db: Database.Database): SymbolRefRow[] {
+  return db.prepare(`${SYMBOL_REF_SELECT} ORDER BY f.path, r.line`).all() as SymbolRefRow[];
 }
 
 // ─── Token Log Queries ────────────────────────────────────────────────────────

@@ -46,7 +46,7 @@ Your project files
   ├── files            (path, hash, language, token estimate)
   ├── symbols          (name, kind, signature, lines)       ─► search_symbols
   ├── dependencies     (import graph)                       ─► get_dependencies
-  ├── usages           (symbol → call sites)                ─► find_usages
+  ├── symbol_refs      (call sites, resolved at query time) ─► find_usages
   ├── documents        (text chunks from .md/.yaml/.txt)    ─► search_docs
   ├── context_entries  (notes saved by Claude mid-session)  ─► search_docs
   └── token_log        (per-session metrics)
@@ -185,9 +185,9 @@ PindeX will:
 3. Merge a `pindex` server entry into `.mcp.json` in the project root (other servers and keys in an existing file are preserved; an invalid-JSON file is left untouched and reported). Re-running keeps your settings for: `LANGUAGES`, `AUTO_REINDEX`, `GENERATE_SUMMARIES`, `SUMMARIZER_MODEL`, `MONITORING_AUTO_OPEN`, `EXPOSE_CORE_TOOLS_ONLY`, `OBSERVATION_RETENTION`, `PINDEX_PARSE_WORKERS`. Any other env key in the existing entry (e.g. `PINDEX_LSP`, `SUMMARIZER_API_KEY`, `SUMMARIZER_BASE_URL`, `PINDEX_BIND_HOST`, `NODE_OPTIONS`) is dropped and its name (never the value) is printed, so a `.mcp.json` shipped with a repo cannot slip settings into your config; re-add trusted keys by hand. `command` is the absolute path of the `node` that ran `pindex`, `args` the absolute path of `dist/index.js` — no PATH lookup needed
 4. Register the project in `~/.pindex/registry.json`
 5. Inject a PindeX workflow section into `CLAUDE.md` (created if missing)
-6. Install two Claude Code hooks (both marked with `"_pindex": "pindex-hook"`; your own hooks are kept):
-   - `PreToolUse` in the shared `.claude/settings.json` — reminds Claude to prefer PindeX tools over `Read`/`Glob`/`Grep` (portable command, safe to commit)
-   - `SessionStart` in `.claude/settings.local.json` — starts the dashboard in the background (`gui --no-open`). It contains machine-specific absolute paths (`node` + `dist/cli/index.js`), so it lives in the local settings file, which `pindex` adds to `.gitignore` (together with `.pindex/`). A pindex `SessionStart` entry left in `settings.json` by older versions is moved there automatically
+6. Install two Claude Code hooks, both in `.claude/settings.local.json` (both marked with `"_pindex": "pindex-hook"`; your own hooks are kept). They contain machine-specific absolute paths, so `pindex` adds that file to `.gitignore` (together with `.pindex/`):
+   - `PreToolUse` (matcher `Read`, 5 s timeout) — when the agent reads a whole source file that is indexed and unchanged since indexing, the hook injects a compact symbol outline (`name(kind)@start-end`, max 40 symbols) as context. Targeted reads (`offset`/`limit`), unindexed or modified files and documents are left alone; it fails open on any error. Set `PINDEX_HOOK_STRICT=1` to deny the first whole-file read per session and file instead (the outline is the reason shown to the model). The old no-op `PreToolUse` entry in `.claude/settings.json` is removed automatically on re-run (no `--force` needed)
+   - `SessionStart` — starts the dashboard in the background (`gui --no-open`). A pindex `SessionStart` entry left in `settings.json` by older versions is moved there automatically
 
 Output:
 ```
@@ -372,13 +372,31 @@ High-level overview of a file without loading its full content.
 
 ### `find_usages`
 
-All locations in the codebase where a symbol is referenced.
+Call sites of a symbol, resolved through the call graph.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
 | `symbol` | string | ✓ | Symbol name to look up |
+| `file` | string | | File defining the symbol, to disambiguate same-named definitions |
+| `limit` | number | | Max results (default 100, max 500) |
 
-**Returns:** List of `{ file, line, project }` entries.
+**Returns:** List of `{ file, line, caller, confidence }` entries (`project` added when federated; default 100 results, `limit` up to 500, extra ones are cut without a marker). `confidence` is `EXTRACTED` (same file or via import) or `INFERRED` (unique name project-wide). Member calls on a receiver other than `this` (`date.format()`) are never `EXTRACTED`, and only `INFERRED` when the calling file is the target's file or imports anything from it (so `arr.filter()` does not land on an unrelated `RepoSet.filter`). Only callable definitions (function, method, class, const) are considered. `file` may be relative or absolute inside the repo root. A name defined more than once without `file` returns `{ error: "ambiguous", candidates: [{ file, line, kind }] }`; an unknown name returns `{ error: "not_found" }`.
+
+---
+
+### `get_call_path`
+
+Shortest call chain from symbol A to symbol B, resolved through the call graph.
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `from` | string | ✓ | Caller symbol name |
+| `to` | string | ✓ | Callee symbol name |
+| `from_file` | string | | File defining `from`, to disambiguate |
+| `to_file` | string | | File defining `to`, to disambiguate |
+| `max_depth` | number | | Max call hops (default 6, max 12) |
+
+**Returns:** `{ path: [{ from, to, file, line, confidence }], hops }`, `{ path: null, hops: 0 }` when no chain exists within `max_depth`, or `{ path: [], hops: 0 }` when `from` and `to` are the same symbol. Module-level calls are not traversed. An ambiguous or unknown endpoint returns `{ error: "ambiguous", side, candidates }` / `{ error: "not_found", side }`. Primary repo only (no `repos` param).
 
 ---
 
@@ -397,10 +415,10 @@ Import graph for a file — what it imports, what imports it, or both.
 
 ### `get_project_overview`
 
-Project-wide statistics. Optional `mode`: `brief` (counts only) or `full` (default, adds directory groups).
+Project-wide statistics. Optional `mode`: `brief` (counts only) or `full` (default, adds directory groups, hub symbols and file communities).
 When federation is active, also includes stats for each linked repository.
 
-**Returns:** Total file count, dominant language, entry points (`index`, `main`, `app` files), in full mode directory groups (top two path segments, max 50) with file and symbol counts, an `index_recommendation` field (see [When Is PindeX Worth Using?](#when-is-pindex-worth-using)), and (if federated) per-repo breakdowns.
+**Returns:** Total file count, dominant language, entry points (`index`, `main`, `app` files), in full mode directory groups (top two path segments, max 50) with file and symbol counts, `hubs` (top 10 symbols by distinct caller files) and `communities` (up to 8 file clusters from imports + call edges, labelled by their common directory when it has at least two segments, otherwise by the top non-test file; omitted when no call edges exist; member calls with built-in method names such as `arr.filter()` on other objects are ignored for both), an `index_recommendation` field (see [When Is PindeX Worth Using?](#when-is-pindex-worth-using)), and (if federated) per-repo breakdowns.
 
 ---
 
@@ -857,6 +875,7 @@ src/
 │   ├── get_context.ts
 │   ├── get_file_summary.ts
 │   ├── find_usages.ts
+│   ├── get_call_path.ts
 │   ├── get_dependencies.ts
 │   ├── get_project_overview.ts  # federation-aware stats
 │   ├── reindex.ts

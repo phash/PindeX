@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import type Database from 'better-sqlite3';
 import { createTestDb } from '../helpers/db.js';
-import { insertTestFile, insertTestSymbol } from '../helpers/fixtures.js';
+import { insertTestFile, insertTestSymbol, insertTestRef, insertTestDependency } from '../helpers/fixtures.js';
 import { getProjectOverview } from '../../src/tools/get_project_overview.js';
 import { makeFederatedTestRepoSet, makeTestRepoSet } from '../helpers/repo-set.js';
 
@@ -207,5 +207,62 @@ describe('getProjectOverview — index_recommendation (TST-14)', () => {
     insertTestFile(db, { path: 'src/calc.ts', language: 'typescript', rawTokenEstimate: 625 });
     const result = getProjectOverview(makeTestRepoSet(db), '/calc');
     expect(result.index_recommendation!.avgFileLinesEstimate).toBe(50);
+  });
+
+  describe('hubs and communities', () => {
+    function graphDb(): Database.Database {
+      const g = createTestDb();
+      const lib = insertTestFile(g, { path: 'src/lib/util.ts' });
+      const lib2 = insertTestFile(g, { path: 'src/lib/more.ts' });
+      insertTestSymbol(g, { fileId: lib, name: 'util', kind: 'function', startLine: 1, endLine: 2 });
+      insertTestDependency(g, lib2, lib);
+      for (let i = 0; i < 3; i++) {
+        const f = insertTestFile(g, { path: `src/app/c${i}.ts` });
+        insertTestRef(g, f, 'util', 5);
+      }
+      return g;
+    }
+
+    it('brief mode has no hubs/communities', () => {
+      const r = getProjectOverview(makeTestRepoSet(graphDb()), '/p', 'default', { mode: 'brief' });
+      expect('hubs' in r).toBe(false);
+      expect('communities' in r).toBe(false);
+    });
+
+    it('full mode returns hubs and communities when edges exist', () => {
+      const r = getProjectOverview(makeTestRepoSet(graphDb()), '/p', 'default', { mode: 'full' });
+      expect(r.hubs).toEqual([{ symbol: 'util', file: 'src/lib/util.ts', callerFiles: 3 }]);
+      expect(r.hubs!.length).toBeLessThanOrEqual(10);
+      expect(r.communities!.length).toBeGreaterThan(0);
+      expect(r.communities![0].size).toBeGreaterThan(1);
+      const all = r.communities!.flatMap((c) => c.topFiles);
+      expect(all).toContain('src/lib/util.ts');
+      expect(r.communities!.some((c) => c.label.startsWith('src'))).toBe(true);
+    });
+
+    it('hubs ignore foreign-receiver calls with built-in method names', () => {
+      const g = createTestDb();
+      const rs = insertTestFile(g, { path: 'src/repo-set.ts' });
+      insertTestSymbol(g, { fileId: rs, name: 'filter', kind: 'method', startLine: 1, endLine: 2 });
+      insertTestSymbol(g, { fileId: rs, name: 'primaryOf', kind: 'method', startLine: 3, endLine: 4 });
+      for (let i = 0; i < 3; i++) {
+        const f = insertTestFile(g, { path: `src/c${i}.ts` });
+        insertTestDependency(g, f, rs);
+        insertTestRef(g, f, 'filter', 5, { receiver: 'repos' });
+      }
+      const caller = insertTestFile(g, { path: 'src/main.ts' });
+      insertTestDependency(g, caller, rs);
+      insertTestRef(g, caller, 'primaryOf', 2, { receiver: 'repos' });
+      const r = getProjectOverview(makeTestRepoSet(g), '/p', 'default', { mode: 'full' });
+      expect(r.hubs).toEqual([{ symbol: 'primaryOf', file: 'src/repo-set.ts', callerFiles: 1 }]);
+    });
+
+    it('omits hubs/communities when the project has no edges', () => {
+      const plain = createTestDb();
+      insertTestFile(plain, { path: 'src/a.ts' });
+      const r = getProjectOverview(makeTestRepoSet(plain), '/p');
+      expect('hubs' in r).toBe(false);
+      expect('communities' in r).toBe(false);
+    });
   });
 });
