@@ -220,7 +220,8 @@ describe('daemon (TST-12)', () => {
     expect(isPindexProcess('/usr/bin/node')).toBe(false);
   });
 
-  it('stopDaemon does not signal a live unrelated process whose cmdline fails the check', async () => {
+  // The cmdline check reads /proc; without it (macOS/Windows) stopDaemon deliberately skips the check.
+  it.skipIf(!existsSync('/proc/self/cmdline'))('stopDaemon does not signal a live unrelated process whose cmdline fails the check', async () => {
     const { writePidFile, stopDaemon } = await import('../../src/cli/daemon.js');
     const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 30000)'], { stdio: 'ignore' });
     try {

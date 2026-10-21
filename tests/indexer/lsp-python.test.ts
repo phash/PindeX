@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { Readable, Writable } from 'node:stream';
 import { EventEmitter } from 'node:events';
+import { posix, win32 } from 'node:path';
 import { LspPythonClient, resolvePyrightLangserver } from '../../src/indexer/lsp-python.js';
 
 describe('LspPythonClient (skeleton / state)', () => {
@@ -438,6 +439,7 @@ describe('resolvePyrightLangserver', () => {
     const result = resolvePyrightLangserver('/proj', {
       resolvePackageJson: () => '/pkg/node_modules/pyright/package.json',
       exists: (p) => { calls.push(p); return p === '/pkg/node_modules/.bin/pyright-langserver'; },
+      path: posix,
       realpath: identity,
       pathEnv: '',
     });
@@ -449,6 +451,7 @@ describe('resolvePyrightLangserver', () => {
     const result = resolvePyrightLangserver('/proj', {
       resolvePackageJson: noPkg,
       exists: (p) => p === '/proj/node_modules/.bin/pyright-langserver',
+      path: posix,
       realpath: identity,
       pathEnv: '',
     });
@@ -459,6 +462,7 @@ describe('resolvePyrightLangserver', () => {
     const result = resolvePyrightLangserver('/proj', {
       resolvePackageJson: noPkg,
       exists: () => true,
+      path: posix,
       realpath: identity,
       pathEnv: ['.', 'node_modules/.bin'].join(':'),
     });
@@ -469,6 +473,7 @@ describe('resolvePyrightLangserver', () => {
     const result = resolvePyrightLangserver('/proj', {
       resolvePackageJson: noPkg,
       exists: () => true,
+      path: posix,
       realpath: (p) => (p === '/link/pyright-langserver' ? '/proj/evil/pyright-langserver' : p),
       pathEnv: ['/proj/node_modules/.bin', '/link'].join(':'),
     });
@@ -479,6 +484,7 @@ describe('resolvePyrightLangserver', () => {
     const result = resolvePyrightLangserver('/proj', {
       resolvePackageJson: noPkg,
       exists: (p) => p === '/project-other/bin/pyright-langserver',
+      path: posix,
       realpath: identity,
       pathEnv: '/project-other/bin',
     });
@@ -489,6 +495,7 @@ describe('resolvePyrightLangserver', () => {
     const result = resolvePyrightLangserver('/proj', {
       resolvePackageJson: noPkg,
       exists: (p) => p === '/usr/local/bin/pyright-langserver',
+      path: posix,
       realpath: identity,
       pathEnv: ['/usr/bin', '/usr/local/bin'].join(':'),
     });
@@ -500,10 +507,33 @@ describe('resolvePyrightLangserver', () => {
       resolvePyrightLangserver('/proj', {
         resolvePackageJson: noPkg,
         exists: () => false,
+        path: posix,
         realpath: identity,
         pathEnv: '/usr/bin',
       }),
     ).toBeNull();
+  });
+
+  it('win32: uses ";"-separated absolute PATH entries outside projectRoot', () => {
+    const result = resolvePyrightLangserver('C:\\proj', {
+      resolvePackageJson: noPkg,
+      exists: (p) => p === 'C:\\tools\\bin\\pyright-langserver',
+      path: win32,
+      realpath: identity,
+      pathEnv: ['C:\\proj\\node_modules\\.bin', 'C:\\tools\\bin'].join(';'),
+    });
+    expect(result).toBe('C:\\tools\\bin\\pyright-langserver');
+  });
+
+  it('win32: ignores entries inside projectRoot and does not split on the drive colon', () => {
+    const result = resolvePyrightLangserver('C:\\proj', {
+      resolvePackageJson: noPkg,
+      exists: () => true,
+      path: win32,
+      realpath: identity,
+      pathEnv: 'C:\\proj\\node_modules\\.bin',
+    });
+    expect(result).toBeNull();
   });
 });
 

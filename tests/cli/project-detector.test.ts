@@ -488,7 +488,8 @@ describe('GlobalRegistry — atomic, locked writes (sandboxed)', () => {
     utimesSync(lockPath, old, old);
 
     reg.upsert('/tmp/stale-b');
-    expect(reg.list().map((p) => p.path).sort()).toEqual(['/tmp/stale-a', '/tmp/stale-b']);
+    // The registry stores resolved paths (a drive-qualified D:\tmp\... on Windows).
+    expect(reg.list().map((p) => p.path).sort()).toEqual([resolve('/tmp/stale-a'), resolve('/tmp/stale-b')]);
     expect(existsSync(lockPath)).toBe(false);
   });
 
