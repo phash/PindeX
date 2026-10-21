@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, statSync, utimesSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 
 // Mock node:os so the isolated suites below can point ~/.pindex at a temp dir.
 // homedir defaults to the real one so the legacy suites keep their behaviour.
@@ -55,6 +55,22 @@ describe('getProjectIndexPath', () => {
 });
 
 describe('GlobalRegistry — name field', () => {
+  // Sandboxed: mock homedir to a temp dir so these tests never touch the real
+  // ~/.pindex/registry.json (the migration test below writes a registry file).
+  let tempHome: string;
+
+  beforeEach(async () => {
+    tempHome = join(tmpdir(), `pindex-name-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    mkdirSync(tempHome, { recursive: true });
+    const { homedir } = await import('node:os');
+    vi.mocked(homedir).mockReturnValue(tempHome);
+  });
+
+  afterEach(() => {
+    rmSync(tempHome, { recursive: true, force: true });
+    vi.restoreAllMocks();
+  });
+
   it('assigns a name on upsert when missing', () => {
     const reg = new GlobalRegistry();
     const entry = reg.upsert('/tmp/some-test-project-' + Date.now());
@@ -181,12 +197,13 @@ describe('GlobalRegistry — CRUD & port assignment (sandboxed)', () => {
     const reg = new Reg();
 
     const entry = reg.upsert('/tmp/proj-a');
-    expect(entry.path).toBe('/tmp/proj-a');
+    // upsert() normalises via resolve(); on Windows '/tmp/proj-a' -> 'E:\tmp\proj-a'.
+    expect(entry.path).toBe(resolve('/tmp/proj-a'));
     expect(entry.monitoringPort).toBeGreaterThanOrEqual(7842);
     expect(entry.federatedRepos).toEqual([]);
 
     expect(reg.list()).toHaveLength(1);
-    expect(reg.getByPath('/tmp/proj-a')?.path).toBe('/tmp/proj-a');
+    expect(reg.getByPath('/tmp/proj-a')?.path).toBe(resolve('/tmp/proj-a'));
     // registry.json was persisted (0600 on POSIX)
     const regPath = join(tempHome, '.pindex', 'registry.json');
     expect(existsSync(regPath)).toBe(true);

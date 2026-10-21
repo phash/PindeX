@@ -605,6 +605,21 @@ function safeExtractReferences(rootNode: AstNode, symbols: ParsedSymbol[], fileP
 
 // ─── Main Parse Function ──────────────────────────────────────────────────────
 
+type TsParser = {
+  setLanguage(l: unknown): void;
+  parse(input: string | ((index: number) => string | null)): { rootNode: AstNode };
+};
+
+/** tree-sitter's Node binding throws "Invalid argument" for any single input
+ *  string of 32,768+ characters (a hard 2^15 limit in the native addon). Feeding
+ *  the source through a chunked read-callback sidesteps the limit and yields a
+ *  byte-for-byte identical AST (verified against string parsing for sub-limit
+ *  inputs). Chunk size stays well under the limit. */
+const TS_MAX_CHUNK = 16384;
+function parseSource(parser: TsParser, source: string): { rootNode: AstNode } {
+  return parser.parse((index) => (index < source.length ? source.slice(index, index + TS_MAX_CHUNK) : null));
+}
+
 /** Parses a source file using tree-sitter and extracts symbols + imports.
  *  Falls back gracefully if tree-sitter fails. */
 export function parseFile(filePath: string, content: string): ParsedFile {
@@ -649,12 +664,7 @@ export function parseFile(filePath: string, content: string): ParsedFile {
     // _require is a createRequire-based CJS loader (see top of file).
     // Using _require keeps vi.mock('tree-sitter') working in Vitest because
     // both createRequire and vi.mock share the same Node module cache.
-    const Parser = _require('tree-sitter') as {
-      new(): {
-        setLanguage(l: unknown): void;
-        parse(s: string, oldTree?: unknown, options?: { bufferSize?: number }): { rootNode: AstNode };
-      };
-    };
+    const Parser = _require('tree-sitter') as { new(): TsParser };
     const parser = new Parser();
 
     if (language === 'vue' || language === 'svelte') {
@@ -662,7 +672,7 @@ export function parseFile(filePath: string, content: string): ParsedFile {
       if (!scriptContent.trim()) return { language, symbols: [], imports: [], references: [], rawTokenEstimate };
       const tsLangs = _require('tree-sitter-typescript') as { typescript: unknown; tsx: unknown };
       parser.setLanguage(tsLangs.typescript);
-      const tree = parser.parse(scriptContent, undefined, parseOptions(scriptContent));
+      const tree = parseSource(parser, scriptContent);
       const symbols = extractSymbols(tree.rootNode as AstNode, scriptContent);
       const imports = extractImports(tree.rootNode as AstNode);
       const references = safeExtractReferences(tree.rootNode as AstNode, symbols, filePath);
@@ -686,7 +696,7 @@ export function parseFile(filePath: string, content: string): ParsedFile {
     }
 
     parser.setLanguage(lang);
-    const tree = parser.parse(content, undefined, parseOptions(content));
+    const tree = parseSource(parser, content);
     const symbols = extractSymbols(tree.rootNode as AstNode, content);
     const imports = extractImports(tree.rootNode as AstNode);
     const references = safeExtractReferences(tree.rootNode as AstNode, symbols, filePath);
@@ -696,12 +706,6 @@ export function parseFile(filePath: string, content: string): ParsedFile {
     process.stderr.write(`[pindex] Parse error for ${filePath}: ${err}\n`);
     return { language, symbols: [], imports: [], references: [], rawTokenEstimate };
   }
-}
-
-/** tree-sitter 0.21 rejects string input longer than its default 32 Ki-unit buffer
- *  ("Invalid argument"); sizing the buffer to the source avoids that. */
-function parseOptions(source: string): { bufferSize: number } {
-  return { bufferSize: source.length + 1 };
 }
 
 // ─── Document Parsing ─────────────────────────────────────────────────────────

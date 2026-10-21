@@ -26,7 +26,7 @@ import { resolveWithinRoot } from '../util/paths.js';
 
 // ─── Default Configuration ────────────────────────────────────────────────────
 
-const DEFAULT_IGNORE = [
+export const DEFAULT_IGNORE = [
   '**/node_modules/**',
   '**/.git/**',
   '**/dist/**',
@@ -63,7 +63,7 @@ export const LANGUAGE_PATTERNS: Record<string, string[]> = {
   rust:        ['**/*.rs'],
 };
 
-const DEFAULT_LANGUAGES = ['typescript', 'javascript'];
+export const DEFAULT_LANGUAGES = ['typescript', 'javascript'];
 
 /** Maximum file size to index (1 MB). Larger files are skipped to prevent OOM. */
 const MAX_FILE_SIZE = 1024 * 1024;

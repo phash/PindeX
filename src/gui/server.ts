@@ -129,8 +129,15 @@ export function createGuiApp(): express.Application {
     return registryCache;
   }
 
+  // Registry entries whose project directory still exists on disk. Orphaned /
+  // removed projects are hidden from the dashboard list & overview so stale
+  // entries don't linger (per-hash routes still resolve the full registry).
+  function liveProjects(): ReturnType<GlobalRegistry['list']> {
+    return getCachedRegistry().filter((e) => existsSync(e.path));
+  }
+
   app.get('/api/projects', (_req, res) => {
-    const projects = getCachedRegistry().map(loadProjectStats);
+    const projects = liveProjects().map(loadProjectStats);
     res.json(projects);
   });
 
@@ -190,8 +197,7 @@ export function createGuiApp(): express.Application {
   });
 
   app.get('/api/overview', async (_req, res) => {
-    const registry = { list: getCachedRegistry };
-    const entries = registry.list();
+    const entries = liveProjects();
     const baseStats = entries.map(loadProjectStats);
 
     // Check monitoring ports in parallel to detect running pindex-server instances
