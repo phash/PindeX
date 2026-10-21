@@ -159,9 +159,10 @@ export class Indexer {
     const result: IndexResult = { indexed: 0, updated: 0, skipped: 0, removed: 0, errors: [] };
     const codePatterns = buildCodePatterns(this.languages);
 
+    // posix: true keeps stored paths forward-slashed on Windows (DB keys, import cache, edges).
     const [codePaths, docPaths] = await Promise.all([
-      glob(codePatterns, { cwd: this.projectRoot, ignore: this.ignores, absolute: false }),
-      glob(this.documentPatterns, { cwd: this.projectRoot, ignore: this.ignores, absolute: false }),
+      glob(codePatterns, { cwd: this.projectRoot, ignore: this.ignores, absolute: false, posix: true }),
+      glob(this.documentPatterns, { cwd: this.projectRoot, ignore: this.ignores, absolute: false, posix: true }),
     ]);
 
     const allCodePaths = [...codePaths, ...(options.additionalPaths ?? [])];
