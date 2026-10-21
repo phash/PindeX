@@ -52,7 +52,7 @@ vi.mock('../../src/db/queries.js', async (importActual) => {
   return { ...actual, deleteFile: deleteFileMock };
 });
 
-import { FileWatcher, attachWatcherErrorLogger } from '../../src/indexer/watcher.js';
+import { FileWatcher, attachWatcherErrorLogger, type FileChangeEvent } from '../../src/indexer/watcher.js';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -364,7 +364,7 @@ describe('FileWatcher (TST-01)', () => {
     expect(indexer.indexFile).not.toHaveBeenCalled();
   });
 
-  it('passes the indexer ignore patterns and document globs to chokidar', async () => {
+  it('watches the project root (chokidar 4 has no globs) with an ignored callback', async () => {
     const watcher = new FileWatcher({
       db: fakeDb,
       indexer: indexer as never as Indexer,
@@ -373,8 +373,56 @@ describe('FileWatcher (TST-01)', () => {
     await watcher.start();
 
     const call = chokidarState.watchCalls[0];
-    expect((call.options as { ignored: unknown }).ignored).toEqual(['**/node_modules/**', '**/build/**']);
-    expect(call.patterns as string[]).toContain('**/*.md');
+    expect(call.patterns).toBe('/proj');
+    const opts = call.options as { cwd: string; ignoreInitial: boolean; ignored: unknown };
+    expect(opts.cwd).toBe('/proj');
+    expect(opts.ignoreInitial).toBe(true);
+    expect(typeof opts.ignored).toBe('function');
+  });
+
+  it('the ignored callback applies the indexer ignore patterns, language and document globs', async () => {
+    const watcher = new FileWatcher({
+      db: fakeDb,
+      indexer: indexer as never as Indexer,
+      projectRoot: '/proj',
+    });
+    await watcher.start();
+
+    type Stats = { isFile(): boolean; isDirectory(): boolean };
+    const ignored = (chokidarState.watchCalls[0].options as {
+      ignored: (p: string, s?: Stats) => boolean;
+    }).ignored;
+    const file: Stats = { isFile: () => true, isDirectory: () => false };
+    const dir: Stats = { isFile: () => false, isDirectory: () => true };
+
+    expect(ignored('/proj', dir)).toBe(false);
+    expect(ignored('/proj/src', dir)).toBe(false);
+    expect(ignored('/proj/node_modules', dir)).toBe(true);
+    expect(ignored('/proj/build', dir)).toBe(true);
+    expect(ignored('/proj/src/a.ts', file)).toBe(false);
+    expect(ignored('/proj/docs/readme.md', file)).toBe(false); // documentGlobs
+    expect(ignored('/proj/logo.png', file)).toBe(true);
+    expect(ignored('/proj/notes.yaml', file)).toBe(true); // not in this stub's documentGlobs
+  });
+
+  it('drops events for paths outside the watched globs (e.g. unlinks chokidar did not stat)', async () => {
+    const watcher = new FileWatcher({
+      db: fakeDb,
+      indexer: indexer as never as Indexer,
+      projectRoot: '/proj',
+    });
+    const seen: FileChangeEvent[] = [];
+    watcher.on('change', (e: FileChangeEvent) => seen.push(e));
+    await watcher.start();
+
+    chokidarState.emit('unlink', 'node_modules/pkg/index.ts');
+    chokidarState.emit('unlink', 'assets/logo.png');
+    chokidarState.emit('change', 'build/out.js');
+    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
+
+    expect(seen).toEqual([]);
+    expect(deleteFileMock).not.toHaveBeenCalled();
+    expect(indexer.indexFile).not.toHaveBeenCalled();
   });
 
   it('routes document changes to indexDocument, not indexFile', async () => {

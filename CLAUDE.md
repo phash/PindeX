@@ -56,9 +56,10 @@ MCP server that structurally indexes codebases (TypeScript, JavaScript, Java, Ko
 ### Produktions-Dependencies
 | Paket | Version | Zweck |
 |---|---|---|
-| `@modelcontextprotocol/sdk` | ^1.0.0 | MCP-Protokoll (stdio transport) |
+| `@modelcontextprotocol/sdk` | ^1.32.1 | MCP-Protokoll (stdio transport) |
 | `better-sqlite3` | ^12.10.0 | SQLite mit nativen Bindings, FTS5 (≥12.10 für Node ≥24/26-Prebuilds nötig) |
-| `chokidar` | ^3.6.0 | Datei-Watcher (auto-reindex) |
+| `chokidar` | ^4.0.3 | Datei-Watcher (auto-reindex; keine Globs — Filter via `minimatch` in `src/indexer/watch-filter.ts`) |
+| `minimatch` | ^9.0.9 | Glob-Matching für den Watcher-Filter |
 | `express` | ^4.18.0 | HTTP-Server (Monitoring + GUI) |
 | `glob` | ^10.0.0 | Datei-Pattern-Matching |
 | `tree-sitter` | ^0.21.0 | AST-Parser (Basis) |

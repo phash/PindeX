@@ -30,3 +30,9 @@ User-visible changes from the 2026-10-20 review-fix branch.
 - `PINDEX_LSP` is now **off by default**: only `PINDEX_LSP=true` enables Pyright for Python. Pyright reads the project's config and may run its configured interpreter, so enable it only for trusted repos.
 - Arrow-function constants (`export const f = () => …`) are indexed with kind `function`. The first re-index after upgrading records `sig_changed` session observations for these symbols once.
 - A newly added file now resolves imports of already indexed files that previously pointed at the missing file.
+- On Windows, indexed paths are stored with forward slashes (`glob` now runs with `posix: true`); before, watcher-added files were not linked to their importers there.
+- File watcher moved to chokidar 4 (removes the vulnerable `braces` dependency, GHSA-vfj7-8cjw-p6xm). chokidar 4 has no glob support, so the watcher now watches the project root and filters with the same globs as the initial index (`minimatch`, dot files and dot directories excluded, ignored directories such as `node_modules` are not descended).
+
+### Dependencies
+
+- Security updates via the lockfile: `@modelcontextprotocol/sdk` 1.32.1 (minimum raised to ^1.32.1), `express` transitive deps (`proxy-addr`, `qs`, `body-parser`, `ip-address`, `fast-uri`, `hono`, `brace-expansion`), `vitest` 4.1.12 (dev). `npm audit` reports 0 vulnerabilities.
