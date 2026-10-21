@@ -441,7 +441,11 @@ describe('injectClaudeSettings', () => {
     expect(pre[0]._pindex).toBe('pindex-hook');
     expect(pre[0].matcher).toBe('Read');
     expect(pre[0].hooks[0].timeout).toBe(5);
-    expect(pre[0].hooks[0].command).toMatch(/^"\/.*" "\/.*\/cli\/hook-main\.js"$/);
+    const { command, args } = nodeScriptCommand('cli/hook-main.js');
+    expect(isAbsolute(command)).toBe(true);
+    expect(isAbsolute(args[0])).toBe(true);
+    expect(args[0].replace(/\\/g, '/')).toMatch(/\/cli\/hook-main\.js$/);
+    expect(pre[0].hooks[0].command).toBe(`"${command}" "${args[0]}"`);
   });
 
   it('merges hooks into existing settings.json', () => {
