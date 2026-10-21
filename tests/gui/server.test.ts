@@ -267,6 +267,7 @@ describe('GUI resilience (TST-07)', () => {
   it('missing index.db -> dbExists:false and /detail returns empty arrays (200)', async () => {
     const missingHash = 'missing01';
     const missingProjectPath = join(extraTmp, 'missing-project');
+    mkdirSync(missingProjectPath, { recursive: true }); // real project dir, just not indexed yet
     const missingDbPath = join(missingProjectPath, '.pindex', 'index.db');
     expect(existsSync(missingDbPath)).toBe(false);
 
@@ -290,6 +291,29 @@ describe('GUI resilience (TST-07)', () => {
     const detail = await request(app).get(`/api/projects/${missingHash}/detail`);
     expect(detail.status).toBe(200);
     expect(detail.body).toEqual({ files: [], symbols: [], tokenLog: [] });
+  });
+
+  it('orphaned project (directory gone) is hidden from /api/projects and /api/overview', async () => {
+    const realProjectPath = join(extraTmp, 'real-project');
+    mkdirSync(realProjectPath, { recursive: true });
+    const goneProjectPath = join(extraTmp, 'deleted-project'); // never created on disk
+    expect(existsSync(goneProjectPath)).toBe(false);
+
+    mockRegistryList = () => [
+      { ...defaultRegistryEntry, path: realProjectPath, hash: 'real0001', name: 'real-project' },
+      { ...defaultRegistryEntry, path: goneProjectPath, hash: 'gone0001', name: 'deleted-project' },
+    ];
+
+    const app = createGuiApp();
+
+    const projects = await request(app).get('/api/projects');
+    expect(projects.status).toBe(200);
+    expect(projects.body.map((p: { entry: { name: string } }) => p.entry.name)).toEqual(['real-project']);
+
+    const overview = await request(app).get('/api/overview');
+    expect(overview.status).toBe(200);
+    expect(overview.body.overview.totalProjects).toBe(1);
+    expect(overview.body.projects.map((p: { entry: { name: string } }) => p.entry.name)).toEqual(['real-project']);
   });
 
   it('corrupt DB -> loadProjectStats degrades to dbExists:false, /detail returns 200 empty arrays', async () => {

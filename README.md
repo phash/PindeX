@@ -134,6 +134,20 @@ PindeX is beneficial when:
 npm install -g pindex
 ```
 
+### Install as a Claude Code plugin
+
+Zero-config — no `pindex init` needed. Add the marketplace and install; the MCP
+server self-configures per project (detects the project root and languages, and
+self-registers so the dashboard sees it):
+
+```text
+/plugin marketplace add phash/PindeX
+/plugin install pindex@phash
+```
+
+Then run `/reload-plugins` (or restart Claude Code). PindeX now activates
+automatically in every project you open.
+
 ### Install from source
 
 ```bash
