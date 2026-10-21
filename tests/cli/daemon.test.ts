@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { tmpdir } from 'node:os';
-import { mkdirSync, rmSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdirSync, rmSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { spawn } from 'node:child_process';
 
 // TST-12: daemon PID-file lifecycle tests.
 //
@@ -151,6 +152,25 @@ describe('daemon (TST-12)', () => {
     expect(existsSync(join(dir, 'daemon.pid'))).toBe(true);
   });
 
+  it('removePidFile with expectedPid removes the file when it holds that pid', async () => {
+    const { writePidFile, removePidFile } = await import('../../src/cli/daemon.js');
+    const { getProjectsDir } = await import('../../src/cli/project-detector.js');
+    writePidFile(process.pid, HASH);
+    const pidFile = join(getProjectsDir(), HASH, 'daemon.pid');
+    removePidFile(HASH, process.pid);
+    expect(existsSync(pidFile)).toBe(false);
+  });
+
+  it('removePidFile with expectedPid keeps a PID file another session overwrote', async () => {
+    const { writePidFile, removePidFile } = await import('../../src/cli/daemon.js');
+    const { getProjectsDir } = await import('../../src/cli/project-detector.js');
+    writePidFile(process.pid + 1, HASH); // newer session took over
+    const pidFile = join(getProjectsDir(), HASH, 'daemon.pid');
+    removePidFile(HASH, process.pid);
+    expect(existsSync(pidFile)).toBe(true);
+    expect(readFileSync(pidFile, 'utf-8').trim()).toBe(String(process.pid + 1));
+  });
+
   it('removePidFile is a no-op when the PID file is absent (existsSync false branch)', async () => {
     const { removePidFile } = await import('../../src/cli/daemon.js');
     const { getProjectsDir } = await import('../../src/cli/project-detector.js');
@@ -192,27 +212,28 @@ describe('daemon (TST-12)', () => {
     expect(existsSync(pidFile)).toBe(false);
   });
 
-  it('showStatus prints the running PID when a live daemon exists (with projectPath)', async () => {
-    const { writePidFile, showStatus } = await import('../../src/cli/daemon.js');
-    const { hashProjectPath } = await import('../../src/cli/project-detector.js');
-
-    const projectPath = '/some/project/path';
-    writePidFile(process.pid, hashProjectPath(projectPath));
-
-    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-
-    await showStatus(projectPath);
-
-    expect(logSpy).toHaveBeenCalledWith(`Daemon running (PID ${process.pid})`);
+  it('isPindexProcess matches only pindex / dist/index.js command lines', async () => {
+    const { isPindexProcess } = await import('../../src/cli/daemon.js');
+    expect(isPindexProcess('node /usr/lib/node_modules/pindex/dist/index.js')).toBe(true);
+    expect(isPindexProcess('node /srv/app/dist/index.js')).toBe(true);
+    expect(isPindexProcess('node server.js')).toBe(false);
+    expect(isPindexProcess('/usr/bin/node')).toBe(false);
   });
 
-  it('showStatus prints "No daemon running" when no PID file exists (global, no projectPath)', async () => {
-    const { showStatus } = await import('../../src/cli/daemon.js');
-
-    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-
-    await showStatus(); // hash undefined → global path
-
-    expect(logSpy).toHaveBeenCalledWith('No daemon running');
+  it('stopDaemon does not signal a live unrelated process whose cmdline fails the check', async () => {
+    const { writePidFile, stopDaemon } = await import('../../src/cli/daemon.js');
+    const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 30000)'], { stdio: 'ignore' });
+    try {
+      writePidFile(child.pid!, HASH);
+      vi.spyOn(console, 'log').mockImplementation(() => {});
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+      await stopDaemon(HASH);
+      await new Promise((r) => setTimeout(r, 300));
+      expect(child.exitCode).toBeNull();
+      expect(child.signalCode).toBeNull();
+      expect(() => process.kill(child.pid!, 0)).not.toThrow();
+    } finally {
+      child.kill('SIGKILL');
+    }
   });
 });

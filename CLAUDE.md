@@ -56,9 +56,10 @@ MCP server that structurally indexes codebases (TypeScript, JavaScript, Java, Ko
 ### Produktions-Dependencies
 | Paket | Version | Zweck |
 |---|---|---|
-| `@modelcontextprotocol/sdk` | ^1.0.0 | MCP-Protokoll (stdio transport) |
+| `@modelcontextprotocol/sdk` | ^1.32.1 | MCP-Protokoll (stdio transport) |
 | `better-sqlite3` | ^12.10.0 | SQLite mit nativen Bindings, FTS5 (≥12.10 für Node ≥24/26-Prebuilds nötig) |
-| `chokidar` | ^3.6.0 | Datei-Watcher (auto-reindex) |
+| `chokidar` | ^4.0.3 | Datei-Watcher (auto-reindex; keine Globs — Filter via `minimatch` in `src/indexer/watch-filter.ts`) |
+| `minimatch` | ^9.0.9 | Glob-Matching für den Watcher-Filter |
 | `express` | ^4.18.0 | HTTP-Server (Monitoring + GUI) |
 | `glob` | ^10.0.0 | Datei-Pattern-Matching |
 | `tree-sitter` | ^0.21.0 | AST-Parser (Basis) |
@@ -113,7 +114,7 @@ npm run build            # compile src/ → dist/
 - **Monitoring**: per-project Express + WebSocket server, per-project deterministic port
 - **GUI**: `pindex-gui` binary — aggregated Express dashboard reading all project DBs directly
 - **CLI**: `pindex` (init/add/remove/status), per-project daemon management
-- **Global state**: `~/.pindex/registry.json` + `~/.pindex/projects/{hash}/index.db`
+- **Global state**: `~/.pindex/registry.json` + `{project}/.pindex/index.db`
 
 ## MCP Tools
 
@@ -126,7 +127,7 @@ npm run build            # compile src/ → dist/
 | `find_usages` | All locations where a symbol is used |
 | `get_dependencies` | Import graph for a file (imports / imported_by / both) |
 | `get_api_endpoints` | Extracted HTTP/REST endpoints (Express-style route symbols) in the codebase |
-| `get_project_overview` | Project-level stats, entry points, module list + session memory summary |
+| `get_project_overview` | Project-level stats, entry points, directory groups (full mode) + session memory summary |
 | `reindex` | Rebuild index for one file or the entire project |
 | `get_token_stats` | Token usage statistics for a session |
 | `start_comparison` | Start A/B session (indexed vs baseline) |
@@ -150,7 +151,7 @@ npm run build            # compile src/ → dist/
 node dist/index.js
 
 # Environment variables
-INDEX_PATH=~/.pindex/projects/{hash}/index.db  # SQLite DB path (set by pindex init)
+INDEX_PATH={project}/.pindex/index.db  # SQLite DB path (set by pindex init)
 PROJECT_ROOT=.                                  # project to index
 LANGUAGES=typescript,javascript                 # comma-separated
 AUTO_REINDEX=true                               # watch for file changes
@@ -161,11 +162,14 @@ SUMMARIZER_MODEL=gpt-4o-mini                    # Modell für Summaries
 MONITORING_PORT=7843                            # per-project port (assigned by pindex init)
 MONITORING_AUTO_OPEN=false                      # open browser on start
 BASELINE_MODE=false                             # disable index (A/B testing)
-TOKEN_PRICE_PER_MILLION=3.00                    # for cost estimates
 PINDEX_PARSE_WORKERS=                           # parse workers (0=sync, empty=auto)
 PINDEX_BIND_HOST=127.0.0.1                      # bind host (loopback default)
-PINDEX_LSP=true                                 # opt-in LSP parsing for Python ('false' = force regex)
-FEDERATION_REPOS=/path/a:/path/b               # extra repos, OS path delimiter (: on POSIX, ; on Windows) (optional)
+GUI_PORT=7841                                   # pindex gui / pindex-gui dashboard port (default 7841; `pindex gui --no-open` = background only)
+EXPOSE_CORE_TOOLS_ONLY=false                    # 'true' = register only core tools (omits analytics/memory/doc tools)
+PINDEX_LSP=                                     # opt-in Pyright LSP for Python: only 'true' enables it (default off = regex)
+# Trust: with PINDEX_LSP=true pyright reads the project's pyrightconfig.json and may run the configured
+# Python interpreter — enable only for trusted repos. Pyright is spawned with cwd=os.tmpdir().
+FEDERATION_REPOS=/path/a:/path/b               # OS path delimiter (":" posix, ";" Windows) or a JSON array
 # Federation CLI: configure via 'pindex federate add/remove/list' (preferred over editing FEDERATION_REPOS by hand).
 # 9 read-only tools (search_symbols, find_usages, get_symbol, get_file_summary, get_context,
 # get_dependencies, get_project_overview, search_docs, get_doc_chunk) accept an optional
@@ -184,7 +188,9 @@ pindex
 # → restart Claude Code to activate
 ```
 
-The `.mcp.json` in the PindeX repo itself is pre-configured for working on PindeX.
+The repo's `.mcp.json` is not tracked (it contains machine-specific absolute paths): run `pindex` in the repo to generate it. Re-running rewrites `PROJECT_ROOT`, `INDEX_PATH`, `MONITORING_PORT`, `FEDERATION_REPOS` and keeps only the allowlist `PRESERVED_ENV_KEYS` in `src/cli/init.ts` (`LANGUAGES`, `AUTO_REINDEX`, `GENERATE_SUMMARIES`, `SUMMARIZER_MODEL`, `MONITORING_AUTO_OPEN`, `EXPOSE_CORE_TOOLS_ONLY`, `OBSERVATION_RETENTION`, `PINDEX_PARSE_WORKERS`); every other key (e.g. `PINDEX_LSP`, `SUMMARIZER_BASE_URL`, `NODE_OPTIONS`) is dropped with a names-only warning — security: a repo may ship its own `.mcp.json`.
+
+Hooks: `PreToolUse` goes into `.claude/settings.json`, `SessionStart` (absolute node/script paths) into `.claude/settings.local.json`.
 
 ## Goose Setup
 
@@ -200,7 +206,7 @@ extensions:
     cmd: pindex-server
     args: []
     envs:
-      INDEX_PATH: /home/user/.pindex/projects/{hash}/index.db
+      INDEX_PATH: /absolute/path/to/project/.pindex/index.db
       PROJECT_ROOT: /absolute/path/to/project
       LANGUAGES: typescript,javascript
       AUTO_REINDEX: "true"
@@ -208,7 +214,6 @@ extensions:
       MONITORING_PORT: "7843"
       MONITORING_AUTO_OPEN: "false"
       BASELINE_MODE: "false"
-      TOKEN_PRICE_PER_MILLION: "3.00"
     enabled: true
     timeout: 300
 ```
@@ -239,15 +244,14 @@ src/
 ├── tools/                # one file per MCP tool + schemas.ts (Zod-Validierung)
 ├── monitoring/
 │   ├── server.ts         # Express + WebSocket (per-project)
-│   ├── token-logger.ts   # per-call token logging
-│   ├── estimator.ts      # "without index" heuristic
+│   ├── token-logger.ts   # per-call token logging ("without index" = per-tool multiplier in src/server.ts)
 │   └── ui/               # dashboard (Chart.js, dark theme)
 ├── gui/
 │   ├── index.ts          # pindex-gui entry point
 │   └── server.ts         # aggregated Express app (reads all project DBs)
 └── cli/
     ├── index.ts          # CLI router (default=initProject, add, remove, status…)
-    ├── init.ts           # initProject(), writeMcpJson(), addFederatedRepo()
+    ├── init.ts           # initProject(), writeMcpJson()
     ├── setup.ts          # one-time setup (pindex setup)
     ├── daemon.ts         # per-project PID-file daemon management
     └── project-detector.ts  # getPindexHome(), findProjectRoot(), GlobalRegistry
@@ -257,7 +261,7 @@ tests/
 ├── db/                   # schema, migrations, queries tests
 ├── indexer/              # parser, indexer, watcher tests
 ├── tools/                # one test file per tool
-├── monitoring/           # estimator, token-logger, server tests
+├── monitoring/           # token-logger, server tests
 ├── cli/                  # project-detector, setup, daemon tests
 └── integration/          # end-to-end MCP server tests
 ```

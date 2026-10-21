@@ -1,14 +1,12 @@
 import type Database from 'better-sqlite3';
+import { normalizeRelPath } from '../util/paths.js';
 import type {
   FileRecord,
   SymbolRecord,
-  DependencyRecord,
   UsageRecord,
-  TokenLogEntry,
   SessionRecord,
   SymbolKind,
   DocumentChunkRecord,
-  ContextEntryRecord,
   AstSnapshotRecord,
   SessionObservationRecord,
   SessionEventRecord,
@@ -37,7 +35,14 @@ function toForwardSlash(p: string): string {
 export function sanitizeFtsQuery(query: string): string {
   const tokens = query.split(/\s+/).filter((t) => t.length > 0);
   if (tokens.length === 0) return '""';
-  return tokens.map((t) => `"${t.replace(/"/g, '""')}"`).join(' ');
+  const parts: string[] = [];
+  for (const t of tokens) {
+    const base = t.replace(/\*+$/, '');
+    if (base.length === 0) continue; // bare '*' carries no term
+    const quoted = `"${base.replace(/"/g, '""')}"`;
+    parts.push(base.length !== t.length ? `${quoted}*` : quoted);
+  }
+  return parts.length > 0 ? parts.join(' ') : '""';
 }
 
 // ─── File Queries ─────────────────────────────────────────────────────────────
@@ -79,7 +84,9 @@ export function getAllFiles(db: Database.Database): FileRecord[] {
 }
 
 export function deleteFile(db: Database.Database, path: string): void {
-  db.prepare('DELETE FROM files WHERE path = ?').run(toForwardSlash(path));
+  const p = toForwardSlash(path);
+  db.prepare('DELETE FROM ast_snapshots WHERE file_path = ?').run(p);
+  db.prepare('DELETE FROM files WHERE path = ?').run(p);
 }
 
 // ─── Symbol Queries ───────────────────────────────────────────────────────────
@@ -126,27 +133,28 @@ export interface SymbolWithFile extends SymbolRecord {
   file_path: string;
 }
 
+export function getSymbolsByName(
+  db: Database.Database,
+  name: string,
+  filePath?: string,
+): SymbolWithFile[] {
+  const base =
+    'SELECT s.*, f.path AS file_path FROM symbols s JOIN files f ON s.file_id = f.id WHERE s.name = ?';
+  const order = ' ORDER BY s.is_exported DESC, f.path ASC, s.start_line ASC';
+  if (filePath) {
+    return db
+      .prepare(base + ' AND f.path = ?' + order)
+      .all(name, normalizeRelPath(filePath)) as SymbolWithFile[];
+  }
+  return db.prepare(base + order).all(name) as SymbolWithFile[];
+}
+
 export function getSymbolByName(
   db: Database.Database,
   name: string,
   filePath?: string,
 ): SymbolWithFile | null {
-  if (filePath) {
-    return (
-      (db
-        .prepare(
-          'SELECT s.*, f.path AS file_path FROM symbols s JOIN files f ON s.file_id = f.id WHERE s.name = ? AND f.path = ? LIMIT 1',
-        )
-        .get(name, filePath) as SymbolWithFile | undefined) ?? null
-    );
-  }
-  return (
-    (db
-      .prepare(
-        'SELECT s.*, f.path AS file_path FROM symbols s JOIN files f ON s.file_id = f.id WHERE s.name = ? LIMIT 1',
-      )
-      .get(name) as SymbolWithFile | undefined) ?? null
-  );
+  return getSymbolsByName(db, name, filePath)[0] ?? null;
 }
 
 export function deleteSymbolsByFileId(
@@ -246,11 +254,12 @@ export function getImportedByFile(
   return rows.map((r) => r.path);
 }
 
-export function deleteDependenciesByFile(
+/** Deletes only the edges a file declares (its imports), never edges pointing at it. */
+export function deleteOutgoingDependencies(
   db: Database.Database,
   fileId: number,
 ): void {
-  db.prepare('DELETE FROM dependencies WHERE from_file = ? OR to_file = ?').run(fileId, fileId);
+  db.prepare('DELETE FROM dependencies WHERE from_file = ?').run(fileId);
 }
 
 // ─── Usage Queries ────────────────────────────────────────────────────────────
@@ -302,7 +311,6 @@ export interface InsertTokenLogInput {
   toolName: string;
   tokensUsed: number;
   tokensWithoutIndex: number;
-  filesTouched?: string[];
   query?: string;
 }
 
@@ -311,14 +319,13 @@ export function insertTokenLog(
   input: InsertTokenLogInput,
 ): void {
   db.prepare(`
-    INSERT INTO token_log (session_id, tool_name, tokens_used, tokens_without_index, files_touched, query)
-    VALUES (@sessionId, @toolName, @tokensUsed, @tokensWithoutIndex, @filesTouched, @query)
+    INSERT INTO token_log (session_id, tool_name, tokens_used, tokens_without_index, query)
+    VALUES (@sessionId, @toolName, @tokensUsed, @tokensWithoutIndex, @query)
   `).run({
     sessionId: input.sessionId,
     toolName: input.toolName,
     tokensUsed: input.tokensUsed,
     tokensWithoutIndex: input.tokensWithoutIndex,
-    filesTouched: input.filesTouched ? JSON.stringify(input.filesTouched) : null,
     query: input.query ?? null,
   });
 
@@ -393,22 +400,6 @@ export function createSession(
     INSERT INTO sessions (id, mode, label)
     VALUES (@id, @mode, @label)
   `).run(input);
-}
-
-export interface UpdateSessionInput {
-  totalTokens: number;
-  totalSavings: number;
-}
-
-export function updateSession(
-  db: Database.Database,
-  sessionId: string,
-  input: UpdateSessionInput,
-): void {
-  db.prepare(`
-    UPDATE sessions SET total_tokens = @totalTokens, total_savings = @totalSavings
-    WHERE id = @sessionId
-  `).run({ ...input, sessionId });
 }
 
 export function getSession(
@@ -685,13 +676,23 @@ export function countPriorSessions(
   return row.cnt;
 }
 
+/**
+ * Parses a SQLite CURRENT_TIMESTAMP value ('YYYY-MM-DD HH:MM:SS', UTC, no zone
+ * marker) as a UTC Date. `new Date(ts)` would read it as local time.
+ */
+export function parseSqliteUtc(ts: string): Date {
+  return new Date(ts.replace(' ', 'T') + 'Z');
+}
+
+/** Deletes rows older than `days` days. Comparison happens in SQL (same format as CURRENT_TIMESTAMP). */
 export function deleteObservationsOlderThan(
   db: Database.Database,
-  cutoffIso: string,
+  days: number,
 ): void {
-  db.prepare('DELETE FROM session_observations WHERE created_at < ?').run(cutoffIso);
-  db.prepare('DELETE FROM session_events WHERE timestamp < ?').run(cutoffIso);
-  db.prepare('DELETE FROM token_log WHERE timestamp < ?').run(cutoffIso);
+  const modifier = `-${Math.trunc(days)} days`;
+  db.prepare("DELETE FROM session_observations WHERE created_at < datetime('now', ?)").run(modifier);
+  db.prepare("DELETE FROM session_events WHERE timestamp < datetime('now', ?)").run(modifier);
+  db.prepare("DELETE FROM token_log WHERE timestamp < datetime('now', ?)").run(modifier);
 }
 
 export function deleteObservationsExceptSession(
@@ -730,43 +731,22 @@ export function insertSessionEvent(
   return result.lastInsertRowid as number;
 }
 
-export function getSessionEvents(
-  db: Database.Database,
-  sessionId: string,
-  eventTypes?: SessionEventType[],
-): SessionEventRecord[] {
-  if (eventTypes && eventTypes.length > 0) {
-    const placeholders = eventTypes.map(() => '?').join(', ');
-    return db
-      .prepare(
-        `SELECT * FROM session_events
-         WHERE session_id = ? AND event_type IN (${placeholders})
-         ORDER BY timestamp`,
-      )
-      .all(sessionId, ...eventTypes) as SessionEventRecord[];
-  }
-  return db
-    .prepare('SELECT * FROM session_events WHERE session_id = ? ORDER BY timestamp')
-    .all(sessionId) as SessionEventRecord[];
-}
-
 export function getRecentFileChangeEvents(
   db: Database.Database,
   filePath: string,
   sessionId: string,
   windowMinutes: number,
 ): SessionEventRecord[] {
-  const cutoff = new Date(Date.now() - windowMinutes * 60 * 1000).toISOString();
   return db
     .prepare(
       `SELECT * FROM session_events
        WHERE session_id = ?
          AND file_path = ?
          AND event_type IN ('symbol_added', 'symbol_removed', 'sig_changed')
-         AND timestamp >= ?
+         AND timestamp >= datetime('now', ?)
        ORDER BY timestamp`,
     )
-    .all(sessionId, toForwardSlash(filePath), cutoff) as SessionEventRecord[];
+    .all(sessionId, toForwardSlash(filePath), `-${windowMinutes} minutes`) as SessionEventRecord[];
 }
 
 /**

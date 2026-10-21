@@ -85,4 +85,11 @@ describe('mapDocumentSymbols', () => {
     const result = mapDocumentSymbols([sym('ns', NAMESPACE, 0, 5)]);
     expect(result).toEqual([]);
   });
+
+  it('does not emit locals nested inside a function', () => {
+    const result = mapDocumentSymbols([
+      sym('outer', FUNCTION, 0, 5, [sym('local_var', VARIABLE, 1, 1), sym('inner', FUNCTION, 2, 4)]),
+    ]);
+    expect(result.map((r) => r.name)).toEqual(['outer']);
+  });
 });

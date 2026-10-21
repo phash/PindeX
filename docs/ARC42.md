@@ -212,7 +212,6 @@ PindeX ist ein **MCP-Server (Model Context Protocol)**, der Codebases strukturel
 |---|---|
 | `server.ts` | Express + WebSocket Server (pro Projekt) |
 | `token-logger.ts` | Loggt Token-Nutzung pro Tool-Aufruf |
-| `estimator.ts` | Schätzt "Tokens ohne Index" (Heuristik) |
 | `ui/` | Dashboard HTML/CSS/Chart.js |
 
 #### CLI (`src/cli/`)
@@ -354,7 +353,7 @@ Die drei FTS5-Tabellen werden über **SQLite-Trigger** synchron gehalten (AFTER 
 
 ### 8.4 Token-Schätzung
 
-Der `estimator.ts` berechnet für jeden Tool-Aufruf eine Heuristik: "Wie viele Tokens hätte ein vollständiger File-Read verbraucht?" — Basis für Savings-Berechnung.
+`src/server.ts` schätzt für jeden Tool-Aufruf "Tokens ohne Index" als tatsächliche Antwort-Tokens × werkzeugspezifischem Multiplikator (`heuristicMultiplier`, z. B. 10 für `search_symbols`, 15 für `get_symbol`, 0 bei leerem Ergebnis) — Basis für die Savings-Berechnung im `TokenLogger`.
 
 ### 8.5 Federation
 

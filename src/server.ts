@@ -23,6 +23,7 @@ import { saveContext } from './tools/save_context.js';
 import { getSessionMemory } from './tools/get_session_memory.js';
 import { getApiEndpoints } from './tools/get_api_endpoints.js';
 import type { SessionObserver } from './memory/observer.js';
+import { UserInputError } from './tools/errors.js';
 import { TOOL_SCHEMAS } from './tools/schemas.js';
 import { RepoSet } from './federation/repo-set.js';
 import type {
@@ -59,7 +60,7 @@ const TOOL_DEFINITIONS = [
       type: 'object',
       properties: {
         query: { type: 'string', description: 'Symbol name or keyword' },
-        limit: { type: 'number', description: 'Max results (default: 20)' },
+        limit: { type: 'number', description: 'Max results (default: 20, max: 100)' },
         isAsync: { type: 'boolean', description: 'Filter async functions' },
         hasTryCatch: { type: 'boolean', description: 'Filter by try/catch presence' },
         snippet: { type: 'boolean', description: 'Include first 5 lines of body' },
@@ -87,7 +88,7 @@ const TOOL_DEFINITIONS = [
       properties: {
         file: { type: 'string', description: 'File path (project-relative)' },
         line: { type: 'number', description: 'Target line (1-indexed)' },
-        range: { type: 'number', description: 'Lines to read (default: 30)' },
+        range: { type: 'number', description: 'Lines to read (default: 30, max: 200)' },
       },
       required: ['file', 'line'],
     },
@@ -128,11 +129,11 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'get_project_overview',
-    description: 'Project stats, entry points, module list. mode=brief for counts only.',
+    description: 'Project stats and entry points. brief=counts only; full=directory groups.',
     inputSchema: {
       type: 'object',
       properties: {
-        mode: { type: 'string', enum: ['brief', 'full'], description: 'brief=counts only; full=per-file symbols (default)' },
+        mode: { type: 'string', enum: ['brief', 'full'], description: 'brief=counts only; full=directory groups (default)' },
       },
       required: [],
     },
@@ -159,11 +160,11 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'get_token_stats',
-    description: 'Token usage stats for this session.',
+    description: 'Token usage stats for the current logging session (or a given session_id).',
     inputSchema: {
       type: 'object',
       properties: {
-        session_id: { type: 'string', description: 'Session ID (omit for current)' },
+        session_id: { type: 'string', description: 'Session ID (omit for the current logging session)' },
       },
       required: [],
     },
@@ -187,7 +188,7 @@ const TOOL_DEFINITIONS = [
       type: 'object',
       properties: {
         query: { type: 'string', description: 'Search query' },
-        limit: { type: 'number', description: 'Max results (default: 20)' },
+        limit: { type: 'number', description: 'Max results (default: 20, max: 100)' },
         type: { type: 'string', enum: ['docs', 'context', 'all'], description: 'Result type filter (default: all)' },
       },
       required: ['query'],
@@ -306,7 +307,9 @@ export function createMcpServer(
     { capabilities: { tools: {} } },
   );
 
-  const { projectRoot, monitoringPort = 7842, baselineMode = false, federatedDbs = [], sessionId = 'default', observer } = options;
+  const { projectRoot, monitoringPort = 7842, federatedDbs = [], sessionId = 'default', observer } = options;
+  // Mutable: start_comparison toggles baseline mode at runtime.
+  const state = { baselineMode: options.baselineMode ?? false };
 
   const primaryName = options.primaryName ?? 'local';
   const repoSet = RepoSet.fromServerConfig(
@@ -330,9 +333,10 @@ export function createMcpServer(
     const { name, arguments: rawArgs = {} } = request.params;
 
     // Baseline mode: all query tools return an error message
-    if (baselineMode && name !== 'get_token_stats' && name !== 'start_comparison') {
+    if (state.baselineMode && name !== 'get_token_stats' && name !== 'start_comparison') {
       return {
         content: [{ type: 'text', text: JSON.stringify({ error: 'Index disabled for baseline measurement' }) }],
+        isError: true,
       };
     }
 
@@ -407,11 +411,16 @@ export function createMcpServer(
           break;
         }
         case 'get_token_stats': {
-          result = getTokenStats(db, args as GetTokenStatsInput);
+          result = getTokenStats(db, args as GetTokenStatsInput, tokenLogger?.getCurrentSessionId() ?? sessionId);
           break;
         }
         case 'start_comparison': {
-          result = startComparison(db, args as StartComparisonInput, monitoringPort);
+          const cmpInput = args as StartComparisonInput;
+          const cmp = startComparison(db, cmpInput, monitoringPort);
+          result = cmp;
+          tokenLogger?.setSessionId(cmp.session_id);
+          // The observer intentionally stays on the original session: memory belongs to the real session.
+          state.baselineMode = cmpInput.mode === 'baseline';
           break;
         }
         case 'search_docs': {
@@ -440,7 +449,9 @@ export function createMcpServer(
       // message to the client: raw errors leak absolute host paths, file
       // existence, and federated repo names into the LLM context (SEC-09).
       process.stderr.write(`[pindex] Tool '${name}' failed: ${String(err)}\n`);
-      result = { error: `Tool '${name}' failed` };
+      result = err instanceof UserInputError
+        ? { error: err.message }
+        : { error: `Tool '${name}' failed` };
       toolIsError = true;
     }
 
@@ -453,7 +464,7 @@ export function createMcpServer(
       }
     }
 
-    const text = JSON.stringify(result, null, 2);
+    const text = JSON.stringify(result);
     const tokensUsed = estimateTextTokens(text);
     tokensWithoutIndex = tokensUsed * heuristicMultiplier;
 
@@ -481,7 +492,7 @@ export function createMcpServer(
       });
     }
 
-    return { content: [{ type: 'text', text }] };
+    return toolIsError ? { content: [{ type: 'text', text }], isError: true } : { content: [{ type: 'text', text }] };
   });
 
   return server;

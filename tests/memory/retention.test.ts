@@ -20,10 +20,10 @@ function insertObservationAt(
   db: Database.Database,
   sessionId: string,
   observation: string,
-  createdAtIso: string,
+  createdAt: string,
 ): number {
   const id = insertObservation(db, { sessionId, type: 'accessed', observation });
-  db.prepare('UPDATE session_observations SET created_at = ? WHERE id = ?').run(createdAtIso, id);
+  db.prepare('UPDATE session_observations SET created_at = ? WHERE id = ?').run(createdAt, id);
   return id;
 }
 
@@ -93,18 +93,31 @@ describe('applyObservationRetention (TST-09)', () => {
   });
 
   it("'30d' deletes observations older than the cutoff and keeps recent ones", () => {
-    const now = Date.now();
-    const oldIso = new Date(now - 60 * 24 * 60 * 60 * 1000).toISOString(); // 60 days ago
-    const recentIso = new Date(now - 1 * 24 * 60 * 60 * 1000).toISOString(); // 1 day ago
+    const old = db.prepare("SELECT datetime('now', '-60 days') AS t").get() as { t: string };
+    const recent = db.prepare("SELECT datetime('now', '-1 days') AS t").get() as { t: string };
 
-    insertObservationAt(db, SESSION_A, 'ancient', oldIso);
-    insertObservationAt(db, SESSION_A, 'fresh', recentIso);
+    insertObservationAt(db, SESSION_A, 'ancient', old.t);
+    insertObservationAt(db, SESSION_A, 'fresh', recent.t);
 
     applyObservationRetention(db, SESSION_A, '30d');
 
     const remaining = getAllObservations(db);
     expect(remaining.map((o) => o.observation)).toEqual(['fresh']);
     expect(count(db, 'session_observations')).toBe(1);
+  });
+
+  it("'30d' keeps a row from 29 days ago and deletes one from 31 days ago (SQLite format)", () => {
+    const t = (mod: string) =>
+      (db.prepare('SELECT datetime(\'now\', ?) AS t').get(mod) as { t: string }).t;
+    insertObservationAt(db, SESSION_A, 'older', t('-31 days'));
+    insertObservationAt(db, SESSION_A, 'newer', t('-29 days'));
+    const ev = insertSessionEvent(db, { sessionId: SESSION_A, eventType: 'accessed' });
+    db.prepare('UPDATE session_events SET timestamp = ? WHERE id = ?').run(t('-31 days'), ev);
+
+    applyObservationRetention(db, SESSION_A, '30d');
+
+    expect(getAllObservations(db).map((o) => o.observation)).toEqual(['newer']);
+    expect(count(db, 'session_events')).toBe(0);
   });
 
   it("invalid value like 'bogus' deletes nothing (warning to stderr is fine)", () => {

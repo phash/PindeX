@@ -423,3 +423,16 @@ describe('TOOL_SCHEMAS', () => {
     expect(TOOL_SCHEMAS['get_api_endpoints']).toBeUndefined();
   });
 });
+
+describe('input bounds', () => {
+  it('rejects get_context range above 200 and accepts 200', () => {
+    expect(GetContextSchema.safeParse({ file: 'a.ts', line: 1, range: 201 }).success).toBe(false);
+    expect(GetContextSchema.safeParse({ file: 'a.ts', line: 1, range: 200 }).success).toBe(true);
+  });
+
+  it('rejects limit above 100 on search_symbols and search_docs', () => {
+    expect(SearchSymbolsSchema.safeParse({ query: 'x', limit: 101 }).success).toBe(false);
+    expect(SearchSymbolsSchema.safeParse({ query: 'x', limit: 100 }).success).toBe(true);
+    expect(SearchDocsSchema.safeParse({ query: 'x', limit: 101 }).success).toBe(false);
+  });
+});

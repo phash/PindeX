@@ -5,7 +5,8 @@ import { getSessionStats } from '../db/queries.js';
 export function getTokenStats(
   db: Database.Database,
   input: GetTokenStatsInput,
+  currentSessionId: string,
 ): GetTokenStatsOutput {
-  const sessionId = input.session_id ?? 'default';
+  const sessionId = input.session_id ?? currentSessionId;
   return getSessionStats(db, sessionId);
 }

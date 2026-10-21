@@ -14,6 +14,37 @@ import {
 } from '../db/queries.js';
 import type { RepoSet } from '../federation/repo-set.js';
 
+const MAX_MODULE_GROUPS = 50;
+
+/** Group key: first two path segments of the directory part ('.' for root files). */
+function dirKey(path: string): string {
+  const segments = path.split('/');
+  segments.pop();
+  return segments.length === 0 ? '.' : segments.slice(0, 2).join('/');
+}
+
+function groupByDirectory(
+  files: Array<{ id: number; path: string; summary: string | null }>,
+  symbolCounts: Map<number, number>,
+): NonNullable<ProjectOverviewSnapshot['modules']> {
+  type Group = NonNullable<ProjectOverviewSnapshot['modules']>[number];
+  const groups = new Map<string, Group>();
+  for (const f of files) {
+    const dir = dirKey(f.path);
+    let g = groups.get(dir);
+    if (!g) {
+      g = { dir, files: 0, symbols: 0 };
+      groups.set(dir, g);
+    }
+    g.files++;
+    g.symbols += symbolCounts.get(f.id) ?? 0;
+    if (f.summary) (g.summaries ??= []).push({ path: f.path, summary: f.summary });
+  }
+  return [...groups.values()]
+    .sort((a, b) => b.symbols - a.symbols || a.dir.localeCompare(b.dir))
+    .slice(0, MAX_MODULE_GROUPS);
+}
+
 function buildSnapshot(
   db: Database.Database,
   name: string,
@@ -29,7 +60,6 @@ function buildSnapshot(
       rootPath: projectRoot ?? '',
       language: 'unknown',
       entryPoints: [],
-      modules: [],
       stats: { totalFiles: 0, totalSymbols: 0 },
     };
   }
@@ -52,15 +82,13 @@ function buildSnapshot(
     );
 
   let totalSymbols = 0;
-  let modules: Array<{ path: string; summary: string | null; symbolCount: number }>;
+  let modules: ProjectOverviewSnapshot['modules'];
 
   if (mode === 'brief') {
-    // Brief mode: count all symbols in one query, skip per-file lookups
+    // Brief mode: counts only, no per-file or per-directory data
     const row = db.prepare('SELECT COUNT(*) as cnt FROM symbols').get() as { cnt: number };
     totalSymbols = row.cnt;
-    modules = files.map((f) => ({ path: f.path, summary: null, symbolCount: 0 }));
   } else {
-    // Full mode: single aggregate query instead of N+1 per-file lookups
     const symbolCounts = new Map<number, number>();
     const rows = db.prepare('SELECT file_id, COUNT(*) as cnt FROM symbols GROUP BY file_id')
       .all() as Array<{ file_id: number; cnt: number }>;
@@ -68,11 +96,7 @@ function buildSnapshot(
       symbolCounts.set(row.file_id, row.cnt);
       totalSymbols += row.cnt;
     }
-    modules = files.map((f) => ({
-      path: f.path,
-      summary: f.summary,
-      symbolCount: symbolCounts.get(f.id) ?? 0,
-    }));
+    modules = groupByDirectory(files, symbolCounts);
   }
 
   const snapshot: ProjectOverviewSnapshot = {
@@ -80,9 +104,10 @@ function buildSnapshot(
     rootPath: projectRoot ?? '',
     language,
     entryPoints,
-    modules,
     stats: { totalFiles: files.length, totalSymbols },
   };
+
+  if (modules) snapshot.modules = modules;
 
   // Session memory summary (passive surfacing) — only for primary
   if (sessionId) {

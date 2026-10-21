@@ -1,6 +1,7 @@
 import type Database from 'better-sqlite3';
 import {
   getRecentFileChangeEvents,
+  parseSqliteUtc,
   hasMatchingSessionEvent,
   getLatestSessionEvent,
   insertSessionEvent,
@@ -60,7 +61,7 @@ export class AntiPatternDetector {
     // Don't re-emit if we already flagged thrash for this file recently
     const last = getLatestSessionEvent(this.db, this.sessionId, 'thrash_detected', filePath);
     if (last) {
-      const msAgo = Date.now() - new Date(last.timestamp).getTime();
+      const msAgo = Date.now() - parseSqliteUtc(last.timestamp).getTime();
       if (msAgo < 5 * 60 * 1000) return;
     }
 

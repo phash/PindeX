@@ -1,4 +1,19 @@
 import { vi } from 'vitest';
+import { mkdirSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+// ─── Sandbox: never touch the developer's real ~/.pindex ─────────────────────
+// os.homedir() honours HOME (POSIX) / USERPROFILE (Windows), so every unit test
+// that reaches getPindexHome()/GlobalRegistry lands in a throwaway directory.
+// One directory per vitest worker slot, wiped on start: bounded footprint even if
+// the forked worker is killed before an exit handler can run.
+const sandboxHome = join(tmpdir(), `pindex-test-home-${process.env.VITEST_POOL_ID ?? 'x'}`);
+rmSync(sandboxHome, { recursive: true, force: true });
+mkdirSync(sandboxHome, { recursive: true });
+process.env.HOME = sandboxHome;
+process.env.USERPROFILE = sandboxHome;
+process.on('exit', () => { try { rmSync(sandboxHome, { recursive: true, force: true }); } catch { /* best-effort */ } });
 
 // ─── Mock: tree-sitter (native bindings) ─────────────────────────────────────
 // tree-sitter uses native Node.js addons (.node files) which don't work

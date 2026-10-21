@@ -1,5 +1,4 @@
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import type { AstNode, ParsedFile, ParsedSymbol, ParsedImport, SymbolKind, ParsedDocument, DocumentChunk } from '../types.js';
 
@@ -96,6 +95,7 @@ export function buildSignature(node: AstNode, kind: string): string {
 const DECLARATION_TYPES: Array<{ nodeType: string; kind: SymbolKind }> = [
   { nodeType: 'function_declaration', kind: 'function' },
   { nodeType: 'class_declaration', kind: 'class' },
+  { nodeType: 'abstract_class_declaration', kind: 'class' },
   { nodeType: 'interface_declaration', kind: 'interface' },
   { nodeType: 'type_alias_declaration', kind: 'type' },
   { nodeType: 'enum_declaration', kind: 'enum' },
@@ -131,7 +131,10 @@ function extractFromDeclarationNode(
 
 function extractMethodsFromClass(classNode: AstNode): ParsedSymbol[] {
   const methods: ParsedSymbol[] = [];
-  const methodNodes = classNode.descendantsOfType('method_definition');
+  // Direct children of the class body only: nested classes (e.g. in method
+  // bodies) must not leak their methods into this class.
+  const body = classNode.childForFieldName('body');
+  const methodNodes = (body?.namedChildren ?? []).filter((c) => c.type === 'method_definition');
 
   for (const methodNode of methodNodes) {
     const nameNode = methodNode.childForFieldName('name');
@@ -153,6 +156,58 @@ function extractMethodsFromClass(classNode: AstNode): ParsedSymbol[] {
   return methods;
 }
 
+const FUNCTION_VALUE_TYPES = new Set([
+  'arrow_function',
+  'function_expression',
+  'function',
+  'generator_function',
+]);
+
+function isVariableDeclaration(node: AstNode): boolean {
+  return node.type === 'lexical_declaration' || node.type === 'variable_declaration';
+}
+
+/**
+ * Extracts symbols from the declarators that are direct children of a
+ * top-level variable declaration (never descends into initializer bodies).
+ * Function-valued declarators become `function` symbols; other declarators
+ * become `const` symbols unless `skipNonFunctions` is set.
+ */
+function extractFromVariableDeclaration(
+  declaration: AstNode,
+  isExported: boolean,
+  skipNonFunctions: boolean,
+): ParsedSymbol[] {
+  const symbols: ParsedSymbol[] = [];
+  for (const decl of declaration.namedChildren) {
+    if (decl.type !== 'variable_declarator') continue;
+    const nameNode = decl.childForFieldName('name');
+    if (!nameNode || nameNode.type !== 'identifier') continue;
+    const valueNode = decl.childForFieldName('value');
+    const isFunction = !!valueNode && FUNCTION_VALUE_TYPES.has(valueNode.type);
+    if (!isFunction && skipNonFunctions) continue;
+
+    let signature = nameNode.text;
+    if (isFunction) {
+      const params = valueNode.childForFieldName('parameters') ?? valueNode.childForFieldName('parameter');
+      const paramText = params ? (params.type === 'identifier' ? `(${params.text})` : params.text) : '()';
+      const retText = valueNode.childForFieldName('return_type')?.text ?? '';
+      signature = `${nameNode.text}${paramText}${retText}`.replace(/\s+/g, ' ').trim();
+    }
+    symbols.push({
+      name: nameNode.text,
+      kind: isFunction ? 'function' : 'const',
+      signature,
+      startLine: declaration.startPosition.row + 1,
+      endLine: declaration.endPosition.row + 1,
+      isExported,
+      isAsync: valueNode ? nodeIsAsync(valueNode) : false,
+      hasTryCatch: valueNode ? nodeHasTryCatch(valueNode) : false,
+    });
+  }
+  return symbols;
+}
+
 function extractFromExportStatement(node: AstNode): ParsedSymbol[] {
   const declaration = node.childForFieldName('declaration');
   if (!declaration) return [];
@@ -172,27 +227,8 @@ function extractFromExportStatement(node: AstNode): ParsedSymbol[] {
   }
 
   // export const x = ...
-  if (
-    declaration.type === 'lexical_declaration' ||
-    declaration.type === 'variable_declaration'
-  ) {
-    const declarators = declaration.descendantsOfType('variable_declarator');
-    for (const decl of declarators) {
-      const nameNode = decl.childForFieldName('name');
-      if (!nameNode) continue;
-      // Check if the value is an async function
-      const valueNode = decl.childForFieldName('value');
-      symbols.push({
-        name: nameNode.text,
-        kind: 'const',
-        signature: nameNode.text,
-        startLine: declaration.startPosition.row + 1,
-        endLine: declaration.endPosition.row + 1,
-        isExported: true,
-        isAsync: valueNode ? nodeIsAsync(valueNode) : false,
-        hasTryCatch: valueNode ? nodeHasTryCatch(valueNode) : false,
-      });
-    }
+  if (isVariableDeclaration(declaration)) {
+    symbols.push(...extractFromVariableDeclaration(declaration, true, false));
   }
   return symbols;
 }
@@ -258,6 +294,12 @@ export function extractSymbols(rootNode: AstNode, _content: string): ParsedSymbo
         symbols.push(route);
         continue;
       }
+    }
+
+    // Non-exported top-level function-valued consts (const f = () => {})
+    if (isVariableDeclaration(child)) {
+      symbols.push(...extractFromVariableDeclaration(child, false, true));
+      continue;
     }
 
     // Handle direct declarations

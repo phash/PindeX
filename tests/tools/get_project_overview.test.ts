@@ -28,18 +28,43 @@ describe('getProjectOverview', () => {
     expect(result.stats.totalSymbols).toBe(3);
   });
 
-  it('returns modules with symbol counts', () => {
+  it('groups modules by directory with file and symbol counts', () => {
     const result = getProjectOverview(makeTestRepoSet(db), '/my/project');
-    expect(result.modules).toHaveLength(2);
-    const service = result.modules.find((m) => m.path === 'src/service.ts');
-    expect(service).toBeDefined();
-    expect(service!.symbolCount).toBe(2);
+    expect(result.modules).toEqual([
+      { dir: 'src', files: 2, symbols: 3, summaries: [{ path: 'src/index.ts', summary: 'Entry point' }] },
+    ]);
   });
 
-  it('includes summary when available', () => {
-    const result = getProjectOverview(makeTestRepoSet(db), '/my/project');
-    const index = result.modules.find((m) => m.path === 'src/index.ts');
-    expect(index!.summary).toBe('Entry point');
+  it('brief mode has no modules key', () => {
+    const result = getProjectOverview(makeTestRepoSet(db), '/my/project', 'default', { mode: 'brief' });
+    expect('modules' in result).toBe(false);
+    expect(result.stats.totalFiles).toBe(2);
+    expect(result.stats.totalSymbols).toBe(3);
+  });
+
+  it('full mode on 120 files in 3 dirs yields at most 3 groups, root files grouped under "."', () => {
+    const big = createTestDb();
+    for (let i = 0; i < 40; i++) {
+      for (const d of ['src/a', 'src/b', 'lib/c/deep']) insertTestFile(big, { path: `${d}/f${i}.ts` });
+    }
+    insertTestFile(big, { path: 'index.ts' });
+    const result = getProjectOverview(makeTestRepoSet(big), '/big');
+    const dirs = result.modules!.map((m) => m.dir).sort();
+    expect(dirs).toEqual(['.', 'lib/c', 'src/a', 'src/b']);
+    expect(result.modules!.find((m) => m.dir === 'src/a')!.files).toBe(40);
+    expect(result.modules!.every((m) => m.summaries === undefined)).toBe(true);
+  });
+
+  it('caps groups at 50, sorted by symbols desc then dir asc', () => {
+    const big = createTestDb();
+    for (let i = 0; i < 60; i++) {
+      const id = insertTestFile(big, { path: `d${String(i).padStart(2, '0')}/x/f.ts` });
+      if (i === 59) insertTestSymbol(big, { fileId: id, name: 'top', kind: 'function', signature: 'top()' });
+    }
+    const result = getProjectOverview(makeTestRepoSet(big), '/big');
+    expect(result.modules).toHaveLength(50);
+    expect(result.modules![0].dir).toBe('d59/x');
+    expect(result.modules![1].dir).toBe('d00/x');
   });
 
   it('detects TypeScript as the dominant language', () => {
@@ -52,11 +77,11 @@ describe('getProjectOverview', () => {
     expect(result.entryPoints).toContain('src/index.ts');
   });
 
-  it('returns empty modules for empty database', () => {
+  it('returns no modules for empty database', () => {
     const emptyDb = createTestDb();
     const result = getProjectOverview(makeTestRepoSet(emptyDb), '/empty');
     expect(result.stats.totalFiles).toBe(0);
-    expect(result.modules).toHaveLength(0);
+    expect(result.modules ?? []).toHaveLength(0);
   });
 });
 

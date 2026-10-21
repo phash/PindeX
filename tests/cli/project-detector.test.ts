@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, statSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, statSync, utimesSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -13,7 +13,7 @@ vi.mock('node:os', async (importOriginal) => {
   };
 });
 
-import { hashProjectPath, getProjectIndexPath, getProjectMetaPath, getPindexHome, GlobalRegistry } from '../../src/cli/project-detector.js';
+import { computeDefaultPort, GUI_DEFAULT_PORT, guiPortCandidates, hashProjectPath, getProjectIndexPath, getPindexHome, GlobalRegistry } from '../../src/cli/project-detector.js';
 
 describe('hashProjectPath', () => {
   it('returns an 8-character hex string', () => {
@@ -51,13 +51,6 @@ describe('getProjectIndexPath', () => {
     const path = getProjectIndexPath('/home/user/myproject');
     expect(path).toContain('.pindex');
     expect(path).toContain('myproject');
-  });
-});
-
-describe('getProjectMetaPath', () => {
-  it('returns a path ending with meta.json', () => {
-    const path = getProjectMetaPath('/home/user/myproject');
-    expect(path.endsWith('meta.json')).toBe(true);
   });
 });
 
@@ -106,7 +99,8 @@ describe('GlobalRegistry — name field', () => {
     const entries = reg.list();
     expect(entries.every((e) => typeof e.name === 'string' && e.name.length > 0)).toBe(true);
 
-    // The migration should have written back to disk.
+    // list() is side-effect free; the migration is persisted by the next locked mutation.
+    reg.upsert('/x/foo');
     const reread = JSON.parse(readFileSync(path, 'utf-8')) as { projects: Array<{ name?: string }> };
     expect(reread.projects.every((p) => typeof p.name === 'string')).toBe(true);
   });
@@ -353,7 +347,8 @@ describe('GlobalRegistry — CRUD & port assignment (sandboxed)', () => {
     // string entry resolved to a structured one; name pulled from the registered target
     expect(main.federatedRepos).toContainEqual({ path: '/x/dep-one', name: 'known-dep' });
     expect(main.federatedRepos).toContainEqual({ path: '/x/dep-two', name: 'dep-two' });
-    // migration persisted back to disk
+    // list/getByPath do not write; the next locked mutation persists the migration
+    reg.upsert('/x/main');
     const reread = JSON.parse(readFileSync(join(home, 'registry.json'), 'utf-8'));
     const rereadMain = reread.projects.find((p: { path: string }) => p.path === '/x/main');
     expect(typeof rereadMain.federatedRepos[0]).toBe('object');
@@ -430,27 +425,6 @@ describe('findProjectRoot (sandboxed)', () => {
   });
 });
 
-describe('getMcpIndexerHome (deprecated alias, sandboxed)', () => {
-  let tempHome: string;
-
-  beforeEach(async () => {
-    tempHome = join(tmpdir(), `pindex-alias-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
-    mkdirSync(tempHome, { recursive: true });
-    const { homedir } = await import('node:os');
-    vi.mocked(homedir).mockReturnValue(tempHome);
-  });
-
-  afterEach(() => {
-    rmSync(tempHome, { recursive: true, force: true });
-    vi.restoreAllMocks();
-  });
-
-  it('returns the same path as getPindexHome', async () => {
-    const { getMcpIndexerHome, getPindexHome: gph } = await import('../../src/cli/project-detector.js');
-    expect(getMcpIndexerHome()).toBe(gph());
-  });
-});
-
 describe('getProjectsDir (sandboxed)', () => {
   let tempHome: string;
 
@@ -469,5 +443,107 @@ describe('getProjectsDir (sandboxed)', () => {
   it('returns <home>/.pindex/projects', async () => {
     const { getProjectsDir } = await import('../../src/cli/project-detector.js');
     expect(getProjectsDir()).toBe(join(tempHome, '.pindex', 'projects'));
+  });
+});
+
+describe('GlobalRegistry — atomic, locked writes (sandboxed)', () => {
+  let tempHome: string;
+  let pindexDir: string;
+  let regPath: string;
+  let lockPath: string;
+
+  beforeEach(async () => {
+    tempHome = join(tmpdir(), `pindex-reg-lock-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    mkdirSync(tempHome, { recursive: true });
+    const { homedir } = await import('node:os');
+    vi.mocked(homedir).mockReturnValue(tempHome);
+    pindexDir = join(tempHome, '.pindex');
+    regPath = join(pindexDir, 'registry.json');
+    lockPath = `${regPath}.lock`;
+  });
+
+  afterEach(() => {
+    rmSync(tempHome, { recursive: true, force: true });
+    vi.restoreAllMocks();
+  });
+
+  it('throws RegistryLockError when a fresh foreign lock is held; registry unchanged', async () => {
+    const { GlobalRegistry: Reg, RegistryLockError } = await import('../../src/cli/project-detector.js');
+    new Reg().upsert('/tmp/lock-a');
+    const before = readFileSync(regPath, 'utf-8');
+    writeFileSync(lockPath, 'foreign');
+
+    const reg = new Reg({ lockRetries: 3, lockRetryDelayMs: 1 });
+    expect(() => reg.upsert('/tmp/lock-b')).toThrow(RegistryLockError);
+    expect(readFileSync(regPath, 'utf-8')).toBe(before);
+    expect(existsSync(lockPath)).toBe(true); // foreign lock is not ours to remove
+  });
+
+  it('removes a stale lock (older than 5 s) and succeeds', async () => {
+    const { GlobalRegistry: Reg } = await import('../../src/cli/project-detector.js');
+    const reg = new Reg({ lockRetries: 3, lockRetryDelayMs: 1 });
+    reg.upsert('/tmp/stale-a');
+    writeFileSync(lockPath, 'dead');
+    const old = new Date(Date.now() - 10_000);
+    utimesSync(lockPath, old, old);
+
+    reg.upsert('/tmp/stale-b');
+    expect(reg.list().map((p) => p.path).sort()).toEqual(['/tmp/stale-a', '/tmp/stale-b']);
+    expect(existsSync(lockPath)).toBe(false);
+  });
+
+  it('leaves no .tmp or .lock files after successful writes', async () => {
+    const { GlobalRegistry: Reg } = await import('../../src/cli/project-detector.js');
+    const reg = new Reg();
+    for (let i = 0; i < 5; i++) reg.upsert(`/tmp/tmp-${i}`);
+    reg.remove('/tmp/tmp-0');
+    expect(reg.list()).toHaveLength(4);
+    expect(readdirSync(pindexDir).filter((f) => f.endsWith('.tmp') || f.endsWith('.lock'))).toEqual([]);
+  });
+
+  it('throws RegistryCorruptError on corrupt registry.json and leaves it unchanged', async () => {
+    const { GlobalRegistry: Reg, RegistryCorruptError } = await import('../../src/cli/project-detector.js');
+    mkdirSync(pindexDir, { recursive: true });
+    writeFileSync(regPath, '{ not json');
+    const reg = new Reg();
+    expect(() => reg.upsert('/tmp/corrupt')).toThrow(RegistryCorruptError);
+    expect(() => reg.remove('/tmp/corrupt')).toThrow(RegistryCorruptError);
+    expect(readFileSync(regPath, 'utf-8')).toBe('{ not json');
+    expect(existsSync(lockPath)).toBe(false);
+  });
+
+  it('list() is side-effect free: legacy entries are normalised in memory only', async () => {
+    const { GlobalRegistry: Reg } = await import('../../src/cli/project-detector.js');
+    mkdirSync(pindexDir, { recursive: true });
+    const legacy = JSON.stringify({ version: 1, projects: [{ path: '/tmp/legacy', hash: 'abcd1234', monitoringPort: 7900, federatedRepos: [], addedAt: 'x' }] });
+    writeFileSync(regPath, legacy);
+    const list = new Reg().list();
+    expect(list[0].name).toBeTruthy();
+    expect(readFileSync(regPath, 'utf-8')).toBe(legacy);
+  });
+});
+
+describe('guiPortCandidates', () => {
+  it('falls back below the GUI port (7840..7836), never into the per-project range', () => {
+    expect(guiPortCandidates(GUI_DEFAULT_PORT)).toEqual([7841, 7840, 7839, 7838, 7837, 7836]);
+    for (const p of guiPortCandidates(GUI_DEFAULT_PORT)) expect(p).toBeLessThan(7842);
+  });
+
+  it('keeps a custom preferred port first and does not duplicate a fallback port', () => {
+    expect(guiPortCandidates(9000)).toEqual([9000, 7840, 7839, 7838, 7837, 7836]);
+    expect(guiPortCandidates(7838)).toEqual([7838, 7840, 7839, 7837, 7836]);
+  });
+});
+
+describe('computeDefaultPort / GUI_DEFAULT_PORT', () => {
+  it('GUI port is 7841', () => {
+    expect(GUI_DEFAULT_PORT).toBe(7841);
+  });
+
+  it('never returns the GUI port over 10000 random hashes', () => {
+    for (let i = 0; i < 10000; i++) {
+      const hash = Math.floor(Math.random() * 0xffffffff).toString(16).padStart(8, '0');
+      expect(computeDefaultPort(hash)).not.toBe(GUI_DEFAULT_PORT);
+    }
   });
 });

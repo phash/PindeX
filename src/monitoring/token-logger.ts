@@ -13,13 +13,12 @@ export interface LogInput {
   toolName: string;
   tokensUsed: number;
   tokensWithoutIndex: number;
-  filesTouched?: string[];
   query?: string;
 }
 
 export class TokenLogger {
   private readonly db: Database.Database;
-  private readonly sessionId: string;
+  private sessionId: string;
   private readonly emitter?: EventEmitter;
   private cumulativeActual = 0;
   private cumulativeSavings = 0;
@@ -37,7 +36,6 @@ export class TokenLogger {
       toolName: input.toolName,
       tokensUsed: input.tokensUsed,
       tokensWithoutIndex: input.tokensWithoutIndex,
-      filesTouched: input.filesTouched,
       query: input.query,
     });
 
@@ -63,6 +61,13 @@ export class TokenLogger {
     };
 
     this.emitter?.emit('token_event', event);
+  }
+
+  /** Switches the session that subsequent log() calls are attributed to; totals restart at zero. */
+  setSessionId(id: string): void {
+    this.sessionId = id;
+    this.cumulativeActual = 0;
+    this.cumulativeSavings = 0;
   }
 
   getCurrentSessionId(): string {

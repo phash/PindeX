@@ -1,6 +1,8 @@
-import { spawn as nodeSpawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
-import { existsSync } from 'node:fs';
-import { resolve, join } from 'node:path';
+import { spawn as nodeSpawn, type ChildProcessWithoutNullStreams, type SpawnOptions } from 'node:child_process';
+import { tmpdir } from 'node:os';
+import { existsSync, realpathSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import { resolve, join, dirname, delimiter, isAbsolute, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
   StreamMessageReader,
@@ -12,6 +14,20 @@ import type { DocumentSymbol } from 'vscode-languageserver-protocol';
 import type { ParsedSymbol, ParsedImport } from '../types.js';
 import { mapDocumentSymbols } from './lsp-mapper.js';
 import { parseFile } from './parser.js';
+
+/**
+ * LSP parsing is opt-in: only the exact value 'true' enables it. Pyright reads the project's
+ * pyrightconfig.json and may run the configured Python interpreter, so it must not start
+ * by default on untrusted repositories.
+ */
+export function isLspEnabledByEnv(value: string | undefined = process.env.PINDEX_LSP): boolean {
+  return value === 'true';
+}
+
+/** Spawn options for pyright-langserver: cwd outside the project so nothing is resolved relative to it. */
+export function pyrightSpawnOptions(): SpawnOptions {
+  return { stdio: ['pipe', 'pipe', 'pipe'], cwd: tmpdir() };
+}
 
 export type LspReadyState = 'idle' | 'starting' | 'ready' | 'failed' | 'closed';
 
@@ -45,8 +61,8 @@ export class LspPythonClient {
     this.timeoutMs = options.timeoutMs ?? 5000;
     this.spawnImpl =
       options._spawn ??
-      ((path) => nodeSpawn(path, ['--stdio'], { stdio: ['pipe', 'pipe', 'pipe'] }) as ChildProcessWithoutNullStreams);
-    this.resolveImpl = options._resolveServerPath ?? (() => resolvePyrightLangserver());
+      ((path) => nodeSpawn(path, ['--stdio'], pyrightSpawnOptions()) as ChildProcessWithoutNullStreams);
+    this.resolveImpl = options._resolveServerPath ?? (() => resolvePyrightLangserver(this.projectRoot));
   }
 
   /** Test-only: resets module-level warning guard so tests can observe
@@ -76,7 +92,7 @@ export class LspPythonClient {
         process.stderr.write(
           `[pindex] LSP: pyright-langserver not found on PATH or in node_modules; ` +
           `falling back to regex parsing. Install with "npm install pyright" or ` +
-          `set PINDEX_LSP=false to silence this.\n`,
+          `unset PINDEX_LSP to silence this.\n`,
         );
         LspPythonClient.warnedMissing = true;
       }
@@ -85,8 +101,10 @@ export class LspPythonClient {
     }
 
     this._state = 'starting';
+    let proc: ChildProcessWithoutNullStreams;
     try {
-      this.proc = this.spawnImpl(path);
+      proc = this.spawnImpl(path);
+      this.proc = proc;
     } catch (err) {
       process.stderr.write(`[pindex] LSP: spawn failed: ${String(err)}\n`);
       this._state = 'failed';
@@ -97,7 +115,10 @@ export class LspPythonClient {
     let exitReject!: (err: Error) => void;
     const exitPromise = new Promise<never>((_, reject) => { exitReject = reject; });
 
-    this.proc.on('exit', (code) => {
+    proc.on('exit', (code) => {
+      // A replaced/killed process may report its exit late; it must not
+      // affect the state of its successor.
+      if (this.proc !== proc) return;
       if (this._state === 'closed') return;
 
       process.stderr.write(`[pindex] LSP: pyright-langserver exited (code ${code})\n`);
@@ -121,8 +142,8 @@ export class LspPythonClient {
     });
 
     this.connection = createMessageConnection(
-      new StreamMessageReader(this.proc.stdout),
-      new StreamMessageWriter(this.proc.stdin),
+      new StreamMessageReader(proc.stdout),
+      new StreamMessageWriter(proc.stdin),
     );
     this.connection.listen();
 
@@ -168,24 +189,26 @@ export class LspPythonClient {
 
     const uri = pathToFileURL(resolve(this.projectRoot, relPath)).href;
 
+    const connection = this.connection;
     try {
-      this.connection.sendNotification('textDocument/didOpen', {
+      connection.sendNotification('textDocument/didOpen', {
         textDocument: { uri, languageId: 'python', version: 1, text: content },
       });
 
       let timedOut = false;
+      let timer: NodeJS.Timeout | undefined;
       let response: DocumentSymbol[] | null;
       try {
         response = (await Promise.race([
-          this.connection.sendRequest('textDocument/documentSymbol', {
+          connection.sendRequest('textDocument/documentSymbol', {
             textDocument: { uri },
           }),
-          new Promise((_, reject) =>
-            setTimeout(() => {
+          new Promise((_, reject) => {
+            timer = setTimeout(() => {
               timedOut = true;
               reject(new Error('request timeout'));
-            }, this.timeoutMs),
-          ),
+            }, this.timeoutMs);
+          }),
         ])) as DocumentSymbol[] | null;
       } catch (err) {
         if (timedOut) {
@@ -197,11 +220,14 @@ export class LspPythonClient {
           return null;
         }
         throw err;
+      } finally {
+        clearTimeout(timer);
+        // Always close the document, including on timeout/error, so the
+        // server does not accumulate open documents.
+        try {
+          connection.sendNotification('textDocument/didClose', { textDocument: { uri } });
+        } catch { /* connection may be disposed by simulateCrash */ }
       }
-
-      this.connection.sendNotification('textDocument/didClose', {
-        textDocument: { uri },
-      });
 
       if (!response || !Array.isArray(response)) {
         return { symbols: [], imports: extractImportsFromContent(content) };
@@ -256,14 +282,60 @@ export class LspPythonClient {
   }
 }
 
-/** Resolves the pyright-langserver binary path by checking node_modules/.bin.
- *  Returns null if not found; PATH-based discovery is intentionally not
- *  implemented (would require spawn + stderr capture to detect failure, which
- *  is a larger change and not worth the complexity for the optionalDependency
- *  install path where node_modules is the canonical location). */
-function resolvePyrightLangserver(): string | null {
-  const local = join(process.cwd(), 'node_modules', '.bin', 'pyright-langserver');
-  if (existsSync(local)) return local;
+export interface PyrightResolveDeps {
+  /** Resolves pyright's package.json relative to this module. Throws if absent. */
+  resolvePackageJson: () => string;
+  exists: (path: string) => boolean;
+  realpath: (path: string) => string;
+  pathEnv: string;
+}
+
+const defaultResolveDeps = (): PyrightResolveDeps => ({
+  resolvePackageJson: () => createRequire(import.meta.url).resolve('pyright/package.json'),
+  exists: existsSync,
+  realpath: realpathSync,
+  pathEnv: process.env.PATH ?? '',
+});
+
+/** Resolves the pyright-langserver binary. Order: PindeX's own pyright
+ *  install (independent of cwd) -> absolute PATH entries outside the project.
+ *
+ *  SECURITY: binaries living inside the indexed project (node_modules/.bin,
+ *  relative PATH entries such as "." or symlinks into the repo) are never
+ *  used. Indexing an untrusted repository must not execute code from it. */
+export function resolvePyrightLangserver(
+  projectRoot: string,
+  deps: PyrightResolveDeps = defaultResolveDeps(),
+): string | null {
+  const bin = 'pyright-langserver';
+  try {
+    const pkgJson = deps.resolvePackageJson();
+    // <nodeModules>/pyright/package.json -> <nodeModules>/.bin/pyright-langserver
+    const candidate = join(dirname(dirname(pkgJson)), '.bin', bin);
+    if (deps.exists(candidate)) return candidate;
+  } catch { /* package not installed */ }
+
+  let rootReal: string;
+  try {
+    rootReal = deps.realpath(projectRoot);
+  } catch {
+    rootReal = resolve(projectRoot);
+  }
+  const rootPrefix = rootReal.endsWith(sep) ? rootReal : rootReal + sep;
+
+  for (const dir of deps.pathEnv.split(delimiter)) {
+    if (!dir || !isAbsolute(dir)) continue;
+    const candidate = join(dir, bin);
+    if (!deps.exists(candidate)) continue;
+    let real: string;
+    try {
+      real = deps.realpath(candidate);
+    } catch {
+      continue;
+    }
+    if (real === rootReal || real.startsWith(rootPrefix)) continue;
+    return candidate;
+  }
   return null;
 }
 

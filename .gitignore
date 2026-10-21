@@ -13,3 +13,5 @@ coverage/
 .benchmark-mcp-pindex.json
 .benchmark-mcp-baseline.json
 benchmarks/results/raw/
+# Machine-specific MCP config (absolute paths)
+.mcp.json

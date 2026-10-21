@@ -42,7 +42,7 @@ Your project files
   Claude calls save_context(…)  ──────────────────► context_entries
                                                       │
                                                       ▼
-  SQLite (FTS5)  ← stored in ~/.pindex/projects/{hash}/index.db
+  SQLite (FTS5)  ← stored in {project}/.pindex/index.db
   ├── files            (path, hash, language, token estimate)
   ├── symbols          (name, kind, signature, lines)       ─► search_symbols
   ├── dependencies     (import graph)                       ─► get_dependencies
@@ -182,10 +182,12 @@ pindex
 PindeX will:
 1. Walk upward from your current directory to find the project root (`package.json`, `.git`, etc.)
 2. Assign a dedicated monitoring port for this project
-3. Write `.mcp.json` into the project root with absolute paths
+3. Merge a `pindex` server entry into `.mcp.json` in the project root (other servers and keys in an existing file are preserved; an invalid-JSON file is left untouched and reported). Re-running keeps your settings for: `LANGUAGES`, `AUTO_REINDEX`, `GENERATE_SUMMARIES`, `SUMMARIZER_MODEL`, `MONITORING_AUTO_OPEN`, `EXPOSE_CORE_TOOLS_ONLY`, `OBSERVATION_RETENTION`, `PINDEX_PARSE_WORKERS`. Any other env key in the existing entry (e.g. `PINDEX_LSP`, `SUMMARIZER_API_KEY`, `SUMMARIZER_BASE_URL`, `PINDEX_BIND_HOST`, `NODE_OPTIONS`) is dropped and its name (never the value) is printed, so a `.mcp.json` shipped with a repo cannot slip settings into your config; re-add trusted keys by hand. `command` is the absolute path of the `node` that ran `pindex`, `args` the absolute path of `dist/index.js` — no PATH lookup needed
 4. Register the project in `~/.pindex/registry.json`
 5. Inject a PindeX workflow section into `CLAUDE.md` (created if missing)
-6. Add a `PreToolUse` hook to `.claude/settings.json` to remind Claude to prefer PindeX tools
+6. Install two Claude Code hooks (both marked with `"_pindex": "pindex-hook"`; your own hooks are kept):
+   - `PreToolUse` in the shared `.claude/settings.json` — reminds Claude to prefer PindeX tools over `Read`/`Glob`/`Grep` (portable command, safe to commit)
+   - `SessionStart` in `.claude/settings.local.json` — starts the dashboard in the background (`gui --no-open`). It contains machine-specific absolute paths (`node` + `dist/cli/index.js`), so it lives in the local settings file, which `pindex` adds to `.gitignore` (together with `.pindex/`). A pindex `SessionStart` entry left in `settings.json` by older versions is moved there automatically
 
 Output:
 ```
@@ -194,7 +196,7 @@ Output:
   ╚══════════════════════════════════════════╝
 
   Project   : /my/project
-  Index     : ~/.pindex/projects/a3f8b2c1/index.db
+  Index     : /path/to/project/.pindex/index.db
   Port      : 7856
   Config    : .mcp.json (written)
   CLAUDE.md : section added
@@ -207,7 +209,7 @@ Output:
 
 ### 2. Restart Claude Code
 
-Claude Code auto-discovers `.mcp.json`. On the next startup it will spawn `pindex-server` with the correct `PROJECT_ROOT` — the index is built automatically in the background.
+Claude Code auto-discovers `.mcp.json`. On the next startup it will spawn the server (absolute `node` + `dist/index.js`) with the correct `PROJECT_ROOT` — the index is built automatically in the background.
 
 ### 3. Use the tools
 
@@ -232,7 +234,7 @@ save_context("Decision: use JWT …", "auth")  # store for future sessions
 pindex-gui
 ```
 
-Opens `http://localhost:7842` — an aggregated dashboard showing token savings, symbol counts, and session stats for **all** registered projects. The savings figures reflect tokens saved on PindeX tool calls; see the note in [How It Works](#how-it-works) for context.
+Opens `http://localhost:7841` — an aggregated dashboard showing token savings, symbol counts, and session stats for **all** registered projects. The savings figures reflect tokens saved on PindeX tool calls; see the note in [How It Works](#how-it-works) for context.
 
 ---
 
@@ -240,7 +242,7 @@ Opens `http://localhost:7842` — an aggregated dashboard showing token savings,
 
 ### Multiple independent projects
 
-Each project gets its own `.mcp.json` (pointing to its own `PROJECT_ROOT`) and its own SQLite database at `~/.pindex/projects/{hash}/index.db`. When Claude Code opens Project A, it spawns `pindex-server` with `PROJECT_ROOT=/path/to/project-a` — it never touches Project B's index.
+Each project gets its own `.mcp.json` (pointing to its own `PROJECT_ROOT`) and its own SQLite database at `{project}/.pindex/index.db`. When Claude Code opens Project A, it spawns `pindex-server` with `PROJECT_ROOT=/path/to/project-a` — it never touches Project B's index.
 
 ```bash
 cd /project-a && pindex   # registers project-a
@@ -281,7 +283,7 @@ The 5 write/session tools (`reindex`, `save_context`, `get_session_memory`, `sta
 
 **Legacy env var:**
 
-The `FEDERATION_REPOS` env var (colon-separated paths) is still supported for backward compatibility and is what the CLI writes to `.mcp.json`:
+The `FEDERATION_REPOS` env var (paths separated by the OS path delimiter — `:` on macOS/Linux, `;` on Windows — or a JSON array) is still supported for backward compatibility and is what the CLI writes to `.mcp.json`:
 
 ```bash
 FEDERATION_REPOS=/path/to/repo-a:/path/to/repo-b pindex-server
@@ -296,16 +298,15 @@ pindex status
 ```
 
 ```
-  3 registered project(s):
+  2 registered project(s):
 
-  [idle]  project-a  + 1 federated repo
+  [idle]  project-a  + 1 federated repo(s)
            /home/user/project-a
-           port: 7856  index: ~/.pindex/projects/a3f8b2c1/
+           port: 9304  index: /home/user/project-a/.pindex/
 
-  [idle]  project-b
+  [running (PID 48213)]  project-b
            /home/user/project-b
-           port: 7901  index: ~/.pindex/projects/f1e2d3c4/
-  ...
+           port: 8219  index: /home/user/project-b/.pindex/
 ```
 
 ---
@@ -377,7 +378,7 @@ All locations in the codebase where a symbol is referenced.
 |---|---|---|---|
 | `symbol` | string | ✓ | Symbol name to look up |
 
-**Returns:** List of `{ file, line, context }` entries.
+**Returns:** List of `{ file, line, project }` entries.
 
 ---
 
@@ -396,10 +397,10 @@ Import graph for a file — what it imports, what imports it, or both.
 
 ### `get_project_overview`
 
-Project-wide statistics — no parameters required.
+Project-wide statistics. Optional `mode`: `brief` (counts only) or `full` (default, adds directory groups).
 When federation is active, also includes stats for each linked repository.
 
-**Returns:** Total file count, dominant language, entry points (`index`, `main`, `app` files), module list with symbol counts, an `index_recommendation` field (see [When Is PindeX Worth Using?](#when-is-pindex-worth-using)), and (if federated) per-repo breakdowns.
+**Returns:** Total file count, dominant language, entry points (`index`, `main`, `app` files), in full mode directory groups (top two path segments, max 50) with file and symbol counts, an `index_recommendation` field (see [When Is PindeX Worth Using?](#when-is-pindex-worth-using)), and (if federated) per-repo breakdowns.
 
 ---
 
@@ -421,7 +422,7 @@ Token usage and savings statistics for a session.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `session_id` | string | | Defaults to `"default"` |
+| `session_id` | string | | Defaults to the session currently being logged (the server's session, or the one opened by the last `start_comparison`) |
 
 **Returns:** Total tokens used, estimated tokens without the index, net savings, and savings percentage.
 
@@ -437,6 +438,8 @@ Create a labelled A/B testing session to compare indexed vs. baseline token usag
 | `mode` | `"indexed"` \| `"baseline"` | ✓ | Tracking mode |
 
 **Returns:** `session_id` and the monitoring dashboard URL.
+
+Side effects: all following tool calls are logged to the new session (so `get_token_stats` without `session_id` reports it). With `mode: "baseline"` every query tool returns the error `Index disabled for baseline measurement` (with `isError: true`) until the next `start_comparison` with `mode: "indexed"`; `get_token_stats` and `start_comparison` keep working.
 
 ---
 
@@ -554,7 +557,7 @@ These are set automatically in the generated `.mcp.json` — you rarely need to 
 | Variable | Default | Description |
 |---|---|---|
 | `PROJECT_ROOT` | `.` | Root directory of the project to index |
-| `INDEX_PATH` | `~/.pindex/projects/{hash}/index.db` | Path to the SQLite database |
+| `INDEX_PATH` | `{project}/.pindex/index.db` | Path to the SQLite database |
 | `LANGUAGES` | `typescript,javascript` | Comma-separated list of languages to index. Supported values: `typescript`, `javascript`, `java`, `kotlin`, `python`, `php`, `vue`, `svelte`, `ruby`, `csharp`, `go`, `rust` |
 | `AUTO_REINDEX` | `true` | Watch for file changes and reindex automatically |
 | `MONITORING_PORT` | assigned per-project | Port for the live dashboard + WebSocket |
@@ -564,11 +567,10 @@ These are set automatically in the generated `.mcp.json` — you rarely need to 
 | `SUMMARIZER_API_KEY` | _(empty)_ | API key for the LLM summarization provider |
 | `SUMMARIZER_BASE_URL` | `https://api.openai.com/v1` | Base URL for the OpenAI-compatible chat completions API. Works with OpenAI, Ollama, LiteLLM, Anthropic proxy, etc. |
 | `SUMMARIZER_MODEL` | `gpt-4o-mini` | Model name for summarization requests |
-| `TOKEN_PRICE_PER_MILLION` | `3.00` | USD price per million tokens — used for cost estimates |
 | `PINDEX_PARSE_WORKERS` | _(empty)_ | Parse workers (0=sync, empty=auto) |
 | `PINDEX_BIND_HOST` | `127.0.0.1` | Bind host for monitoring/GUI (default loopback) |
-| `PINDEX_LSP` | `true` | opt-in LSP parsing for Python (set to `false` to force regex) |
-| `FEDERATION_REPOS` | _(empty)_ | Colon-separated absolute paths to linked repositories |
+| `PINDEX_LSP` | _(off)_ | Opt-in LSP parsing for Python: only `true` enables Pyright, anything else uses the regex parser. See [Python (LSP)](#python-lsp) for the trust note |
+| `FEDERATION_REPOS` | _(empty)_ | Absolute paths separated by the OS path delimiter (`:` posix, `;` Windows) or a JSON array to linked repositories |
 | `DOCUMENT_PATTERNS` | `**/*.md,**/*.markdown,**/*.yaml,**/*.yml,**/*.txt` | Glob patterns for document files to index alongside code |
 | `OBSERVATION_RETENTION` | `permanent` | How long passive session observations are kept: `permanent`, `session`, or `Nd` (e.g. `30d`) |
 
@@ -587,23 +589,22 @@ pindex
 # restart Claude Code → pindex-server starts automatically
 ```
 
-The `.mcp.json` format (auto-generated, do not edit by hand):
+The `pindex` entry in `.mcp.json` (auto-generated; other servers in the file are left alone). `command`/`args` are absolute paths to the Node binary and the installed `dist/index.js`; `pindex remove` deletes only the `pindex` entry. `.mcp.json` contains machine-specific paths, so keep it out of version control (`.gitignore`):
 
 ```json
 {
   "mcpServers": {
     "pindex": {
-      "command": "pindex-server",
-      "args": [],
+      "command": "/usr/bin/node",
+      "args": ["/usr/lib/node_modules/pindex/dist/index.js"],
       "env": {
         "PROJECT_ROOT": "/absolute/path/to/project",
-        "INDEX_PATH": "/home/user/.pindex/projects/a3f8b2c1/index.db",
+        "INDEX_PATH": "/path/to/project/.pindex/index.db",
         "MONITORING_PORT": "7856",
         "AUTO_REINDEX": "true",
         "GENERATE_SUMMARIES": "false",
         "MONITORING_AUTO_OPEN": "false",
-        "BASELINE_MODE": "false",
-        "TOKEN_PRICE_PER_MILLION": "3.00"
+        "BASELINE_MODE": "false"
       }
     }
   }
@@ -616,8 +617,8 @@ With federation (`pindex add /other/project`):
 {
   "mcpServers": {
     "pindex": {
-      "command": "pindex-server",
-      "args": [],
+      "command": "/usr/bin/node",
+      "args": ["/usr/lib/node_modules/pindex/dist/index.js"],
       "env": {
         "PROJECT_ROOT": "/absolute/path/to/project",
         "FEDERATION_REPOS": "/absolute/path/to/other/project",
@@ -658,19 +659,18 @@ extensions:
     args: []
     envs:
       PROJECT_ROOT: /absolute/path/to/project
-      INDEX_PATH: /home/user/.pindex/projects/{hash}/index.db
+      INDEX_PATH: /absolute/path/to/project/.pindex/index.db
       LANGUAGES: typescript,javascript
       AUTO_REINDEX: "true"
       GENERATE_SUMMARIES: "false"
       MONITORING_PORT: "{port}"
       MONITORING_AUTO_OPEN: "false"
       BASELINE_MODE: "false"
-      TOKEN_PRICE_PER_MILLION: "3.00"
     enabled: true
     timeout: 300
 ```
 
-Replace `{hash}` and `{port}` with the values shown by `pindex`. A ready-to-copy template is available in [`goose-extension.yaml`](./goose-extension.yaml).
+Replace the paths and `{port}` with the values shown by `pindex`. A ready-to-copy template is available in [`goose-extension.yaml`](./goose-extension.yaml).
 
 **Step 4 — Restart Goose:**
 
@@ -682,7 +682,9 @@ goose session start
 
 ### Python (LSP)
 
-PindeX ships with Pyright as an optional dependency. When installed, Pyright's LSP server produces the precise symbol tree instead of the fallback regex extractor. Set `PINDEX_LSP=false` to opt out. If Pyright is missing (for example when installed with `--no-optional`), PindeX logs a one-time warning and falls back to the regex path.
+PindeX ships with Pyright as an optional dependency. LSP parsing is **opt-in**: set `PINDEX_LSP=true` (e.g. in the `env` of the `pindex` entry in `.mcp.json`; for safety re-running `pindex` drops it and prints its name, so re-add it afterwards) and Pyright's LSP server produces the precise symbol tree instead of the default regex extractor. If Pyright is missing (for example when installed with `--no-optional`), PindeX logs a one-time warning and falls back to the regex path.
+
+**Trust note:** with `PINDEX_LSP=true`, Pyright reads the indexed project's `pyrightconfig.json` (and `pyproject.toml` settings) and may run the Python interpreter configured there. Enable it only for repositories you trust. PindeX resolves Pyright from its own installation or `PATH` (never from inside the project) and starts it with a working directory outside the project.
 
 ---
 
@@ -695,7 +697,7 @@ pindex [command] [options]
 | Command | Description |
 |---|---|
 | _(no args)_ / `init` | Set up this project: write `.mcp.json`, inject `CLAUDE.md` section + hooks, register globally |
-| `reinit` | Re-inject PindeX section into `CLAUDE.md` and `.claude/settings.json` (e.g. after an update) |
+| `reinit` | Re-inject PindeX section into `CLAUDE.md` and the hooks into `.claude/settings.json` / `.claude/settings.local.json` (e.g. after an update) |
 | `reinit --force` | Replace the existing section with the current template |
 | `add <path>` | Link another repo for cross-repo search (federation) |
 | `remove` | Fully unregister project: remove `.mcp.json`, `CLAUDE.md` section, hooks, stop daemon |
@@ -715,7 +717,7 @@ pindex [command] [options]
 # Set up a new project
 cd /my/project && pindex
 
-# Link project-b for cross-repo search
+# Link project-b for cross-repo search (registers it automatically; alias of `pindex federate add`)
 pindex add /my/project-b
 
 # Check all registered projects
@@ -761,7 +763,7 @@ MONITORING_AUTO_OPEN=true node dist/index.js
 pindex-gui
 ```
 
-Opens `http://localhost:7842` — reads **all** registered project databases directly and shows:
+Opens `http://localhost:7841` — reads **all** registered project databases directly and shows:
 
 - Token savings per project (bar chart)
 - Indexed file and symbol counts
@@ -820,7 +822,7 @@ tests/
 ├── db/                   # schema, migrations, queries
 ├── indexer/              # parser, indexer, watcher
 ├── tools/                # one file per MCP tool + validation tests
-├── monitoring/           # estimator, token-logger, Express server
+├── monitoring/           # token-logger, Express server
 ├── cli/                  # project-detector, setup, daemon
 └── integration/
     ├── mcp-server.test.ts   # MCP server wiring smoke tests
@@ -873,8 +875,7 @@ src/
 │
 ├── monitoring/
 │   ├── server.ts             # Express + WebSocket (per-project instance)
-│   ├── token-logger.ts       # Per-call token logging
-│   ├── estimator.ts          # "without index" heuristic
+│   ├── token-logger.ts       # Per-call token logging ("without index" = per-tool multiplier in src/server.ts)
 │   └── ui/                   # Dashboard HTML / CSS / Chart.js
 │
 ├── gui/
@@ -883,7 +884,7 @@ src/
 │
 └── cli/
     ├── index.ts              # CLI router
-    ├── init.ts               # initProject(), writeMcpJson(), addFederatedRepo()
+    ├── init.ts               # initProject(), writeMcpJson()
     ├── setup.ts              # One-time setup (pindex setup)
     ├── daemon.ts             # Per-project PID-file daemon management
     └── project-detector.ts   # getPindexHome(), findProjectRoot(), GlobalRegistry

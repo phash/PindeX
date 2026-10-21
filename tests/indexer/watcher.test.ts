@@ -52,16 +52,26 @@ vi.mock('../../src/db/queries.js', async (importActual) => {
   return { ...actual, deleteFile: deleteFileMock };
 });
 
-import { FileWatcher } from '../../src/indexer/watcher.js';
+import { FileWatcher, attachWatcherErrorLogger, type FileChangeEvent } from '../../src/indexer/watcher.js';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 const DEBOUNCE_MS = 300;
 const fakeDb = {} as Database.Database;
 
-function makeStubIndexer(): { indexFile: ReturnType<typeof vi.fn> } & Pick<Indexer, never> {
+function makeStubIndexer(): {
+  indexFile: ReturnType<typeof vi.fn>;
+  indexDocument: ReturnType<typeof vi.fn>;
+  resolveImportersOf: ReturnType<typeof vi.fn>;
+  forgetFile: ReturnType<typeof vi.fn>;
+} & Pick<Indexer, never> {
   return {
     indexFile: vi.fn().mockResolvedValue({ status: 'indexed', errors: [] }),
+    indexDocument: vi.fn().mockResolvedValue({ status: 'indexed', errors: [] }),
+    resolveImportersOf: vi.fn(),
+    forgetFile: vi.fn(),
+    ignorePatterns: ['**/node_modules/**', '**/build/**'],
+    documentGlobs: ['**/*.md'],
   } as never;
 }
 
@@ -106,7 +116,37 @@ describe('FileWatcher (TST-01)', () => {
 
     await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
     expect(indexer.indexFile).toHaveBeenCalledTimes(1);
-    expect(indexer.indexFile).toHaveBeenCalledWith('src/new.ts', true);
+    expect(indexer.indexFile).toHaveBeenCalledWith('src/new.ts', false);
+  });
+
+  it("re-resolves importers after a new code file is indexed on 'add' (not on 'change')", async () => {
+    const watcher = new FileWatcher({
+      db: fakeDb,
+      indexer: indexer as never as Indexer,
+      projectRoot: '/proj',
+    });
+    await watcher.start();
+
+    chokidarState.emit('add', 'src/new.ts');
+    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
+    expect(indexer.resolveImportersOf).toHaveBeenCalledWith('src/new.ts');
+
+    indexer.resolveImportersOf.mockClear();
+    chokidarState.emit('change', 'src/new.ts');
+    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
+    expect(indexer.resolveImportersOf).not.toHaveBeenCalled();
+  });
+
+  it("forgets the cached imports of a file on 'unlink'", async () => {
+    const watcher = new FileWatcher({
+      db: fakeDb,
+      indexer: indexer as never as Indexer,
+      projectRoot: '/proj',
+    });
+    await watcher.start();
+    chokidarState.emit('unlink', 'src/gone.ts');
+    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
+    expect(indexer.forgetFile).toHaveBeenCalledWith('src/gone.ts');
   });
 
   it("calls indexer.indexFile after the debounce on 'change'", async () => {
@@ -121,7 +161,7 @@ describe('FileWatcher (TST-01)', () => {
     await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
 
     expect(indexer.indexFile).toHaveBeenCalledTimes(1);
-    expect(indexer.indexFile).toHaveBeenCalledWith('src/edited.ts', true);
+    expect(indexer.indexFile).toHaveBeenCalledWith('src/edited.ts', false);
   });
 
   it('normalizes backslash paths to forward slashes before indexing', async () => {
@@ -135,7 +175,7 @@ describe('FileWatcher (TST-01)', () => {
     chokidarState.emit('change', 'src\\windows\\file.ts');
     await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
 
-    expect(indexer.indexFile).toHaveBeenCalledWith('src/windows/file.ts', true);
+    expect(indexer.indexFile).toHaveBeenCalledWith('src/windows/file.ts', false);
   });
 
   it("calls deleteFile (not indexFile) on 'unlink', normalized", async () => {
@@ -174,7 +214,7 @@ describe('FileWatcher (TST-01)', () => {
 
     await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
     expect(indexer.indexFile).toHaveBeenCalledTimes(1);
-    expect(indexer.indexFile).toHaveBeenCalledWith('src/hot.ts', true);
+    expect(indexer.indexFile).toHaveBeenCalledWith('src/hot.ts', false);
   });
 
   it('emits "indexed" after a successful index', async () => {
@@ -322,5 +362,95 @@ describe('FileWatcher (TST-01)', () => {
 
     await vi.advanceTimersByTimeAsync(DEBOUNCE_MS * 2);
     expect(indexer.indexFile).not.toHaveBeenCalled();
+  });
+
+  it('watches the project root (chokidar 4 has no globs) with an ignored callback', async () => {
+    const watcher = new FileWatcher({
+      db: fakeDb,
+      indexer: indexer as never as Indexer,
+      projectRoot: '/proj',
+    });
+    await watcher.start();
+
+    const call = chokidarState.watchCalls[0];
+    expect(call.patterns).toBe('/proj');
+    const opts = call.options as { cwd: string; ignoreInitial: boolean; ignored: unknown };
+    expect(opts.cwd).toBe('/proj');
+    expect(opts.ignoreInitial).toBe(true);
+    expect(typeof opts.ignored).toBe('function');
+  });
+
+  it('the ignored callback applies the indexer ignore patterns, language and document globs', async () => {
+    const watcher = new FileWatcher({
+      db: fakeDb,
+      indexer: indexer as never as Indexer,
+      projectRoot: '/proj',
+    });
+    await watcher.start();
+
+    type Stats = { isFile(): boolean; isDirectory(): boolean };
+    const ignored = (chokidarState.watchCalls[0].options as {
+      ignored: (p: string, s?: Stats) => boolean;
+    }).ignored;
+    const file: Stats = { isFile: () => true, isDirectory: () => false };
+    const dir: Stats = { isFile: () => false, isDirectory: () => true };
+
+    expect(ignored('/proj', dir)).toBe(false);
+    expect(ignored('/proj/src', dir)).toBe(false);
+    expect(ignored('/proj/node_modules', dir)).toBe(true);
+    expect(ignored('/proj/build', dir)).toBe(true);
+    expect(ignored('/proj/src/a.ts', file)).toBe(false);
+    expect(ignored('/proj/docs/readme.md', file)).toBe(false); // documentGlobs
+    expect(ignored('/proj/logo.png', file)).toBe(true);
+    expect(ignored('/proj/notes.yaml', file)).toBe(true); // not in this stub's documentGlobs
+  });
+
+  it('drops events for paths outside the watched globs (e.g. unlinks chokidar did not stat)', async () => {
+    const watcher = new FileWatcher({
+      db: fakeDb,
+      indexer: indexer as never as Indexer,
+      projectRoot: '/proj',
+    });
+    const seen: FileChangeEvent[] = [];
+    watcher.on('change', (e: FileChangeEvent) => seen.push(e));
+    await watcher.start();
+
+    chokidarState.emit('unlink', 'node_modules/pkg/index.ts');
+    chokidarState.emit('unlink', 'assets/logo.png');
+    chokidarState.emit('change', 'build/out.js');
+    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
+
+    expect(seen).toEqual([]);
+    expect(deleteFileMock).not.toHaveBeenCalled();
+    expect(indexer.indexFile).not.toHaveBeenCalled();
+  });
+
+  it('routes document changes to indexDocument, not indexFile', async () => {
+    const watcher = new FileWatcher({
+      db: fakeDb,
+      indexer: indexer as never as Indexer,
+      projectRoot: '/proj',
+    });
+    await watcher.start();
+
+    chokidarState.emit('change', 'docs/readme.md');
+    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
+
+    expect(indexer.indexDocument).toHaveBeenCalledWith('docs/readme.md', false);
+    expect(indexer.indexFile).not.toHaveBeenCalled();
+  });
+
+  it('attachWatcherErrorLogger prevents an unhandled error emit from throwing', () => {
+    const watcher = new FileWatcher({
+      db: fakeDb,
+      indexer: indexer as never as Indexer,
+      projectRoot: '/proj',
+    });
+    expect(() => watcher.emit('error', new Error('boom'))).toThrow('boom');
+
+    const lines: string[] = [];
+    attachWatcherErrorLogger(watcher, (l) => lines.push(l));
+    expect(() => watcher.emit('error', new Error('boom'))).not.toThrow();
+    expect(lines).toEqual(['[pindex] File watcher error: Error: boom\n']);
   });
 });

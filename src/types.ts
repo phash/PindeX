@@ -35,29 +35,11 @@ export interface SymbolRecord {
   has_try_catch: 0 | 1;
 }
 
-export interface DependencyRecord {
-  id: number;
-  from_file: number;
-  to_file: number;
-  symbol_name: string | null;
-}
-
 export interface UsageRecord {
   id: number;
   symbol_id: number;
   used_in_file: number;
   used_at_line: number;
-}
-
-export interface TokenLogEntry {
-  id: number;
-  timestamp: string;
-  session_id: string;
-  tool_name: string;
-  tokens_used: number;
-  tokens_without_index: number;
-  files_touched: string | null;
-  query: string | null;
 }
 
 export interface SessionRecord {
@@ -78,14 +60,6 @@ export interface DocumentChunkRecord {
   end_line: number;
   content: string;
   summary: string | null;
-}
-
-export interface ContextEntryRecord {
-  id: number;
-  session_id: string;
-  content: string;
-  tags: string | null;
-  created_at: string;
 }
 
 export type ObservationType =
@@ -208,13 +182,17 @@ export interface SymbolSearchResult {
   name: string;
   kind: SymbolKind;
   signature: string;
-  summary: string | null;
+  /** Omitted when null. */
+  summary?: string;
   file: string;
   line: number;
+  /** Omitted when false. */
   isAsync?: boolean;
+  /** Omitted when false. */
   hasTryCatch?: boolean;
   snippet?: string;
-  project: string;
+  /** Repo name; omitted when only one repo is configured. */
+  project?: string;
 }
 
 export interface GetSymbolInput {
@@ -283,7 +261,6 @@ export interface FindUsagesInput {
 export interface UsageResult {
   file: string;
   line: number;
-  context: string;
   project: string;
 }
 
@@ -316,7 +293,6 @@ export interface GetApiEndpointsOutput {
   endpoints: Array<{
     method: string;
     path: string;
-    handler: string;
     file: string;
     line: number;
   }>;
@@ -338,7 +314,14 @@ export interface ProjectOverviewSnapshot {
   rootPath: string;
   language: string;
   entryPoints: string[];
-  modules: Array<{ path: string; summary: string | null; symbolCount: number }>;
+  /** Directory groups (top two path segments); present in full mode only. */
+  modules?: Array<{
+    dir: string;
+    files: number;
+    symbols: number;
+    /** Only files that have a summary; omitted when none do. */
+    summaries?: Array<{ path: string; summary: string }>;
+  }>;
   stats: { totalFiles: number; totalSymbols: number };
   session_memory?: SessionMemorySummary;
   index_recommendation?: IndexRecommendation;
@@ -505,16 +488,11 @@ export type MonitoringEvent = TokenEvent | SessionEvent;
 
 // ─── Indexer / Config Types ───────────────────────────────────────────────────
 
-export interface IndexerConfig {
-  projectRoot: string;
-  languages: string[];
-  ignorePatterns: string[];
-  generateSummaries: boolean;
-}
-
 export interface IndexResult {
   indexed: number;
   updated: number;
   skipped: number;
+  /** Rows pruned because the file no longer exists on disk. */
+  removed: number;
   errors: string[];
 }

@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import type Database from 'better-sqlite3';
 import { createTestDb } from '../helpers/db.js';
 import { Indexer } from '../../src/indexer/index.js';
-import { getAllFiles, getFileByPath, getSymbolsByFileId } from '../../src/db/queries.js';
+import { getAllFiles, getFileByPath, getSymbolsByFileId, upsertFile } from '../../src/db/queries.js';
 import { LspPythonClient } from '../../src/indexer/lsp-python.js';
 
 // ─── Test Fixtures ────────────────────────────────────────────────────────────
@@ -206,5 +206,152 @@ describe('Indexer', () => {
     } finally {
       rmSync(pyDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('resolveDependencies — import specifiers', () => {
+  let db: Database.Database;
+  let dir: string;
+  let indexer: Indexer;
+
+  const edges = (): string[] =>
+    (db
+      .prepare(
+        `SELECT f1.path AS a, f2.path AS b, d.symbol_name AS s FROM dependencies d
+         JOIN files f1 ON d.from_file = f1.id JOIN files f2 ON d.to_file = f2.id
+         ORDER BY a, b, s`,
+      )
+      .all() as Array<{ a: string; b: string; s: string }>).map((r) => `${r.a}->${r.b}:${r.s}`);
+
+  const addFile = (path: string, content = 'export const x = 1;'): void => {
+    mkdirSync(join(dir, path, '..'), { recursive: true });
+    writeFileSync(join(dir, path), content);
+    upsertFile(db, { path, language: 'typescript', hash: path + content, rawTokenEstimate: 1, summary: null });
+  };
+
+  beforeEach(() => {
+    db = createTestDb();
+    dir = join(tmpdir(), `pindex-edges-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    mkdirSync(join(dir, 'src'), { recursive: true });
+    indexer = new Indexer({ db, projectRoot: dir });
+  });
+
+  it('maps a .js specifier to the .ts file', async () => {
+    addFile('src/a.ts');
+    addFile('src/b.ts');
+    await indexer.resolveDependencies(new Map([['src/a.ts', [{ source: './b.js', symbols: ['b'] }]]]));
+    expect(edges()).toEqual(['src/a.ts->src/b.ts:b']);
+  });
+
+  it('maps a .js specifier to a .tsx file', async () => {
+    addFile('src/a.ts');
+    addFile('src/c.tsx');
+    await indexer.resolveDependencies(new Map([['src/a.ts', [{ source: './c.js', symbols: ['c'] }]]]));
+    expect(edges()).toEqual(['src/a.ts->src/c.tsx:c']);
+  });
+
+  it('prefers the exact .js file over the .ts sibling', async () => {
+    addFile('src/a.ts');
+    addFile('src/d.js');
+    addFile('src/d.ts');
+    await indexer.resolveDependencies(new Map([['src/a.ts', [{ source: './d.js', symbols: ['d'] }]]]));
+    expect(edges()).toEqual(['src/a.ts->src/d.js:d']);
+  });
+
+  it('resolves a directory import to index.tsx', async () => {
+    addFile('src/a.ts');
+    addFile('src/dir/index.tsx');
+    await indexer.resolveDependencies(new Map([['src/a.ts', [{ source: './dir', symbols: ['x'] }]]]));
+    expect(edges()).toEqual(['src/a.ts->src/dir/index.tsx:x']);
+  });
+
+  it('keeps edges of every importer of the same target', async () => {
+    addFile('src/a.ts');
+    addFile('src/z.ts');
+    addFile('src/b.ts');
+    await indexer.resolveDependencies(
+      new Map([
+        ['src/a.ts', [{ source: './b.js', symbols: ['b'] }]],
+        ['src/z.ts', [{ source: './b.js', symbols: ['b'] }]],
+      ]),
+    );
+    expect(edges()).toEqual(['src/a.ts->src/b.ts:b', 'src/z.ts->src/b.ts:b']);
+  });
+
+  it('does not wipe incoming edges when the target is re-indexed', async () => {
+    mkdirSync(join(dir, 'src'), { recursive: true });
+    writeFileSync(join(dir, 'src', 'a.ts'), `import { b } from './b.js';`);
+    writeFileSync(join(dir, 'src', 'b.ts'), `export const b = 1;`);
+    await indexer.indexFile('src/a.ts');
+    await indexer.indexFile('src/b.ts');
+    await indexer.resolveDependencies(new Map([['src/a.ts', [{ source: './b.js', symbols: ['b'] }]]]));
+    expect(edges()).toEqual(['src/a.ts->src/b.ts:b']);
+
+    writeFileSync(join(dir, 'src', 'b.ts'), `export const b = 2;`);
+    await indexer.indexFile('src/b.ts', true);
+    expect(edges()).toEqual(['src/a.ts->src/b.ts:b']);
+  });
+});
+
+
+describe('Indexer.indexAll pruning', () => {
+  let db: Database.Database;
+  let dir: string;
+
+  beforeEach(() => {
+    db = createTestDb();
+    dir = createTempProject();
+  });
+
+  function snapshotCount(path: string): number {
+    return (db.prepare('SELECT COUNT(*) AS c FROM ast_snapshots WHERE file_path = ?').get(path) as { c: number }).c;
+  }
+
+  it('removes rows (and ast_snapshots) for files deleted from disk', async () => {
+    const indexer = new Indexer({ db, projectRoot: dir });
+    await indexer.indexAll();
+    // indexing records AST snapshots; make sure at least one exists
+    if (snapshotCount('src/service.ts') === 0) {
+      db.prepare(
+        `INSERT INTO ast_snapshots (file_path, symbol_name, kind, signature, signature_hash) VALUES (?, ?, ?, ?, ?)`,
+      ).run('src/service.ts', 'MyService', 'class', 'class MyService', 'h');
+    }
+    expect(snapshotCount('src/service.ts')).toBeGreaterThan(0);
+
+    rmSync(join(dir, 'src', 'service.ts'));
+    const result = await indexer.indexAll();
+
+    expect(result.removed).toBe(1);
+    expect(getFileByPath(db, 'src/service.ts')).toBeNull();
+    expect(getFileByPath(db, 'src/index.ts')).not.toBeNull();
+    expect(snapshotCount('src/service.ts')).toBe(0);
+  });
+
+  it('does not prune when the glob finds no files', async () => {
+    const indexer = new Indexer({ db, projectRoot: dir });
+    await indexer.indexAll();
+    const before = getAllFiles(db).length;
+
+    rmSync(join(dir, 'src'), { recursive: true });
+    const result = await indexer.indexAll();
+
+    expect(result.removed).toBe(0);
+    expect(getAllFiles(db)).toHaveLength(before);
+  });
+
+  it('does not prune files that still exist on disk but are outside the glob', async () => {
+    const indexer = new Indexer({ db, projectRoot: dir });
+    await indexer.indexAll();
+    upsertFile(db, { path: 'src/extra.rb', language: 'ruby', hash: 'x', rawTokenEstimate: 1, summary: null });
+    writeFileSync(join(dir, 'src', 'extra.rb'), 'x = 1');
+
+    const result = await indexer.indexAll();
+    expect(result.removed).toBe(0);
+    expect(getFileByPath(db, 'src/extra.rb')).not.toBeNull();
+  });
+
+  it('exposes ignorePatterns', () => {
+    const indexer = new Indexer({ db, projectRoot: dir });
+    expect(indexer.ignorePatterns).toContain('**/node_modules/**');
   });
 });

@@ -1,59 +1,105 @@
 import { writeFileSync, existsSync, mkdirSync, readFileSync, appendFileSync, unlinkSync } from 'node:fs';
-import { resolve, join, relative, basename } from 'node:path';
+import { join } from 'node:path';
 import {
   findProjectRoot,
   getProjectIndexPath,
   GlobalRegistry,
   type RegistryEntry,
 } from './project-detector.js';
-import { joinFederationRepos } from '../federation/repos-env.js';
+import { mergeMcpServer, serverCommand, nodeScriptCommand, readMcpJson } from './mcp-json.js';
+import { formatFederationRepos } from '../federation/env.js';
 
 // ─── .mcp.json generation ─────────────────────────────────────────────────
+
+/** Env keys pindex derives from the registry; always rewritten (a stale value would break the server). */
+const MANAGED_ENV_KEYS = ['PROJECT_ROOT', 'INDEX_PATH', 'MONITORING_PORT', 'FEDERATION_REPOS'] as const;
+
+/** Defaults written only when the key is not set yet; user edits survive re-runs. */
+const DEFAULT_ENV: Record<string, string> = {
+  AUTO_REINDEX: 'true',
+  GENERATE_SUMMARIES: 'false',
+  MONITORING_AUTO_OPEN: 'false',
+  BASELINE_MODE: 'false',
+};
+
+/**
+ * The only user-set env keys carried over from an existing `.mcp.json`. A repo can ship its
+ * own `.mcp.json`, so anything that could load code, redirect network traffic, widen exposure
+ * or enable the LSP (NODE_OPTIONS, SUMMARIZER_BASE_URL, PINDEX_BIND_HOST, PINDEX_LSP, …) is
+ * never persisted silently; the user re-adds trusted keys by hand.
+ */
+export const PRESERVED_ENV_KEYS = [
+  'LANGUAGES',
+  'AUTO_REINDEX',
+  'GENERATE_SUMMARIES',
+  'SUMMARIZER_MODEL',
+  'MONITORING_AUTO_OPEN',
+  'EXPOSE_CORE_TOOLS_ONLY',
+  'OBSERVATION_RETENTION',
+  'PINDEX_PARSE_WORKERS',
+] as const;
+
+const SAFE_ENV_NAME = /^[A-Z0-9_]{1,64}$/;
 
 export function writeMcpJson(
   projectRoot: string,
   entry: RegistryEntry,
 ): void {
-  const federationEnv =
-    entry.federatedRepos.length > 0
-      ? { FEDERATION_REPOS: joinFederationRepos(entry.federatedRepos.map((r) => r.path)) }
-      : {};
-
-  const config = {
-    mcpServers: {
-      pindex: {
-        command: 'pindex-server',
-        args: [] as string[],
-        env: {
-          PROJECT_ROOT: entry.path,
-          INDEX_PATH: getProjectIndexPath(entry.path),
-          MONITORING_PORT: String(entry.monitoringPort),
-          AUTO_REINDEX: 'true',
-          GENERATE_SUMMARIES: 'false',
-          MONITORING_AUTO_OPEN: 'false',
-          BASELINE_MODE: 'false',
-          ...federationEnv,
-        },
-      },
-    },
+  const managed: Record<string, string> = {
+    PROJECT_ROOT: entry.path,
+    INDEX_PATH: getProjectIndexPath(entry.path),
+    MONITORING_PORT: String(entry.monitoringPort),
   };
+  if (entry.federatedRepos.length > 0) {
+    managed.FEDERATION_REPOS = formatFederationRepos(entry.federatedRepos.map((r) => r.path));
+  }
 
-  const mcpJsonPath = join(projectRoot, '.mcp.json');
-  writeFileSync(mcpJsonPath, JSON.stringify(config, null, 2) + '\n', 'utf-8');
+  const existingEnv: Record<string, unknown> = readMcpJson(projectRoot)?.mcpServers?.pindex?.env ?? {};
+  const preserved: Record<string, string> = {};
+  const dropped: string[] = [];
+  for (const [key, value] of Object.entries(existingEnv)) {
+    if ((MANAGED_ENV_KEYS as readonly string[]).includes(key)) continue;
+    if ((PRESERVED_ENV_KEYS as readonly string[]).includes(key) && typeof value === 'string') {
+      preserved[key] = value;
+    } else if (value !== DEFAULT_ENV[key]) {
+      // A pindex-written default (e.g. BASELINE_MODE=false) is rewritten anyway: no warning.
+      dropped.push(key);
+    }
+  }
+  if (dropped.length > 0) {
+    // Names only, never values (they may hold secrets); untrusted names that are not plain
+    // env identifiers are only counted (no terminal escape sequences reach the console).
+    const printable = dropped.filter((k) => SAFE_ENV_NAME.test(k));
+    const others = dropped.length - printable.length;
+    const names = [...printable, ...(others > 0 ? [`+${others} other key(s)`] : [])].join(', ');
+    console.warn(
+      `  [pindex] .mcp.json: dropped env keys not kept automatically: ${names} — re-add trusted ones by hand.`,
+    );
+  }
+
+  mergeMcpServer(projectRoot, 'pindex', {
+    ...serverCommand(),
+    env: { ...DEFAULT_ENV, ...preserved, ...managed },
+  });
 }
 
 // ─── CLAUDE.md injection ───────────────────────────────────────────────────
 
-const CLAUDE_MD_MARKER = '<!-- pindex -->';
+const SECTION_START = '<!-- pindex:start -->';
+const SECTION_END = '<!-- pindex:end -->';
+/** End marker of sections written by older versions (no start marker). */
+const LEGACY_SECTION_END = '<!-- pindex -->';
+const LEGACY_HEADING = '## PindeX – Codebase Navigation';
 
 const CLAUDE_MD_SECTION = `
+${SECTION_START}
 ## PindeX – Codebase Navigation
 
 Dieses Projekt ist mit PindeX indexiert.
 
 **PFLICHT-WORKFLOW** – bei jeder Codebase-Aufgabe:
 1. **Unbekannte Datei?** → \`mcp__pindex__get_file_summary\` ZUERST, dann ggf. \`get_context\`
-2. **Symbol suchen?** → \`mcp__pindex__search_symbols\` oder \`find_symbol\`
+2. **Symbol suchen?** → \`mcp__pindex__search_symbols\`
 3. **Abhängigkeiten?** → \`mcp__pindex__get_dependencies\`
 4. **Wo wird etwas verwendet?** → \`mcp__pindex__find_usages\`
 5. **Projekt-Überblick?** → \`mcp__pindex__get_project_overview\`
@@ -66,13 +112,40 @@ Dieses Projekt ist mit PindeX indexiert.
 - Wichtige Entscheidungen / Muster → \`mcp__pindex__save_context\` speichern
 - Zu Sessionbeginn → \`mcp__pindex__search_docs\` für gespeicherten Kontext
 
-**Fallback:** Falls ein Tool \`null\` zurückgibt → \`Read\`/\`Grep\` als Fallback.
-${CLAUDE_MD_MARKER}
+**Fallback:** Liefert ein PindeX-Tool kein Ergebnis oder einen Fehler → \`Read\`/\`Grep\` als Fallback.
+${SECTION_END}
 `;
+
+function hasSection(content: string): boolean {
+  return content.includes(SECTION_START) || content.includes(LEGACY_SECTION_END);
+}
+
+/**
+ * Removes the PindeX section: between the start/end markers, or (legacy, no start marker)
+ * from the exact legacy heading to the legacy end marker. Returns null if nothing matched.
+ */
+function stripSection(content: string): string | null {
+  const escape = (t: string) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const patterns = [
+    new RegExp(`\\n?${escape(SECTION_START)}[\\s\\S]*?${escape(SECTION_END)}\\n?`),
+    new RegExp(`\\n?${escape(LEGACY_HEADING)}[\\s\\S]*?${escape(LEGACY_SECTION_END)}\\n?`),
+  ];
+  for (const re of patterns) {
+    if (re.test(content)) return content.replace(re, '');
+  }
+  // Orphan legacy end marker without the exact heading: drop a preceding "## PindeX" heading
+  // block if there is one, else only the marker line itself.
+  const endIdx = content.indexOf(LEGACY_SECTION_END);
+  if (endIdx === -1) return null;
+  const headingIdx = content.lastIndexOf('\n## PindeX', endIdx);
+  const from = headingIdx !== -1 ? headingIdx : endIdx;
+  const to = endIdx + LEGACY_SECTION_END.length;
+  return content.slice(0, from) + content.slice(content[to] === '\n' ? to + 1 : to);
+}
 
 /**
  * Appends the PindeX section to the project's CLAUDE.md (or creates the file).
- * Idempotent: skips if the marker is already present, unless force=true.
+ * Idempotent: skips if a section marker is already present, unless force=true.
  * With force=true the existing section is replaced (useful after PindeX updates).
  */
 export function injectClaudeMdSection(
@@ -83,13 +156,10 @@ export function injectClaudeMdSection(
 
   if (existsSync(claudeMdPath)) {
     const existing = readFileSync(claudeMdPath, 'utf-8');
-    if (existing.includes(CLAUDE_MD_MARKER)) {
+    if (hasSection(existing)) {
       if (!force) return 'skipped';
       // Strip the old section and re-inject with current template
-      const stripped = existing.replace(
-        /\n## PindeX[\s\S]*?<!--\s*pindex\s*-->\n?/,
-        '',
-      );
+      const stripped = stripSection(existing) ?? existing;
       writeFileSync(claudeMdPath, stripped.trimEnd() + CLAUDE_MD_SECTION, 'utf-8');
       return 'updated';
     }
@@ -101,7 +171,7 @@ export function injectClaudeMdSection(
   }
 }
 
-// ─── .claude/settings.json Hook injection ─────────────────────────────────
+// ─── .claude/settings(.local).json Hook injection ─────────────────────────────────
 
 const HOOK_MARKER = 'pindex-hook';
 
@@ -119,93 +189,140 @@ const PINDEX_HOOKS = {
         ],
       },
     ],
-    SessionStart: [
-      {
-        hooks: [
-          {
-            type: 'command',
-            // Auto-start pindex-gui dashboard if not already running
-            command: 'pindex gui',
-          },
-        ],
-      },
-    ],
   },
 };
 
+function isPindexEntry(entry: unknown): boolean {
+  return typeof entry === 'object' && entry !== null &&
+    (entry as { _pindex?: unknown })._pindex === HOOK_MARKER;
+}
+
+type Settings = Record<string, unknown>;
+type HookMap = Record<string, unknown[]>;
+
+/** Parses a settings file; throws a clear error (file untouched) if it is not a JSON object. */
+function readSettings(settingsPath: string): Settings {
+  const raw = readFileSync(settingsPath, 'utf-8');
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error('top-level value is not an object');
+    }
+    return parsed as Settings;
+  } catch (err) {
+    throw new Error(
+      `${settingsPath} is not valid JSON (${(err as Error).message}). Fix or remove it manually; PindeX will not overwrite it.`,
+    );
+  }
+}
+
+function readSettingsIfExists(settingsPath: string): Settings | null {
+  return existsSync(settingsPath) ? readSettings(settingsPath) : null;
+}
+
+function writeSettings(settingsPath: string, settings: Settings): void {
+  writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n', 'utf-8');
+}
+
+function hookEntries(settings: Settings | null, event: string): unknown[] {
+  return (settings?.hooks as HookMap | undefined)?.[event] ?? [];
+}
+
 /**
- * Writes/merges PindeX hooks (PreToolUse + SessionStart) into .claude/settings.json.
- * Idempotent: skips if the hook marker is already present.
+ * Returns a copy of `settings` with `event`'s pindex-marked entries replaced by `add`
+ * (or just removed when `add` is null). Empty event arrays and an empty hooks object are dropped.
+ */
+function withPindexHook(settings: Settings, event: string, add: object | null): Settings {
+  const hooks: HookMap = { ...(settings.hooks as HookMap | undefined) };
+  const current = hooks[event] ?? [];
+  if (!Array.isArray(current)) {
+    throw new Error(`hooks.${event} in a Claude settings file is not an array. Fix it manually; PindeX will not overwrite it.`);
+  }
+  const kept = current.filter((h) => !isPindexEntry(h));
+  const next = add ? [...kept, { ...add, _pindex: HOOK_MARKER }] : kept;
+  if (next.length > 0) hooks[event] = next;
+  else delete hooks[event];
+  const updated: Settings = { ...settings, hooks };
+  if (Object.keys(hooks).length === 0) delete updated.hooks;
+  return updated;
+}
+
+/** SessionStart entry: starts the dashboard in the background without opening a browser. */
+function sessionStartEntry(): { hooks: { type: string; command: string }[] } {
+  const { command, args } = nodeScriptCommand('cli/index.js');
+  return {
+    hooks: [{ type: 'command', command: `"${command}" "${args[0]}" gui --no-open` }],
+  };
+}
+
+/** True if `entries` hold exactly one pindex entry and it runs the current SessionStart command. */
+function hasCurrentSessionStart(entries: unknown[]): boolean {
+  const ours = entries.filter(isPindexEntry) as { hooks?: { command?: string }[] }[];
+  const expected = sessionStartEntry().hooks[0].command;
+  return ours.length === 1 && (ours[0].hooks ?? []).some((h) => h.command === expected);
+}
+
+/**
+ * Installs the PindeX hooks:
+ * - PreToolUse (portable command) → shared `.claude/settings.json`
+ * - SessionStart (machine-specific absolute node/script paths) → `.claude/settings.local.json`
+ * A pindex SessionStart entry left in settings.json by older versions is moved out.
+ * Idempotent: skips when everything is already up to date, unless force=true.
+ * Both files are parsed before anything is written; malformed JSON is never overwritten.
  */
 export function injectClaudeSettings(
   projectRoot: string,
   { force = false } = {},
 ): 'added' | 'skipped' | 'created' {
   const claudeDir = join(projectRoot, '.claude');
-  const settingsPath = join(claudeDir, 'settings.json');
+  const sharedPath = join(claudeDir, 'settings.json');
+  const localPath = join(claudeDir, 'settings.local.json');
+
+  const shared = readSettingsIfExists(sharedPath);
+  const local = readSettingsIfExists(localPath);
+
+  const upToDate =
+    hookEntries(shared, 'PreToolUse').some(isPindexEntry) &&
+    !hookEntries(shared, 'SessionStart').some(isPindexEntry) &&
+    hasCurrentSessionStart(hookEntries(local, 'SessionStart'));
+  if (upToDate && !force) return 'skipped';
 
   if (!existsSync(claudeDir)) mkdirSync(claudeDir, { recursive: true });
 
-  if (existsSync(settingsPath)) {
-    const raw = readFileSync(settingsPath, 'utf-8');
-    if (raw.includes(HOOK_MARKER) && !force) return 'skipped';
+  // Build both results before writing either, so a failure leaves both files untouched.
+  let nextShared = withPindexHook(shared ?? {}, 'PreToolUse', PINDEX_HOOKS.hooks.PreToolUse[0]);
+  nextShared = withPindexHook(nextShared, 'SessionStart', null);
+  const nextLocal = withPindexHook(local ?? {}, 'SessionStart', sessionStartEntry());
+  writeSettings(sharedPath, nextShared);
+  writeSettings(localPath, nextLocal);
 
-    let existing: Record<string, unknown>;
-    try { existing = JSON.parse(raw); } catch { existing = {}; }
-
-    // Deep-merge hooks
-    const existingHooks = existing.hooks as Record<string, unknown[]> | undefined;
-    const merged = {
-      ...existing,
-      hooks: {
-        ...existingHooks,
-        PreToolUse: [
-          // Remove old pindex hook entries, then re-add
-          ...(existingHooks?.PreToolUse ?? [])
-            .filter((h) => !JSON.stringify(h).includes(HOOK_MARKER)),
-          { ...PINDEX_HOOKS.hooks.PreToolUse[0], _pindex: HOOK_MARKER },
-        ],
-        SessionStart: [
-          ...(existingHooks?.SessionStart ?? [])
-            .filter((h) => !JSON.stringify(h).includes(HOOK_MARKER)),
-          { ...PINDEX_HOOKS.hooks.SessionStart[0], _pindex: HOOK_MARKER },
-        ],
-      },
-    };
-    writeFileSync(settingsPath, JSON.stringify(merged, null, 2) + '\n', 'utf-8');
-    return 'added';
-  } else {
-    const config = {
-      hooks: {
-        PreToolUse: [{ ...PINDEX_HOOKS.hooks.PreToolUse[0], _pindex: HOOK_MARKER }],
-        SessionStart: [{ ...PINDEX_HOOKS.hooks.SessionStart[0], _pindex: HOOK_MARKER }],
-      },
-    };
-    writeFileSync(settingsPath, JSON.stringify(config, null, 2) + '\n', 'utf-8');
-    return 'created';
-  }
+  return shared === null ? 'created' : 'added';
 }
 
 // ─── .gitignore injection ──────────────────────────────────────────────────
 
 /**
- * Adds `.pindex/` to the project's .gitignore (or creates the file).
- * Idempotent: skips if already present.
+ * Adds `.pindex/` and `.claude/settings.local.json` to the project's .gitignore (or creates
+ * the file). Idempotent: only missing entries are appended.
  */
 export function injectGitignore(
   projectRoot: string,
 ): 'added' | 'already_present' | 'created' {
   const gitignorePath = join(projectRoot, '.gitignore');
-  const entry = '.pindex/';
+  // .pindex/ = index data; settings.local.json = SessionStart hook with absolute local paths.
+  const entries = [
+    { line: '.pindex/', aliases: ['.pindex/', '.pindex'], comment: '# PindeX index data' },
+    { line: '.claude/settings.local.json', aliases: ['.claude/settings.local.json', '/.claude/settings.local.json'], comment: '# Claude Code local settings (PindeX hook with absolute paths)' },
+  ];
+  const block = (list: typeof entries) => list.map((e) => `${e.comment}\n${e.line}\n`).join('');
   if (existsSync(gitignorePath)) {
-    const content = readFileSync(gitignorePath, 'utf-8');
-    if (content.split('\n').some((l) => l.trim() === entry || l.trim() === '.pindex')) {
-      return 'already_present';
-    }
-    appendFileSync(gitignorePath, `\n# PindeX index data\n${entry}\n`, 'utf-8');
+    const lines = readFileSync(gitignorePath, 'utf-8').split('\n').map((l) => l.trim());
+    const missing = entries.filter((e) => !e.aliases.some((a) => lines.includes(a)));
+    if (missing.length === 0) return 'already_present';
+    appendFileSync(gitignorePath, `\n${block(missing)}`, 'utf-8');
     return 'added';
   } else {
-    writeFileSync(gitignorePath, `# PindeX index data\n${entry}\n`, 'utf-8');
+    writeFileSync(gitignorePath, block(entries), 'utf-8');
     return 'created';
   }
 }
@@ -275,126 +392,49 @@ export function removeClaudeMdSection(projectRoot: string): 'removed' | 'not_fou
   const claudeMdPath = join(projectRoot, 'CLAUDE.md');
   if (!existsSync(claudeMdPath)) return 'skipped';
   const content = readFileSync(claudeMdPath, 'utf-8');
-  if (!content.includes(CLAUDE_MD_MARKER)) return 'not_found';
-  const stripped = content.replace(/\n## PindeX[\s\S]*?<!--\s*pindex\s*-->\n?/, '');
+  if (!hasSection(content)) return 'not_found';
+  const stripped = stripSection(content);
+  if (stripped === null) return 'not_found';
   writeFileSync(claudeMdPath, stripped, 'utf-8');
   return 'removed';
 }
 
 /**
- * Removes PindeX hooks (PreToolUse + SessionStart) from .claude/settings.json (if present).
- * Returns 'removed' | 'not_found' | 'skipped' (file didn't exist).
+ * Removes PindeX hooks from `.claude/settings.json` (PreToolUse, legacy SessionStart) and
+ * `.claude/settings.local.json` (SessionStart). User entries are kept; a settings.local.json
+ * left empty is deleted. Returns 'removed' | 'not_found' | 'skipped' (neither file exists).
  */
 export function removeClaudeSettings(projectRoot: string): 'removed' | 'not_found' | 'skipped' {
-  const settingsPath = join(projectRoot, '.claude', 'settings.json');
-  if (!existsSync(settingsPath)) return 'skipped';
-  const raw = readFileSync(settingsPath, 'utf-8');
-  if (!raw.includes(HOOK_MARKER)) return 'not_found';
-  let existing: Record<string, unknown>;
-  try { existing = JSON.parse(raw); } catch { return 'not_found'; }
-  const hooks = existing.hooks as Record<string, unknown[]> | undefined;
-  const filteredPre = (hooks?.PreToolUse ?? []).filter(
-    (h) => !JSON.stringify(h).includes(HOOK_MARKER),
-  );
-  const filteredSession = (hooks?.SessionStart ?? []).filter(
-    (h) => !JSON.stringify(h).includes(HOOK_MARKER),
-  );
-  const updated = {
-    ...existing,
-    hooks: { ...hooks, PreToolUse: filteredPre, SessionStart: filteredSession },
-  };
-  const hooksObj = updated.hooks as Record<string, unknown[]>;
-  // Remove empty arrays to keep settings.json clean
-  if (filteredPre.length === 0) delete hooksObj.PreToolUse;
-  if (filteredSession.length === 0) delete hooksObj.SessionStart;
-  if (Object.keys(hooksObj).length === 0) delete (updated as Record<string, unknown>).hooks;
-  writeFileSync(settingsPath, JSON.stringify(updated, null, 2) + '\n', 'utf-8');
+  const sharedPath = join(projectRoot, '.claude', 'settings.json');
+  const localPath = join(projectRoot, '.claude', 'settings.local.json');
+  const shared = readSettingsIfExists(sharedPath);
+  const local = readSettingsIfExists(localPath);
+  if (shared === null && local === null) return 'skipped';
+
+  const hasOurs = (s: Settings | null) =>
+    [...hookEntries(s, 'PreToolUse'), ...hookEntries(s, 'SessionStart')].some(isPindexEntry);
+  const sharedHasOurs = hasOurs(shared);
+  const localHasOurs = hasOurs(local);
+  if (!sharedHasOurs && !localHasOurs) return 'not_found';
+
+  const strip = (s: Settings) =>
+    withPindexHook(withPindexHook(s, 'PreToolUse', null), 'SessionStart', null);
+  if (shared && sharedHasOurs) writeSettings(sharedPath, strip(shared));
+  if (local && localHasOurs) {
+    const next = strip(local);
+    if (Object.keys(next).length === 0) unlinkSync(localPath);
+    else writeSettings(localPath, next);
+  }
   return 'removed';
 }
 
 /**
- * Removes .mcp.json from the project root (if present).
+ * Removes the pindex server from .mcp.json, keeping other servers.
+ * The file is deleted only if nothing else is left in it.
  * Returns 'removed' | 'skipped'.
  */
 export function removeMcpJson(projectRoot: string): 'removed' | 'skipped' {
-  const mcpJsonPath = join(projectRoot, '.mcp.json');
-  if (!existsSync(mcpJsonPath)) return 'skipped';
-  unlinkSync(mcpJsonPath);
+  if (!existsSync(join(projectRoot, '.mcp.json'))) return 'skipped';
+  mergeMcpServer(projectRoot, 'pindex', null);
   return 'removed';
-}
-
-// ─── Add federated repo ────────────────────────────────────────────────────
-
-/**
- * Link another repository to the current project for cross-repo search.
- * Updates .mcp.json with FEDERATION_REPOS.
- */
-export async function addFederatedRepo(cwd: string, repoPath: string): Promise<void> {
-  const projectRoot = findProjectRoot(cwd);
-  const resolvedRepo = resolve(repoPath);
-
-  if (!existsSync(resolvedRepo)) {
-    console.error(`Error: path does not exist: ${resolvedRepo}`);
-    process.exit(1);
-  }
-  if (resolvedRepo === projectRoot) {
-    console.error('Error: cannot add the current project as a federated repo.');
-    process.exit(1);
-  }
-
-  const registry = new GlobalRegistry();
-
-  // Register the federated repo itself (so pindex-gui knows about it too)
-  registry.upsert(resolvedRepo);
-
-  // Update current project's federated repos list
-  const currentEntry = registry.upsert(projectRoot);
-  const existing = currentEntry.federatedRepos;
-
-  if (existing.some((r) => r.path === resolvedRepo)) {
-    console.log(`Already linked: ${resolvedRepo}`);
-    return;
-  }
-
-  // Resolve a name for the newly federated repo
-  const targetEntry = registry.getByPath(resolvedRepo);
-  const usedNames = new Set<string>([currentEntry.name, ...existing.map((r) => r.name)]);
-  const { assignName: _assignName } = await import('../federation/registry-name.js');
-  const repoName = targetEntry?.name && !usedNames.has(targetEntry.name)
-    ? targetEntry.name
-    : _assignName(resolvedRepo, usedNames);
-
-  const updated = [...existing, { path: resolvedRepo, name: repoName }];
-  registry.setFederatedRepos(projectRoot, updated);
-
-  // Re-read to get the updated entry
-  const updatedEntry = registry.getByPath(projectRoot)!;
-  writeMcpJson(projectRoot, updatedEntry);
-
-  console.log(`\n  ✓ Linked: ${repoName}  (${resolvedRepo})`);
-  console.log('  .mcp.json updated with FEDERATION_REPOS.\n');
-  console.log('  Restart Claude Code to activate cross-repo search.\n');
-}
-
-// ─── Remove federated repo ─────────────────────────────────────────────────
-
-export async function removeFederatedRepo(cwd: string, repoPath: string): Promise<void> {
-  const projectRoot = findProjectRoot(cwd);
-  const resolvedRepo = resolve(repoPath);
-
-  const registry = new GlobalRegistry();
-  const entry = registry.getByPath(projectRoot);
-  if (!entry) {
-    console.error('Project not registered. Run  pindex  first.');
-    process.exit(1);
-  }
-
-  const updated = entry.federatedRepos.filter((r) => r.path !== resolvedRepo);
-  registry.setFederatedRepos(projectRoot, updated);
-
-  const updatedEntry = registry.getByPath(projectRoot)!;
-  writeMcpJson(projectRoot, updatedEntry);
-
-  console.log(`\n  ✓ Unlinked: ${resolvedRepo}`);
-  console.log('  .mcp.json updated. Restart Claude Code to apply.\n');
 }

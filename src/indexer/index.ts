@@ -1,24 +1,25 @@
 import { readFileSync, existsSync, statSync } from 'node:fs';
-import { join, relative, resolve, dirname } from 'node:path';
+import { join, resolve, dirname } from 'node:path';
 import { glob } from 'glob';
 import type Database from 'better-sqlite3';
 import type { IndexResult, ParsedFile, ParsedImport } from '../types.js';
 import { ParsePool } from './parse-pool.js';
-import { parseFile, parseDocument, hashContent } from './parser.js';
+import { parseFile, parseDocument, hashContent, isDocumentLanguage } from './parser.js';
 import {
   upsertFile,
   upsertSymbol,
   upsertDependency,
   deleteSymbolsByFileId,
-  deleteDependenciesByFile,
-  deleteUsagesByFile,
+  deleteOutgoingDependencies,
+  getAllFiles,
+  deleteFile,
   getFileByPath,
   insertDocumentChunk,
   deleteDocumentChunksByFileId,
 } from '../db/queries.js';
 import { computeAstDiff, type AstDiffResult } from '../memory/ast-diff.js';
 import { Summarizer, type SummarizerOptions } from './summarizer.js';
-import { LspPythonClient } from './lsp-python.js';
+import { LspPythonClient, isLspEnabledByEnv } from './lsp-python.js';
 import { resolveWithinRoot } from '../util/paths.js';
 
 // ─── Default Configuration ────────────────────────────────────────────────────
@@ -95,7 +96,7 @@ export interface IndexerOptions {
   /** 0 = run parsing synchronously on main (test / small-project mode).
    *  undefined = auto-select based on CPU count. */
   maxParseWorkers?: number;
-  /** Enable the LSP-backed Python parser. Default: process.env.PINDEX_LSP !== 'false'. */
+  /** Enable the LSP-backed Python parser. Default: opt-in via PINDEX_LSP=true (see isLspEnabledByEnv). */
   lspEnabled?: boolean;
 }
 
@@ -115,38 +116,51 @@ export class Indexer {
   private readonly db: Database.Database;
   readonly projectRoot: string;
   private readonly languages: string[];
-  private readonly ignorePatterns: string[];
+  private readonly ignores: string[];
   private readonly generateSummaries: boolean;
   private readonly summarizer: Summarizer;
   private readonly documentPatterns: string[];
   private pool: ParsePool | null = null;
   private readonly configuredMaxWorkers: number;
-  private lastImportsCache: Map<string, ParsedImport[]> | null = null;
+  /** Last known parsed imports per indexed code file (project-relative path). Lets edges be
+   *  re-resolved without re-parsing, e.g. when a newly added file satisfies an earlier import. */
+  private readonly importsByFile = new Map<string, ParsedImport[]>();
   private lsp: LspPythonClient | null = null;
 
   constructor(options: IndexerOptions) {
     this.db = options.db;
     this.projectRoot = resolve(options.projectRoot);
     this.languages = options.languages ?? DEFAULT_LANGUAGES;
-    this.ignorePatterns = options.ignorePatterns ?? DEFAULT_IGNORE;
+    this.ignores = options.ignorePatterns ?? DEFAULT_IGNORE;
     this.generateSummaries = options.generateSummaries ?? false;
     this.summarizer = new Summarizer(options.summarizerOptions ?? { enabled: false });
     this.documentPatterns = options.documentPatterns ?? DEFAULT_DOCUMENT_PATTERNS;
     this.configuredMaxWorkers = ParsePool.pickDefaultWorkerCount(options.maxParseWorkers);
-    const lspEnabled = options.lspEnabled ?? (process.env.PINDEX_LSP !== 'false');
+    const lspEnabled = options.lspEnabled ?? isLspEnabledByEnv();
     if (lspEnabled) {
       this.lsp = new LspPythonClient({ projectRoot: this.projectRoot, enabled: true });
     }
   }
 
+  /** Glob ignore patterns shared with the file watcher. */
+  get ignorePatterns(): readonly string[] {
+    return this.ignores;
+  }
+
+  /** Document glob patterns (docs/config) shared with the file watcher. */
+  get documentGlobs(): readonly string[] {
+    return this.documentPatterns;
+  }
+
   /** Discovers and indexes all source files and document files in the project root. */
   async indexAll(options: IndexAllOptions = {}): Promise<IndexResult> {
-    const result: IndexResult = { indexed: 0, updated: 0, skipped: 0, errors: [] };
+    const result: IndexResult = { indexed: 0, updated: 0, skipped: 0, removed: 0, errors: [] };
     const codePatterns = buildCodePatterns(this.languages);
 
+    // posix: true keeps stored paths forward-slashed on Windows (DB keys, import cache, edges).
     const [codePaths, docPaths] = await Promise.all([
-      glob(codePatterns, { cwd: this.projectRoot, ignore: this.ignorePatterns, absolute: false }),
-      glob(this.documentPatterns, { cwd: this.projectRoot, ignore: this.ignorePatterns, absolute: false }),
+      glob(codePatterns, { cwd: this.projectRoot, ignore: this.ignores, absolute: false, posix: true }),
+      glob(this.documentPatterns, { cwd: this.projectRoot, ignore: this.ignores, absolute: false, posix: true }),
     ]);
 
     const allCodePaths = [...codePaths, ...(options.additionalPaths ?? [])];
@@ -162,8 +176,6 @@ export class Indexer {
       .filter(
         (j): j is { absolutePath: string; relativePath: string } => j.absolutePath !== null,
       );
-
-    const importsCache = new Map<string, ParsedImport[]>();
 
     const effectiveWorkers = ParsePool.pickEffectiveWorkerCount(
       jobs.length,
@@ -188,13 +200,17 @@ export class Indexer {
         parseResult.content,
         parseResult.hash,
         options.force ?? false,
+        false,
       );
       if (fileRes.status === 'indexed') result.indexed++;
       else if (fileRes.status === 'updated') result.updated++;
       else if (fileRes.status === 'skipped') result.skipped++;
       result.errors.push(...fileRes.errors);
 
-      importsCache.set(parseResult.relativePath, parseResult.parsed.imports);
+      // Unchanged (skipped) files are cached too, so resolveDependencies need not re-parse them.
+      if (fileRes.status !== 'error' && !this.importsByFile.has(parseResult.relativePath)) {
+        this.importsByFile.set(parseResult.relativePath, parseResult.parsed.imports);
+      }
     }
 
     // Documents stay sequential; they are few and cheap.
@@ -206,8 +222,22 @@ export class Indexer {
       result.errors.push(...fileResult.errors);
     }
 
-    // Stash the cache for resolveDependencies (Task 7 will consume it).
-    this.lastImportsCache = importsCache;
+    // Prune rows for files deleted while the server was down. Never prune when
+    // the glob found nothing (misconfigured root must not wipe the index), and
+    // never prune files that still exist on disk (e.g. ignored but present).
+    const discovered = new Set<string>(
+      [...allCodePaths, ...docPaths].map((p) => p.replace(/\\/g, '/')),
+    );
+    if (codePaths.length + docPaths.length > 0) {
+      for (const file of getAllFiles(this.db)) {
+        if (discovered.has(file.path)) continue;
+        const abs = resolveWithinRoot(this.projectRoot, file.path);
+        if (abs !== null && existsSync(abs)) continue;
+        deleteFile(this.db, file.path);
+        this.forgetFile(file.path);
+        result.removed++;
+      }
+    }
 
     return result;
   }
@@ -267,6 +297,7 @@ export class Indexer {
     content: string,
     hash: string,
     force: boolean,
+    resolveEdges = true,
   ): Promise<IndexFileResult> {
     const existing = getFileByPath(this.db, relativePath);
     if (!force && existing && existing.hash === hash) {
@@ -331,10 +362,14 @@ export class Indexer {
             hasTryCatch: sym.hasTryCatch,
           });
         }
-        deleteDependenciesByFile(this.db, fileRecord.id);
+        deleteOutgoingDependencies(this.db, fileRecord.id);
         return diff;
       });
       const diff = runInTransaction();
+      // indexAll() resolves all edges in one pass afterwards; the single-file
+      // (watcher) path has to rebuild this file's outgoing edges itself.
+      this.importsByFile.set(relativePath, parsed.imports);
+      if (resolveEdges) this.resolveFileDependencies(relativePath, parsed.imports);
       return { status: isUpdate ? 'updated' : 'indexed', errors: [], diff };
     } catch (err) {
       return {
@@ -417,46 +452,92 @@ export class Indexer {
    *  Fast path: pass an importsCache built during indexAll() to skip re-reading
    *  and re-parsing every file. Slow path (no cache) re-parses as before. */
   async resolveDependencies(importsCache?: Map<string, ParsedImport[]>): Promise<void> {
-    const cache = importsCache ?? this.lastImportsCache ?? undefined;
-    const { getAllFiles } = await import('../db/queries.js');
+    const cache = importsCache ?? this.importsByFile;
     const allFiles = getAllFiles(this.db);
     const pathIndex = new Map(allFiles.map((f) => [f.path, f.id]));
     const knownPaths = new Set(pathIndex.keys());
 
-    for (const file of allFiles) {
-      let imports: ParsedImport[] | undefined;
+    const resolveAll = this.db.transaction(() => {
+      for (const file of allFiles) {
+        if (isDocumentLanguage(file.language)) continue;
+        let imports: ParsedImport[] | undefined;
 
-      if (cache && cache.has(file.path)) {
-        imports = cache.get(file.path);
-      } else {
-        const absolutePath = resolveWithinRoot(this.projectRoot, file.path);
-        if (!absolutePath || !existsSync(absolutePath)) continue;
-        try {
-          const content = readFileSync(absolutePath, 'utf-8');
-          imports = parseFile(absolutePath, content).imports;
-        } catch (err) {
-          process.stderr.write(
-            `[pindex] resolveDependencies: re-parse failed for ${file.path}: ${String(err)}\n`,
-          );
-          continue;
+        if (cache && cache.has(file.path)) {
+          imports = cache.get(file.path);
+        } else {
+          const absolutePath = resolveWithinRoot(this.projectRoot, file.path);
+          if (!absolutePath || !existsSync(absolutePath)) continue;
+          try {
+            const content = readFileSync(absolutePath, 'utf-8');
+            imports = parseFile(absolutePath, content).imports;
+          } catch (err) {
+            process.stderr.write(
+              `[pindex] resolveDependencies: re-parse failed for ${file.path}: ${String(err)}\n`,
+            );
+            continue;
+          }
         }
+
+        if (!imports) continue;
+        this.writeEdges(file.id, file.path, imports, pathIndex, knownPaths);
       }
+    });
+    resolveAll();
+  }
 
-      if (!imports) continue;
+  /** Rebuilds the outgoing import edges of a single file (watcher path). */
+  resolveFileDependencies(relativePath: string, imports: ParsedImport[]): void {
+    const fileRecord = getFileByPath(this.db, relativePath);
+    if (!fileRecord) return;
+    const pathIndex = new Map(getAllFiles(this.db).map((f) => [f.path, f.id]));
+    const knownPaths = new Set(pathIndex.keys());
+    this.db.transaction(() => {
+      this.writeEdges(fileRecord.id, relativePath, imports, pathIndex, knownPaths);
+    })();
+  }
 
-      deleteDependenciesByFile(this.db, file.id);
-      for (const imp of imports) {
-        const resolvedPath = this.resolveImportPath(file.path, imp.source, knownPaths);
-        if (!resolvedPath) continue;
-        const toFileId = pathIndex.get(resolvedPath);
-        if (!toFileId) continue;
-        for (const sym of imp.symbols.length > 0 ? imp.symbols : [null]) {
-          upsertDependency(this.db, {
-            fromFile: file.id,
-            toFile: toFileId,
-            symbolName: sym,
-          });
-        }
+  /**
+   * Re-resolves the outgoing edges of every known file with an import that now resolves to
+   * `newPath` (watcher 'add': an import that failed earlier may be satisfiable now). Uses the
+   * cached imports; nothing is re-parsed.
+   */
+  resolveImportersOf(newPath: string): void {
+    const pathIndex = new Map(getAllFiles(this.db).map((f) => [f.path, f.id]));
+    if (!pathIndex.has(newPath)) return;
+    const knownPaths = new Set(pathIndex.keys());
+    this.db.transaction(() => {
+      for (const [path, imports] of this.importsByFile) {
+        if (path === newPath) continue;
+        const fileId = pathIndex.get(path);
+        if (fileId === undefined) continue;
+        const hits = imports.some(
+          (imp) => this.resolveImportPath(path, imp.source, knownPaths) === newPath,
+        );
+        if (hits) this.writeEdges(fileId, path, imports, pathIndex, knownPaths);
+      }
+    })();
+  }
+
+  /** Drops the cached imports of a deleted file. */
+  forgetFile(relativePath: string): void {
+    this.importsByFile.delete(relativePath);
+  }
+
+  private writeEdges(
+    fileId: number,
+    filePath: string,
+    imports: ParsedImport[],
+    pathIndex: Map<string, number>,
+    knownPaths: Set<string>,
+  ): void {
+    deleteOutgoingDependencies(this.db, fileId);
+    for (const imp of imports) {
+      const resolvedPath = this.resolveImportPath(filePath, imp.source, knownPaths);
+      if (!resolvedPath) continue;
+      const toFileId = pathIndex.get(resolvedPath);
+      if (!toFileId) continue;
+      for (const sym of imp.symbols.length > 0 ? imp.symbols : [null]) {
+        upsertDependency(this.db, { fromFile: fileId, toFile: toFileId, symbolName: sym });
       }
     }
   }
@@ -473,26 +554,29 @@ export class Indexer {
     this.pool = null;
   }
 
-  /** Resolves a relative import path to a project-relative file path. */
+  /** Resolves a relative import path to a project-relative file path.
+   *  Order: exact → appended extension → NodeNext `.js`→`.ts` swap → directory index. */
   private resolveImportPath(fromFile: string, importSource: string, knownPaths?: Set<string>): string | null {
     if (!importSource.startsWith('.')) return null; // Skip external packages
 
     const fromDir = dirname(fromFile).replace(/\\/g, '/');
-    const extensions = ['.ts', '.tsx', '.js', '/index.ts', '/index.js'];
+    const base = join(fromDir, importSource).replace(/\\/g, '/');
+    const exists = (p: string): boolean =>
+      knownPaths ? knownPaths.has(p) : existsSync(join(this.projectRoot, p));
 
-    for (const ext of extensions) {
-      const candidate = join(fromDir, importSource + ext).replace(/\\/g, '/');
-      if (knownPaths ? knownPaths.has(candidate) : existsSync(join(this.projectRoot, candidate))) {
-        return candidate;
-      }
-    }
+    const candidates: string[] = [base];
+    for (const ext of ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs']) candidates.push(base + ext);
+    const swap: Record<string, string[]> = {
+      '.js': ['.ts', '.tsx'],
+      '.jsx': ['.tsx'],
+      '.mjs': ['.mts'],
+      '.cjs': ['.cts'],
+    };
+    const dot = base.lastIndexOf('.');
+    const jsExt = dot > base.lastIndexOf('/') ? base.slice(dot) : '';
+    for (const ts of swap[jsExt] ?? []) candidates.push(base.slice(0, dot) + ts);
+    for (const ext of ['.ts', '.tsx', '.js', '.jsx']) candidates.push(`${base}/index${ext}`);
 
-    // Try without extension (already has extension)
-    const withoutResolve = join(fromDir, importSource).replace(/\\/g, '/');
-    if (knownPaths ? knownPaths.has(withoutResolve) : existsSync(join(this.projectRoot, withoutResolve))) {
-      return withoutResolve;
-    }
-
-    return null;
+    return candidates.find(exists) ?? null;
   }
 }

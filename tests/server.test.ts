@@ -276,6 +276,45 @@ describe('createMcpServer – tools/call dispatch (all tools)', () => {
     expect(res.endpoints[0].path).toBe('/users/:id');
   });
 
+  it('returns unknown repo errors verbatim as a user-facing error', async () => {
+    const raw = await callRaw(server, 'search_symbols', { query: 'greet', repos: ['nope'] });
+    expect(raw.isError).toBe(true);
+    expect(JSON.parse(raw.content[0].text).error).toMatch(/unknown repo/i);
+  });
+
+  it('keeps unexpected errors generic', async () => {
+    db.exec('DROP TABLE symbols');
+    const raw = await callRaw(server, 'get_api_endpoints', {});
+    expect(raw.isError).toBe(true);
+    expect(JSON.parse(raw.content[0].text)).toEqual({ error: "Tool 'get_api_endpoints' failed" });
+  });
+
+  it('every tool response is valid, compact JSON (no pretty-printing)', async () => {
+    const argsByTool: Record<string, Record<string, unknown>> = {
+      search_symbols: { query: 'greet' },
+      get_symbol: { name: 'greet' },
+      get_context: { file: 'src/app.ts', line: 2 },
+      get_file_summary: { file: 'src/app.ts' },
+      find_usages: { symbol: 'greet' },
+      get_dependencies: { target: 'src/app.ts' },
+      get_project_overview: {},
+      get_api_endpoints: {},
+      reindex: {},
+      get_token_stats: {},
+      start_comparison: { label: 'x', mode: 'indexed' },
+      search_docs: { query: 'greeting' },
+      get_doc_chunk: { file: 'src/app.ts' },
+      save_context: { content: 'fact' },
+      get_session_memory: {},
+    };
+    for (const [tool, args] of Object.entries(argsByTool)) {
+      const raw = await callRaw(server, tool, args);
+      const text = raw.content[0].text;
+      expect(() => JSON.parse(text), tool).not.toThrow();
+      expect(text, tool).not.toContain('\n  ');
+    }
+  });
+
   it('reindex runs and returns counts', async () => {
     const res = await callTool(server, 'reindex', {});
     expect(typeof res.indexed).toBe('number');
@@ -418,8 +457,9 @@ describe('createMcpServer – error & edge-case paths', () => {
       projectRoot: testDir,
       baselineMode: true,
     });
-    const res = await callTool(server, 'search_symbols', { query: 'greet' });
-    expect(res.error).toBe('Index disabled for baseline measurement');
+    const raw = await callRaw(server, 'search_symbols', { query: 'greet' });
+    expect(JSON.parse(raw.content[0].text).error).toBe('Index disabled for baseline measurement');
+    expect(raw.isError).toBe(true);
   });
 
   it('baselineMode still allows get_token_stats and start_comparison', async () => {
@@ -439,5 +479,67 @@ describe('createMcpServer – error & edge-case paths', () => {
     // Use a name with no TOOL_SCHEMAS entry so it skips Zod and hits the default branch.
     const res = await callTool(server, 'does_not_exist', {});
     expect(res.error).toContain('Unknown tool');
+  });
+});
+
+describe('createMcpServer – token stats and comparison sessions', () => {
+  let db: Database.Database;
+  let indexer: Indexer;
+  let testDir: string;
+  let sessionId: string;
+  let server: McpServer;
+
+  beforeEach(() => {
+    db = createTestDb();
+    testDir = join(tmpdir(), `pindex-srv-cmp-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    mkdirSync(testDir, { recursive: true });
+    indexer = new Indexer({ db, projectRoot: testDir, maxParseWorkers: 0, lspEnabled: false });
+    sessionId = uuidv4();
+    insertTestSession(db, sessionId, 'indexed', 'Real');
+    const tokenLogger = new TokenLogger({ db, sessionId, emitter: new EventEmitter() });
+    server = createMcpServer(db, indexer, tokenLogger, null, { projectRoot: testDir, sessionId });
+  });
+
+  afterEach(() => {
+    rmSync(testDir, { recursive: true, force: true });
+  });
+
+  it('get_token_stats without session_id reports the current logging session', async () => {
+    await callTool(server, 'search_symbols', { query: 'greet' });
+    const stats = await callTool(server, 'get_token_stats', {});
+    expect(stats.session_id).toBe(sessionId);
+    expect(stats.calls.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('start_comparison switches logging to the new session and enables baseline mode', async () => {
+    const cmp = await callTool(server, 'start_comparison', { label: 'b', mode: 'baseline' });
+    const res = await callTool(server, 'search_symbols', { query: 'greet' });
+    expect(res.error).toBe('Index disabled for baseline measurement');
+
+    const rows = db.prepare('SELECT session_id FROM token_log WHERE tool_name = ?').all('start_comparison') as Array<{ session_id: string }>;
+    expect(rows.map((r) => r.session_id)).toContain(cmp.session_id);
+
+    const stats = await callTool(server, 'get_token_stats', {});
+    expect(stats.session_id).toBe(cmp.session_id);
+  });
+
+  it('start_comparison indexed turns baseline mode off again and logs to the new session', async () => {
+    await callTool(server, 'start_comparison', { label: 'b', mode: 'baseline' });
+    const cmp = await callTool(server, 'start_comparison', { label: 'i', mode: 'indexed' });
+    const res = await callTool(server, 'search_symbols', { query: 'greet' });
+    expect(res.error).toBeUndefined();
+
+    const row = db.prepare('SELECT session_id FROM token_log WHERE tool_name = ? ORDER BY id DESC').get('search_symbols') as { session_id: string };
+    expect(row.session_id).toBe(cmp.session_id);
+  });
+
+  it('works without a token logger and falls back to the configured session id', async () => {
+    const bare = createMcpServer(db, indexer, null, null, { projectRoot: testDir, sessionId });
+    const cmp = await callTool(bare, 'start_comparison', { label: 'b', mode: 'baseline' });
+    expect(cmp.session_id).toBeTruthy();
+    const res = await callTool(bare, 'search_symbols', { query: 'greet' });
+    expect(res.error).toBe('Index disabled for baseline measurement');
+    const stats = await callTool(bare, 'get_token_stats', {});
+    expect(stats.session_id).toBe(sessionId);
   });
 });

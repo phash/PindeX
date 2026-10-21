@@ -1,8 +1,10 @@
 import { EventEmitter } from 'node:events';
 import type Database from 'better-sqlite3';
 import { type Indexer, LANGUAGE_PATTERNS } from './index.js';
+import { detectLanguage, isDocumentLanguage } from './parser.js';
 import type { SessionObserver } from '../memory/observer.js';
 import { deleteFile } from '../db/queries.js';
+import { createWatchFilter, type WatchFilter } from './watch-filter.js';
 
 export interface WatcherOptions {
   db: Database.Database;
@@ -21,6 +23,8 @@ export class FileWatcher extends EventEmitter {
   private readonly indexer: Indexer;
   private readonly observer?: SessionObserver;
   private watcher: unknown = null;
+  private filter: WatchFilter | null = null;
+  private ready: Promise<void> = Promise.resolve();
   private started = false;
   private readonly debounceTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private static readonly DEBOUNCE_MS = 300;
@@ -49,18 +53,33 @@ export class FileWatcher extends EventEmitter {
     if (patterns.length === 0) {
       patterns.push('**/*.ts', '**/*.tsx', '**/*.js');
     }
+    patterns.push(...this.indexer.documentGlobs);
 
-    this.watcher = chokidar.watch(patterns, {
+    // chokidar 4 has no glob support: watch the root, filter with the same globs.
+    this.filter = createWatchFilter({
+      projectRoot: this.options.projectRoot,
+      include: patterns,
+      ignore: this.indexer.ignorePatterns,
+    });
+    this.watcher = chokidar.watch(this.options.projectRoot, {
       cwd: this.options.projectRoot,
-      ignored: ['**/node_modules/**', '**/.git/**', '**/dist/**'],
+      ignored: this.filter.ignored,
       persistent: true,
       ignoreInitial: true,
     });
 
+    this.ready = new Promise<void>((resolve) => {
+      (this.watcher as ReturnType<typeof chokidar.watch>).on('ready', () => resolve());
+    });
     (this.watcher as ReturnType<typeof chokidar.watch>)
       .on('add', (path: string) => this.debouncedHandleChange('add', path))
       .on('change', (path: string) => this.debouncedHandleChange('change', path))
       .on('unlink', (path: string) => this.debouncedHandleChange('unlink', path));
+  }
+
+  /** Resolves once chokidar finished its initial scan; changes before that may be missed. */
+  whenReady(): Promise<void> {
+    return this.ready;
   }
 
   /** Stops the file watcher. */
@@ -92,14 +111,23 @@ export class FileWatcher extends EventEmitter {
   private async handleChange(type: 'add' | 'change' | 'unlink', path: string): Promise<void> {
     // Normalize to forward slashes (chokidar may emit backslashes on Windows)
     path = path.replace(/\\/g, '/');
+    // Unlinks (and entries chokidar could not stat) reach us unfiltered.
+    if (this.filter && !this.filter.accepts(path)) return;
     const event: FileChangeEvent = { type, path };
     this.emit('change', event);
 
     if (type === 'add' || type === 'change') {
       try {
-        const result = await this.indexer.indexFile(path, true);
+        const isDoc = isDocumentLanguage(detectLanguage(path));
+        const result = isDoc
+          ? await this.indexer.indexDocument(path, false)
+          : await this.indexer.indexFile(path, false);
+        // A new file may satisfy imports of already indexed files that failed to resolve before.
+        if (type === 'add' && !isDoc && result.status === 'indexed') {
+          this.indexer.resolveImportersOf(path);
+        }
         this.emit('indexed', path);
-        if (this.observer && result.diff) {
+        if (this.observer && 'diff' in result && result.diff) {
           this.observer.onFileDiff(result.diff);
         }
       } catch (err) {
@@ -108,10 +136,21 @@ export class FileWatcher extends EventEmitter {
     } else if (type === 'unlink') {
       try {
         deleteFile(this.options.db, path);
+        this.indexer.forgetFile(path);
         this.emit('removed', path);
       } catch (err) {
         this.emit('error', err);
       }
     }
   }
+}
+
+/** Attaches an 'error' listener so watcher errors are logged instead of crashing the process. */
+export function attachWatcherErrorLogger(
+  watcher: EventEmitter,
+  write: (line: string) => void = (line) => { process.stderr.write(line); },
+): void {
+  watcher.on('error', (err: unknown) => {
+    write(`[pindex] File watcher error: ${String(err)}\n`);
+  });
 }

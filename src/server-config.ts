@@ -5,7 +5,7 @@ import {
   type RegistryEntry,
 } from './cli/project-detector.js';
 import { detectProjectLanguages } from './indexer/detect-languages.js';
-import { parseFederationRepos } from './federation/repos-env.js';
+import { parseFederationRepos } from './federation/env.js';
 
 export interface ServerConfig {
   projectRoot: string;

@@ -17,6 +17,7 @@ import {
   upsertSymbol,
   getSymbolsByFileId,
   getSymbolByName,
+  getSymbolsByName,
   searchSymbolsFts,
   sanitizeFtsQuery,
   getDependenciesByFile,
@@ -25,12 +26,15 @@ import {
   insertTokenLog,
   getSessionStats,
   createSession,
-  updateSession,
   getSession,
   listSessions,
   deleteSymbolsByFileId,
   upsertDependency,
   upsertUsage,
+  deleteOutgoingDependencies,
+  getRecentFileChangeEvents,
+  insertSessionEvent,
+  parseSqliteUtc,
 } from '../../src/db/queries.js';
 
 describe('File queries', () => {
@@ -123,6 +127,8 @@ describe('Symbol queries', () => {
         startLine: 1,
         endLine: 5,
         isExported: true,
+        isAsync: false,
+        hasTryCatch: false,
       });
       const symbols = getSymbolsByFileId(db, fileId);
       expect(symbols).toHaveLength(1);
@@ -161,6 +167,24 @@ describe('Symbol queries', () => {
       const result = getSymbolByName(db, 'Shared', 'src/module.ts');
       expect(result).not.toBeNull();
       expect(result!.file_path).toBe('src/module.ts');
+    });
+  });
+
+  describe('deterministic lookup', () => {
+    beforeEach(() => {
+      const a = insertTestFile(db, { path: 'src/a.ts' });
+      const b = insertTestFile(db, { path: 'src/b.ts' });
+      insertTestSymbol(db, { fileId: a, name: 'format', isExported: false });
+      insertTestSymbol(db, { fileId: b, name: 'format', isExported: true });
+    });
+
+    it('prefers exported symbols, then path order', () => {
+      expect(getSymbolByName(db, 'format')!.file_path).toBe('src/b.ts');
+      expect(getSymbolsByName(db, 'format').map((s) => s.file_path)).toEqual(['src/b.ts', 'src/a.ts']);
+    });
+
+    it('normalizes backslash and ./ in the file filter', () => {
+      expect(getSymbolByName(db, 'format', '.\\src\\a.ts')!.file_path).toBe('src/a.ts');
     });
   });
 
@@ -229,6 +253,16 @@ describe('Dependency queries', () => {
     });
   });
 
+  describe('deleteOutgoingDependencies', () => {
+    it('removes only edges the file declares, keeping incoming edges', () => {
+      insertTestDependency(db, fileAId, fileBId, 'x');
+      insertTestDependency(db, fileBId, fileAId, 'y');
+      deleteOutgoingDependencies(db, fileBId);
+      expect(getDependenciesByFile(db, fileBId)).toHaveLength(0);
+      expect(getDependenciesByFile(db, fileAId)).toContain('src/b.ts');
+    });
+  });
+
   describe('getImportedByFile', () => {
     it('returns files that import a given file', () => {
       insertTestDependency(db, fileAId, fileBId, null);
@@ -290,7 +324,6 @@ describe('Token log queries', () => {
         toolName: 'search_symbols',
         tokensUsed: 50,
         tokensWithoutIndex: 500,
-        filesTouched: ['src/a.ts'],
         query: 'myFunc',
       });
       const stats = getSessionStats(db, 'sess-1');
@@ -327,15 +360,6 @@ describe('Session queries', () => {
     });
   });
 
-  describe('updateSession', () => {
-    it('updates total_tokens and total_savings', () => {
-      createSession(db, { id: 'sess-upd', mode: 'indexed', label: null });
-      updateSession(db, 'sess-upd', { totalTokens: 100, totalSavings: 900 });
-      const session = getSession(db, 'sess-upd');
-      expect(session!.total_tokens).toBe(100);
-      expect(session!.total_savings).toBe(900);
-    });
-  });
 
   describe('listSessions', () => {
     it('returns all sessions', () => {
@@ -348,6 +372,18 @@ describe('Session queries', () => {
 });
 
 describe('sanitizeFtsQuery', () => {
+  it('turns a trailing * into an FTS5 prefix operator outside the quotes', () => {
+    expect(sanitizeFtsQuery('Fed*')).toBe('"Fed"*');
+    expect(sanitizeFtsQuery('a"b*')).toBe('"a""b"*');
+    expect(sanitizeFtsQuery('foo bar*')).toBe('"foo" "bar"*');
+    expect(sanitizeFtsQuery('Fed***')).toBe('"Fed"*');
+  });
+
+  it('drops a bare * token', () => {
+    expect(sanitizeFtsQuery('*')).toBe('""');
+    expect(sanitizeFtsQuery('foo *')).toBe('"foo"');
+  });
+
   it('wraps a single token as a quoted FTS5 phrase', () => {
     expect(sanitizeFtsQuery('createUser')).toBe('"createUser"');
   });
@@ -408,5 +444,32 @@ describe('FTS robustness (SEC-05/TST-15)', () => {
     const results = searchSymbolsFts(db, 'parseExpression', 10);
     expect(results.length).toBeGreaterThan(0);
     expect(results[0].name).toBe('parseExpression');
+  });
+});
+
+describe('Session timestamp handling', () => {
+  let db: Database.Database;
+  beforeEach(() => {
+    db = createTestDb();
+    insertTestSession(db, 's1', 'indexed', 'S');
+  });
+
+  const change = () =>
+    insertSessionEvent(db, { sessionId: 's1', eventType: 'sig_changed', filePath: 'src/a.ts', symbolName: 'x' });
+
+  it('getRecentFileChangeEvents returns events with default CURRENT_TIMESTAMP', () => {
+    change(); change(); change();
+    expect(getRecentFileChangeEvents(db, 'src/a.ts', 's1', 5)).toHaveLength(3);
+  });
+
+  it('getRecentFileChangeEvents excludes events older than the window', () => {
+    change();
+    const id = change();
+    db.prepare("UPDATE session_events SET timestamp = datetime('now','-10 minutes') WHERE id = ?").run(id);
+    expect(getRecentFileChangeEvents(db, 'src/a.ts', 's1', 5)).toHaveLength(1);
+  });
+
+  it('parseSqliteUtc reads SQLite timestamps as UTC', () => {
+    expect(parseSqliteUtc('2026-01-01 10:00:00').toISOString()).toBe('2026-01-01T10:00:00.000Z');
   });
 });

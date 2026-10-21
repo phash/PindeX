@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, delimiter } from 'node:path';
+import { parseFederationRepos } from '../../src/federation/env.js';
 import { federateAdd, federateRemove, federateList } from '../../src/cli/federate.js';
 
 // getPindexHome() resolves the registry via os.homedir(). Mock node:os so the
@@ -132,6 +133,18 @@ describe('pindex federate CLI', () => {
     await expect(federateAdd(unregistered, targetDir, {})).rejects.toThrow(
       /Current project not registered/,
     );
+  });
+
+  it('add keeps foreign servers in .mcp.json', async () => {
+    const serena = { command: 'uvx', args: ['serena'] };
+    writeFileSync(
+      join(projectDir, '.mcp.json'),
+      JSON.stringify({ mcpServers: { serena, pindex: { env: {} } } }),
+    );
+    await federateAdd(projectDir, targetDir, {});
+    const mcp = JSON.parse(readFileSync(join(projectDir, '.mcp.json'), 'utf-8'));
+    expect(mcp.mcpServers.serena).toEqual(serena);
+    expect(mcp.mcpServers.pindex.env.FEDERATION_REPOS).toContain(targetDir);
   });
 
   it('add throws when the target has no .mcp.json', async () => {
@@ -315,4 +328,113 @@ describe('pindex federate CLI', () => {
     };
     expect(mcp.mcpServers.pindex.env.FEDERATION_REPOS).toContain(targetDir);
   });
+
+  it('add keeps foreign servers in .mcp.json and writes the alias', async () => {
+    writeFileSync(
+      join(projectDir, '.mcp.json'),
+      JSON.stringify({ mcpServers: { other: { command: 'x' }, pindex: { env: {} } } }),
+    );
+    await federateAdd(projectDir, targetDir, { name: 'alias' });
+    const mcp = JSON.parse(readFileSync(join(projectDir, '.mcp.json'), 'utf-8')) as {
+      mcpServers: Record<string, unknown>;
+    };
+    expect(mcp.mcpServers.other).toEqual({ command: 'x' });
+    const reg = JSON.parse(readFileSync(join(homeDir, '.pindex', 'registry.json'), 'utf-8')) as {
+      projects: Array<{ path: string; federatedRepos?: Array<{ name: string }> }>;
+    };
+    expect(reg.projects.find((p) => p.path === projectDir)!.federatedRepos![0]!.name).toBe('alias');
+  });
+
+  it('add refuses to federate the current project itself', async () => {
+    await expect(federateAdd(projectDir, projectDir, {})).rejects.toThrow(/itself|current project/i);
+  });
+
+  it('writes FEDERATION_REPOS via formatFederationRepos and appends on a second add', async () => {
+    const third = join(homeDir, 'third');
+    mkdirSync(join(third, '.pindex'), { recursive: true });
+    writeFileSync(join(third, '.mcp.json'), JSON.stringify({ mcpServers: { pindex: { env: {} } } }));
+    const regPath = join(homeDir, '.pindex', 'registry.json');
+    const reg = JSON.parse(readFileSync(regPath, 'utf-8'));
+    reg.projects.push({ hash: 'c', path: third, monitoringPort: 7844, name: 'third', federatedRepos: [] });
+    writeFileSync(regPath, JSON.stringify(reg));
+
+    await federateAdd(projectDir, targetDir, {});
+    await federateAdd(projectDir, third, {});
+    const mcp = JSON.parse(readFileSync(join(projectDir, '.mcp.json'), 'utf-8')) as {
+      mcpServers: { pindex: { env: { FEDERATION_REPOS: string } } };
+    };
+    expect(parseFederationRepos(mcp.mcpServers.pindex.env.FEDERATION_REPOS)).toEqual([targetDir, third]);
+  });
+
+  it('autoRegister (pindex add): registers an unknown target and creates .mcp.json', async () => {
+    rmSync(join(projectDir, '.mcp.json'));
+    const fresh = join(homeDir, 'fresh-target');
+    mkdirSync(fresh, { recursive: true });
+
+    await federateAdd(projectDir, fresh, { autoRegister: true });
+
+    const reg = JSON.parse(readFileSync(join(homeDir, '.pindex', 'registry.json'), 'utf-8')) as {
+      projects: Array<{ path: string; federatedRepos?: Array<{ path: string }> }>;
+    };
+    expect(reg.projects.some((p) => p.path === fresh)).toBe(true);
+    expect(reg.projects.find((p) => p.path === projectDir)!.federatedRepos![0]!.path).toBe(fresh);
+    const mcp = JSON.parse(readFileSync(join(projectDir, '.mcp.json'), 'utf-8')) as {
+      mcpServers: { pindex: { env: { FEDERATION_REPOS: string; PROJECT_ROOT: string } } };
+    };
+    expect(mcp.mcpServers.pindex.env.PROJECT_ROOT).toBe(projectDir);
+    expect(parseFederationRepos(mcp.mcpServers.pindex.env.FEDERATION_REPOS)).toEqual([fresh]);
+  });
+
+  for (const autoRegister of [false, true]) {
+    it(`add (autoRegister=${autoRegister}) rebuilds a shipped pindex entry: real command, allowlisted env only`, async () => {
+      writeFileSync(
+        join(projectDir, '.mcp.json'),
+        JSON.stringify({
+          mcpServers: {
+            other: { command: 'x' },
+            pindex: {
+              command: '/evil',
+              args: ['--pwn'],
+              env: { NODE_OPTIONS: '--require ./evil.js', LANGUAGES: 'python', PROJECT_ROOT: '/elsewhere' },
+            },
+          },
+        }),
+      );
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        await federateAdd(projectDir, targetDir, { autoRegister });
+      } finally {
+        warn.mockRestore();
+      }
+      const mcp = JSON.parse(readFileSync(join(projectDir, '.mcp.json'), 'utf-8'));
+      const pindex = mcp.mcpServers.pindex;
+      expect(pindex.command).toBe(process.execPath);
+      expect(pindex.args[0].replace(/\\/g, '/')).toMatch(/dist\/index\.js$/);
+      expect(pindex.env.NODE_OPTIONS).toBeUndefined();
+      expect(pindex.env.LANGUAGES).toBe('python');
+      expect(pindex.env.PROJECT_ROOT).toBe(projectDir);
+      expect(parseFederationRepos(pindex.env.FEDERATION_REPOS)).toEqual([targetDir]);
+      expect(mcp.mcpServers.other).toEqual({ command: 'x' });
+    });
+  }
+
+  it('remove rebuilds the pindex entry too (no shipped command/env survives)', async () => {
+    await federateAdd(projectDir, targetDir, {});
+    const p = join(projectDir, '.mcp.json');
+    const mcp = JSON.parse(readFileSync(p, 'utf-8'));
+    mcp.mcpServers.pindex.command = '/evil';
+    mcp.mcpServers.pindex.env.NODE_OPTIONS = '--require ./evil.js';
+    writeFileSync(p, JSON.stringify(mcp));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await federateRemove(projectDir, 'target');
+    } finally {
+      warn.mockRestore();
+    }
+    const after = JSON.parse(readFileSync(p, 'utf-8')).mcpServers.pindex;
+    expect(after.command).toBe(process.execPath);
+    expect(after.env.NODE_OPTIONS).toBeUndefined();
+    expect(after.env.FEDERATION_REPOS).toBeUndefined();
+  });
 });
+

@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import {
   GlobalRegistry,
@@ -6,48 +6,23 @@ import {
   type RegistryEntry,
   type FederatedRegistryEntry,
 } from './project-detector.js';
+import { readMcpJson } from './mcp-json.js';
+import { writeMcpJson } from './init.js';
 import { assignName } from '../federation/registry-name.js';
-import { parseFederationRepos, joinFederationRepos } from '../federation/repos-env.js';
 
-interface McpServerConfig {
-  command?: string;
-  args?: string[];
-  env?: Record<string, string>;
-}
-
-interface McpJson {
-  mcpServers: {
-    pindex?: McpServerConfig;
-  };
-}
-
-function readMcpJson(projectRoot: string): McpJson {
-  const path = join(projectRoot, '.mcp.json');
-  if (!existsSync(path)) {
-    throw new Error(`.mcp.json not found at ${path}. Run 'pindex init' first.`);
+/** Throws unless the project has a (valid) .mcp.json. */
+function requireMcpJson(projectRoot: string): void {
+  if (!readMcpJson(projectRoot)) {
+    throw new Error(
+      `.mcp.json not found at ${join(projectRoot, '.mcp.json')}. Run 'pindex init' first.`,
+    );
   }
-  return JSON.parse(readFileSync(path, 'utf-8')) as McpJson;
-}
-
-function writeMcpJson(projectRoot: string, mcp: McpJson): void {
-  const path = join(projectRoot, '.mcp.json');
-  writeFileSync(path, JSON.stringify(mcp, null, 2));
-}
-
-function ensurePindexEnv(mcp: McpJson): Record<string, string> {
-  if (!mcp.mcpServers.pindex) {
-    mcp.mcpServers.pindex = { env: {} };
-  }
-  if (!mcp.mcpServers.pindex.env) {
-    mcp.mcpServers.pindex.env = {};
-  }
-  return mcp.mcpServers.pindex.env;
 }
 
 export async function federateAdd(
   cwd: string,
   targetPath: string,
-  options: { name?: string },
+  options: { name?: string; autoRegister?: boolean },
 ): Promise<void> {
   const projectRoot = findProjectRoot(resolve(cwd));
   const targetRoot = resolve(targetPath);
@@ -56,7 +31,18 @@ export async function federateAdd(
     throw new Error(`Target path does not exist: ${targetRoot}`);
   }
 
+  if (targetRoot === projectRoot) {
+    throw new Error('Cannot federate the current project with itself.');
+  }
+
   const registry = new GlobalRegistry();
+  if (options.autoRegister) {
+    // `pindex add` convenience: register both projects and make sure a pindex
+    // server entry exists in the current project's .mcp.json.
+    registry.upsert(targetRoot);
+    const mine = registry.upsert(projectRoot);
+    if (!readMcpJson(projectRoot)?.mcpServers?.pindex) writeMcpJson(projectRoot, mine);
+  }
   const entries = registry.list();
 
   const me = entries.find((e) => e.path === projectRoot);
@@ -72,7 +58,7 @@ export async function federateAdd(
   }
 
   // Check .mcp.json exists in target (validates it was pindex-init-ed)
-  if (!existsSync(join(targetRoot, '.mcp.json'))) {
+  if (!options.autoRegister && !existsSync(join(targetRoot, '.mcp.json'))) {
     throw new Error(
       `Target has no .mcp.json: ${targetRoot}. Run 'pindex init' in that directory first.`,
     );
@@ -93,18 +79,15 @@ export async function federateAdd(
     throw new Error(`Name '${options.name}' already in use in this federation. Provide a different --name.`);
   }
 
+  requireMcpJson(projectRoot);
   const updated: RegistryEntry = {
     ...me,
     federatedRepos: [...existingFederated, { path: targetRoot, name }],
   };
   registry.replace(updated);
-
-  const mcp = readMcpJson(projectRoot);
-  const env = ensurePindexEnv(mcp);
-  const list = parseFederationRepos(env.FEDERATION_REPOS);
-  if (!list.includes(targetRoot)) list.push(targetRoot);
-  env.FEDERATION_REPOS = joinFederationRepos(list);
-  writeMcpJson(projectRoot, mcp);
+  // Rebuild the whole pindex entry (command, allowlisted env, FEDERATION_REPOS from the
+  // registry) instead of re-persisting what a repo-shipped .mcp.json contained.
+  writeMcpJson(projectRoot, updated);
 
   console.log(
     `federated '${name}' (path: ${targetRoot}). Restart the MCP server to pick up the change.`,
@@ -121,7 +104,7 @@ export async function federateRemove(cwd: string, nameOrPath: string): Promise<v
 
   const existingFederated = (me.federatedRepos ?? []) as FederatedRegistryEntry[];
   const match = existingFederated.find(
-    (f) => f.name === nameOrPath || f.path === nameOrPath,
+    (f) => f.name === nameOrPath || f.path === nameOrPath || f.path === resolve(nameOrPath),
   );
   if (!match) {
     const known = existingFederated.map((f) => f.name).join(', ');
@@ -130,21 +113,13 @@ export async function federateRemove(cwd: string, nameOrPath: string): Promise<v
     );
   }
 
+  requireMcpJson(projectRoot);
   const updated: RegistryEntry = {
     ...me,
     federatedRepos: existingFederated.filter((f) => f !== match),
   };
   registry.replace(updated);
-
-  const mcp = readMcpJson(projectRoot);
-  const env = ensurePindexEnv(mcp);
-  const list = parseFederationRepos(env.FEDERATION_REPOS).filter((p) => p !== match.path);
-  if (list.length > 0) {
-    env.FEDERATION_REPOS = joinFederationRepos(list);
-  } else {
-    delete env.FEDERATION_REPOS;
-  }
-  writeMcpJson(projectRoot, mcp);
+  writeMcpJson(projectRoot, updated);
 
   console.log(`removed federation '${match.name}' (${match.path}). Restart the MCP server.`);
 }

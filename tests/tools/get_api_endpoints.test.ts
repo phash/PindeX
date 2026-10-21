@@ -31,7 +31,6 @@ describe('getApiEndpoints', () => {
     expect(result.endpoints[0]).toEqual({
       method: 'GET',
       path: '/users',
-      handler: 'GET /users',
       file: 'src/routes/users.ts',
       line: 10,
     });
@@ -52,7 +51,6 @@ describe('getApiEndpoints', () => {
     expect(result.endpoints[0]).toEqual({
       method: 'POST',
       path: '/api/data',
-      handler: 'POST /api/data',
       file: 'src/routes/api.ts',
       line: 25,
     });
@@ -73,7 +71,6 @@ describe('getApiEndpoints', () => {
     expect(result.endpoints[0]).toEqual({
       method: 'healthcheck',
       path: '/health',
-      handler: 'healthcheck',
       file: 'src/routes/misc.ts',
       line: 5,
     });
@@ -110,15 +107,12 @@ describe('getApiEndpoints', () => {
     expect(result.endpoints).toHaveLength(3);
 
     // Sorted by file path, then start_line
-    expect(result.endpoints[0].handler).toBe('POST /users');
     expect(result.endpoints[0].file).toBe('src/routes/a.ts');
     expect(result.endpoints[0].line).toBe(10);
 
-    expect(result.endpoints[1].handler).toBe('GET /users');
     expect(result.endpoints[1].file).toBe('src/routes/a.ts');
     expect(result.endpoints[1].line).toBe(20);
 
-    expect(result.endpoints[2].handler).toBe('DELETE /items');
     expect(result.endpoints[2].file).toBe('src/routes/b.ts');
     expect(result.endpoints[2].line).toBe(30);
   });

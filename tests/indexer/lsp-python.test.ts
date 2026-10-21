@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { Readable, Writable } from 'node:stream';
 import { EventEmitter } from 'node:events';
-import { LspPythonClient } from '../../src/indexer/lsp-python.js';
+import { LspPythonClient, resolvePyrightLangserver } from '../../src/indexer/lsp-python.js';
 
 describe('LspPythonClient (skeleton / state)', () => {
   let client: LspPythonClient;
@@ -363,5 +363,166 @@ describe('LspPythonClient — crash recovery', () => {
     expect(spawnCount).toBe(2); // no third attempt
 
     await client.close();
+  });
+});
+
+describe('LspPythonClient — robustness', () => {
+  beforeEach(() => {
+    LspPythonClient._resetWarnedMissingForTest();
+  });
+
+  it('ignores a late exit event from a replaced process after restart', async () => {
+    const fakes: ReturnType<typeof createFakeSubprocess>[] = [];
+    const client = new LspPythonClient({
+      projectRoot: '/tmp/fake',
+      enabled: true,
+      _spawn: (() => {
+        const f = createFakeSubprocess();
+        fakes.push(f);
+        return f as never;
+      }) as never,
+      _resolveServerPath: () => '/fake/pyright-langserver',
+    } as never);
+
+    const s1 = client.start();
+    await new Promise((r) => setImmediate(r));
+    fakes[0].stdout.push(encodeLspMessage({ jsonrpc: '2.0', id: 0, result: { capabilities: {} } }));
+    await s1;
+
+    fakes[0].emit('exit', 137, 'SIGKILL');
+    await new Promise((r) => setImmediate(r));
+    fakes[1].stdout.push(encodeLspMessage({ jsonrpc: '2.0', id: 0, result: { capabilities: {} } }));
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
+    expect(client.state).toBe('ready');
+
+    // Old process reports exit again (late event): must not poison the new one.
+    fakes[0].emit('exit', 137, 'SIGKILL');
+    await new Promise((r) => setImmediate(r));
+    expect(client.state).toBe('ready');
+
+    await client.close();
+  });
+
+  it('sends didClose when documentSymbol times out', async () => {
+    const fake = createFakeSubprocess();
+    const client = new LspPythonClient({
+      projectRoot: '/tmp/fake',
+      enabled: true,
+      timeoutMs: 50,
+      _spawn: (() => fake) as never,
+      _resolveServerPath: () => '/fake/pyright-langserver',
+    } as never);
+    const startPromise = client.start();
+    await new Promise((r) => setImmediate(r));
+    fake.stdout.push(encodeLspMessage({ jsonrpc: '2.0', id: 0, result: { capabilities: {} } }));
+    await startPromise;
+
+    expect(await client.getDocumentSymbols('slow.py', 'x = 1')).toBeNull();
+    await new Promise((r) => setImmediate(r));
+
+    const written = Buffer.concat(fake.stdinChunks).toString('utf-8');
+    expect(written).toContain('textDocument/didOpen');
+    expect(written).toContain('textDocument/didClose');
+
+    await client.close();
+  });
+});
+
+describe('resolvePyrightLangserver', () => {
+  const noPkg = () => { throw new Error('MODULE_NOT_FOUND'); };
+  const identity = (p: string) => p;
+
+  it('prefers the pyright package resolved from this module over cwd', () => {
+    const calls: string[] = [];
+    const result = resolvePyrightLangserver('/proj', {
+      resolvePackageJson: () => '/pkg/node_modules/pyright/package.json',
+      exists: (p) => { calls.push(p); return p === '/pkg/node_modules/.bin/pyright-langserver'; },
+      realpath: identity,
+      pathEnv: '',
+    });
+    expect(result).toBe('/pkg/node_modules/.bin/pyright-langserver');
+    expect(calls.some((c) => c.startsWith('/proj'))).toBe(false);
+  });
+
+  it('never uses <projectRoot>/node_modules/.bin', () => {
+    const result = resolvePyrightLangserver('/proj', {
+      resolvePackageJson: noPkg,
+      exists: (p) => p === '/proj/node_modules/.bin/pyright-langserver',
+      realpath: identity,
+      pathEnv: '',
+    });
+    expect(result).toBeNull();
+  });
+
+  it('ignores relative PATH entries', () => {
+    const result = resolvePyrightLangserver('/proj', {
+      resolvePackageJson: noPkg,
+      exists: () => true,
+      realpath: identity,
+      pathEnv: ['.', 'node_modules/.bin'].join(':'),
+    });
+    expect(result).toBeNull();
+  });
+
+  it('ignores absolute PATH entries inside projectRoot (incl. via symlink)', () => {
+    const result = resolvePyrightLangserver('/proj', {
+      resolvePackageJson: noPkg,
+      exists: () => true,
+      realpath: (p) => (p === '/link/pyright-langserver' ? '/proj/evil/pyright-langserver' : p),
+      pathEnv: ['/proj/node_modules/.bin', '/link'].join(':'),
+    });
+    expect(result).toBeNull();
+  });
+
+  it('does not treat a sibling directory sharing the root prefix as inside', () => {
+    const result = resolvePyrightLangserver('/proj', {
+      resolvePackageJson: noPkg,
+      exists: (p) => p === '/project-other/bin/pyright-langserver',
+      realpath: identity,
+      pathEnv: '/project-other/bin',
+    });
+    expect(result).toBe('/project-other/bin/pyright-langserver');
+  });
+
+  it('uses an absolute PATH entry outside projectRoot', () => {
+    const result = resolvePyrightLangserver('/proj', {
+      resolvePackageJson: noPkg,
+      exists: (p) => p === '/usr/local/bin/pyright-langserver',
+      realpath: identity,
+      pathEnv: ['/usr/bin', '/usr/local/bin'].join(':'),
+    });
+    expect(result).toBe('/usr/local/bin/pyright-langserver');
+  });
+
+  it('returns null when nothing is found', () => {
+    expect(
+      resolvePyrightLangserver('/proj', {
+        resolvePackageJson: noPkg,
+        exists: () => false,
+        realpath: identity,
+        pathEnv: '/usr/bin',
+      }),
+    ).toBeNull();
+  });
+});
+
+describe('LSP opt-in + spawn isolation', () => {
+  it('is enabled only by the exact value "true"', async () => {
+    const { isLspEnabledByEnv } = await import('../../src/indexer/lsp-python.js');
+    expect(isLspEnabledByEnv(undefined)).toBe(false);
+    expect(isLspEnabledByEnv('')).toBe(false);
+    expect(isLspEnabledByEnv('1')).toBe(false);
+    expect(isLspEnabledByEnv('TRUE')).toBe(false);
+    expect(isLspEnabledByEnv('false')).toBe(false);
+    expect(isLspEnabledByEnv('true')).toBe(true);
+  });
+
+  it('spawns pyright with cwd outside the project (os.tmpdir())', async () => {
+    const { pyrightSpawnOptions } = await import('../../src/indexer/lsp-python.js');
+    const { tmpdir } = await import('node:os');
+    const opts = pyrightSpawnOptions();
+    expect(opts.cwd).toBe(tmpdir());
+    expect(opts.stdio).toEqual(['pipe', 'pipe', 'pipe']);
   });
 });

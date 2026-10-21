@@ -29,9 +29,7 @@ export function applyObservationRetention(
   const match = /^(\d+)d$/.exec(policy);
   if (match) {
     const days = parseInt(match[1], 10);
-    const cutoff = new Date();
-    cutoff.setDate(cutoff.getDate() - days);
-    deleteObservationsOlderThan(db, cutoff.toISOString());
+    deleteObservationsOlderThan(db, days);
     return;
   }
 
