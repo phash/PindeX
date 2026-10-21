@@ -35,4 +35,9 @@ User-visible changes from the 2026-10-20 review-fix and call-graph branches.
 - Arrow-function constants (`export const f = () => …`) are indexed with kind `function`. The first re-index after upgrading records `sig_changed` session observations for these symbols once.
 - A newly added file now resolves imports of already indexed files that previously pointed at the missing file.
 - Call references (calls and `new`, with the enclosing symbol) are extracted for TypeScript/JavaScript/Vue/Svelte and stored in the new `symbol_refs` table (schema v6, replaces the never-filled `usages` table). The upgrade resets the hash of TS/JS/Vue/Svelte files once so the next index run re-parses them; existing LLM summaries are reused for that run.
-- TS/JS files longer than 32,767 characters are parsed again (tree-sitter rejected them and they were indexed without symbols, imports or references).
+- On Windows, indexed paths are stored with forward slashes (`glob` now runs with `posix: true`); before, watcher-added files were not linked to their importers there.
+- File watcher moved to chokidar 4 (removes the vulnerable `braces` dependency, GHSA-vfj7-8cjw-p6xm). chokidar 4 has no glob support, so the watcher now watches the project root and filters with the same globs as the initial index (`minimatch`, dot files and dot directories excluded, ignored directories such as `node_modules` are not descended).
+
+### Dependencies
+
+- Security updates via the lockfile: `@modelcontextprotocol/sdk` 1.32.1 (minimum raised to ^1.32.1), `express` transitive deps (`proxy-addr`, `qs`, `body-parser`, `ip-address`, `fast-uri`, `hono`, `brace-expansion`), `vitest` 4.1.12 (dev). `npm audit` reports 0 vulnerabilities.

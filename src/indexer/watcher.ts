@@ -4,6 +4,7 @@ import { type Indexer, LANGUAGE_PATTERNS } from './index.js';
 import { detectLanguage, isDocumentLanguage } from './parser.js';
 import type { SessionObserver } from '../memory/observer.js';
 import { deleteFile } from '../db/queries.js';
+import { createWatchFilter, type WatchFilter } from './watch-filter.js';
 
 export interface WatcherOptions {
   db: Database.Database;
@@ -22,6 +23,8 @@ export class FileWatcher extends EventEmitter {
   private readonly indexer: Indexer;
   private readonly observer?: SessionObserver;
   private watcher: unknown = null;
+  private filter: WatchFilter | null = null;
+  private ready: Promise<void> = Promise.resolve();
   private started = false;
   private readonly debounceTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private static readonly DEBOUNCE_MS = 300;
@@ -52,17 +55,31 @@ export class FileWatcher extends EventEmitter {
     }
     patterns.push(...this.indexer.documentGlobs);
 
-    this.watcher = chokidar.watch(patterns, {
+    // chokidar 4 has no glob support: watch the root, filter with the same globs.
+    this.filter = createWatchFilter({
+      projectRoot: this.options.projectRoot,
+      include: patterns,
+      ignore: this.indexer.ignorePatterns,
+    });
+    this.watcher = chokidar.watch(this.options.projectRoot, {
       cwd: this.options.projectRoot,
-      ignored: [...this.indexer.ignorePatterns],
+      ignored: this.filter.ignored,
       persistent: true,
       ignoreInitial: true,
     });
 
+    this.ready = new Promise<void>((resolve) => {
+      (this.watcher as ReturnType<typeof chokidar.watch>).on('ready', () => resolve());
+    });
     (this.watcher as ReturnType<typeof chokidar.watch>)
       .on('add', (path: string) => this.debouncedHandleChange('add', path))
       .on('change', (path: string) => this.debouncedHandleChange('change', path))
       .on('unlink', (path: string) => this.debouncedHandleChange('unlink', path));
+  }
+
+  /** Resolves once chokidar finished its initial scan; changes before that may be missed. */
+  whenReady(): Promise<void> {
+    return this.ready;
   }
 
   /** Stops the file watcher. */
@@ -94,6 +111,8 @@ export class FileWatcher extends EventEmitter {
   private async handleChange(type: 'add' | 'change' | 'unlink', path: string): Promise<void> {
     // Normalize to forward slashes (chokidar may emit backslashes on Windows)
     path = path.replace(/\\/g, '/');
+    // Unlinks (and entries chokidar could not stat) reach us unfiltered.
+    if (this.filter && !this.filter.accepts(path)) return;
     const event: FileChangeEvent = { type, path };
     this.emit('change', event);
 
