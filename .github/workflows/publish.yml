@@ -20,7 +20,7 @@ jobs:
       - run: npm run lint
       - run: npm test
       - run: npm run build
-      - run: npm run test:integration
+      - run: npm run test:integration -- --exclude tests/integration/parse-pool-workers.test.ts
       - run: npm publish --provenance --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

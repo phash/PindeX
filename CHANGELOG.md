@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.8.0 — 2026-10-22
 
 User-visible changes from the 2026-10-20 review-fix and call-graph branches.
 
