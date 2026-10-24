@@ -10,16 +10,15 @@ Wenn der User "commit", "push", "commit und push" o.ä. sagt:
 ### npm publish
 Wenn der User "publish", "npm publish", "release" o.ä. sagt:
 1. Versuche `Skill` mit `npm-publish`
-2. Manuell: `npm version patch` → `gh release create vX.Y.Z --title "vX.Y.Z" --target main --notes "..."` → Workflow via `gh run watch` beobachten
-- Token-Anforderungen (ALLE drei, sonst schlägt Publish fehl):
-  1. Package `pindex` unter "Only select packages and scopes" aufgeführt
-  2. Permissions = `Read and write` (nicht "Read only")
-  3. ☑ "Bypass two-factor authentication for publishing"
+2. Manuell: Version in `package.json`, `package-lock.json` (Root-Einträge), `.claude-plugin/plugin.json` und `.claude-plugin/marketplace.json` (2×) bumpen + CHANGELOG-Überschrift → Commit `chore(release): vX.Y.Z` → `gh release create vX.Y.Z --title "vX.Y.Z" --target main --notes "..."` → Workflow via `gh run watch` beobachten
+  - Kein `npm version`: lokales npm 11.4 entfernt die `libc`-Felder aus dem Lockfile (Diff-Rauschen)
+- **Auth = Trusted Publishing (OIDC), kein Token.** npmjs.com → `pindex` → Settings → Trusted Publisher: GitHub Actions, `phash/PindeX`, Workflow `publish.yml`, Direkt-Publish (`npm publish`) erlaubt. Kein `NPM_TOKEN`-Secret nötig.
+  - Granulare Tokens mit Bypass-2FA lassen sich auf npmjs.com nicht mehr anlegen; neue Schreib-Tokens sind „stage only“.
+- Voraussetzungen im Workflow: Node ≥ 22.14, npm ≥ 11.5.1 (für `npm stage publish` ≥ 11.15) — deshalb `npm install -g npm@^11.15.0`
 - Fehler-Matrix:
-  - `404 PUT .../pindex` → Package fehlt im Token-Scope
-  - `EOTP` (one-time password required) → Bypass-2FA-Haken fehlt
-  - `403 Forbidden` → Permission steht auf "Read only"
-- Token-Rotation: alten revoken → neuen mit allen 3 Punkten erstellen → Secret `NPM_TOKEN` aktualisieren → `gh workflow run publish.yml --ref main` + `gh run watch`
+  - `E403 … can only publish to a staging area (E_STAGE_REQUIRED)` → Auth läuft über stage-only-Token, oder Trusted Publisher erlaubt nur Staging → Direkt-Publish beim Trusted Publisher erlauben, oder auf `npm stage publish` umstellen und auf npmjs.com („Staged Packages“) mit 2FA freigeben
+  - `ENEEDAUTH` / `404 PUT .../pindex` → OIDC greift nicht: Trusted-Publisher-Daten (Repo, Workflow-Dateiname) prüfen, `id-token: write` gesetzt, npm-Version zu alt
+- Nachträglich publishen: `gh workflow run publish.yml --ref main` + `gh run watch`. `--ref <tag>` nutzt die Workflow-Datei *aus dem Tag* — nach Workflow-Änderungen also `main` nehmen
 - Workflow-Datei: `.github/workflows/publish.yml` (triggt bei Release + `workflow_dispatch`)
 
 ### Subagents in Worktrees
