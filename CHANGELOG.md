@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Security updates for production dependencies: `body-parser` 1.20.9 / 2.4.0 (GHSA-27r3-jxmh-p828, DoS via trailing bytes after a compressed body) and `zod` 4.6.7 (GHSA-mrhx-c7xc-m3w5, memory exhaustion on oversized constrained collections).
+- Python LSP (`PINDEX_LSP=true`) now works on Windows: the bundled pyright is started as `node <pyright bin entry>` instead of through the `node_modules/.bin` shell shim (which is not spawnable without a shell, so the client silently fell back to regex parsing). The PATH fallback on Windows only accepts `pyright-langserver.exe`. An async spawn error no longer crashes the host process, and notifications to an already-exited server no longer raise unhandled EPIPE rejections.
 
 ## 1.8.0 — 2026-10-22
 

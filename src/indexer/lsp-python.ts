@@ -1,6 +1,6 @@
 import { spawn as nodeSpawn, type ChildProcessWithoutNullStreams, type SpawnOptions } from 'node:child_process';
 import { tmpdir } from 'node:os';
-import { existsSync, realpathSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import nodePath, { type PlatformPath } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -31,14 +31,26 @@ export function pyrightSpawnOptions(): SpawnOptions {
 
 export type LspReadyState = 'idle' | 'starting' | 'ready' | 'failed' | 'closed';
 
+/** Fire-and-forget notification. A write to a dead pipe rejects (EPIPE); the exit/error
+ *  handlers own the state transition, so that rejection must not go unhandled. */
+function notify(conn: MessageConnection, method: string, params: unknown): void {
+  conn.sendNotification(method, params).catch(() => { /* see above */ });
+}
+
+/** How to start pyright-langserver without a shell: `command args… --stdio`. */
+export interface PyrightLaunch {
+  command: string;
+  args: string[];
+}
+
 export interface LspPythonClientOptions {
   projectRoot: string;
   enabled: boolean;
   timeoutMs?: number;
   /** Test seam: inject a fake subprocess factory. Not for production use. */
-  _spawn?: (path: string) => ChildProcessWithoutNullStreams;
+  _spawn?: (launch: PyrightLaunch) => ChildProcessWithoutNullStreams;
   /** Test seam: inject a fake resolver. Not for production use. */
-  _resolveServerPath?: () => string | null;
+  _resolveServerPath?: () => PyrightLaunch | null;
 }
 
 export class LspPythonClient {
@@ -46,8 +58,8 @@ export class LspPythonClient {
   private readonly enabled: boolean;
   private readonly projectRoot: string;
   private readonly timeoutMs: number;
-  private readonly spawnImpl: (path: string) => ChildProcessWithoutNullStreams;
-  private readonly resolveImpl: () => string | null;
+  private readonly spawnImpl: (launch: PyrightLaunch) => ChildProcessWithoutNullStreams;
+  private readonly resolveImpl: () => PyrightLaunch | null;
   private proc: ChildProcessWithoutNullStreams | null = null;
   private connection: MessageConnection | null = null;
   private static warnedMissing = false;
@@ -61,7 +73,8 @@ export class LspPythonClient {
     this.timeoutMs = options.timeoutMs ?? 5000;
     this.spawnImpl =
       options._spawn ??
-      ((path) => nodeSpawn(path, ['--stdio'], pyrightSpawnOptions()) as ChildProcessWithoutNullStreams);
+      ((launch) =>
+        nodeSpawn(launch.command, [...launch.args, '--stdio'], pyrightSpawnOptions()) as ChildProcessWithoutNullStreams);
     this.resolveImpl = options._resolveServerPath ?? (() => resolvePyrightLangserver(this.projectRoot));
   }
 
@@ -86,8 +99,8 @@ export class LspPythonClient {
       return;
     }
 
-    const path = this.resolveImpl();
-    if (!path) {
+    const launch = this.resolveImpl();
+    if (!launch) {
       if (!LspPythonClient.warnedMissing) {
         process.stderr.write(
           `[pindex] LSP: pyright-langserver not found on PATH or in node_modules; ` +
@@ -103,7 +116,7 @@ export class LspPythonClient {
     this._state = 'starting';
     let proc: ChildProcessWithoutNullStreams;
     try {
-      proc = this.spawnImpl(path);
+      proc = this.spawnImpl(launch);
       this.proc = proc;
     } catch (err) {
       process.stderr.write(`[pindex] LSP: spawn failed: ${String(err)}\n`);
@@ -141,6 +154,19 @@ export class LspPythonClient {
       exitReject(new Error(`pyright-langserver exited with code ${String(code)}`));
     });
 
+    // Async spawn failures (ENOENT, EACCES) arrive as 'error', often without 'exit'.
+    // Unhandled, the event would crash the host process.
+    proc.on('error', (err) => {
+      if (this.proc !== proc) return;
+      if (this._state === 'closed') return;
+      process.stderr.write(`[pindex] LSP: spawn failed: ${String(err)}\n`);
+      this._state = 'failed';
+      this.proc = null;
+      this.connection?.dispose();
+      this.connection = null;
+      exitReject(err);
+    });
+
     this.connection = createMessageConnection(
       new StreamMessageReader(proc.stdout),
       new StreamMessageWriter(proc.stdin),
@@ -157,7 +183,7 @@ export class LspPythonClient {
         exitPromise,
         new Promise((_, reject) => setTimeout(() => reject(new Error('initialize timeout')), this.timeoutMs)),
       ]);
-      this.connection.sendNotification('initialized', {});
+      notify(this.connection, 'initialized', {});
       this._state = 'ready';
     } catch (err) {
       // The exit handler may have already set _state to 'failed' via the event loop.
@@ -191,7 +217,7 @@ export class LspPythonClient {
 
     const connection = this.connection;
     try {
-      connection.sendNotification('textDocument/didOpen', {
+      notify(connection, 'textDocument/didOpen', {
         textDocument: { uri, languageId: 'python', version: 1, text: content },
       });
 
@@ -225,7 +251,7 @@ export class LspPythonClient {
         // Always close the document, including on timeout/error, so the
         // server does not accumulate open documents.
         try {
-          connection.sendNotification('textDocument/didClose', { textDocument: { uri } });
+          notify(connection, 'textDocument/didClose', { textDocument: { uri } });
         } catch { /* connection may be disposed by simulateCrash */ }
       }
 
@@ -271,7 +297,8 @@ export class LspPythonClient {
           conn.sendRequest('shutdown', null),
           new Promise((_, reject) => setTimeout(() => reject(new Error('shutdown timeout')), 1000)),
         ]);
-        conn.sendNotification('exit', null);
+        // Awaited: the SIGTERM below must not race the pending write (EPIPE).
+        await conn.sendNotification('exit', null);
       } catch { /* subprocess may already be dead */ }
       conn.dispose();
     }
@@ -285,22 +312,32 @@ export class LspPythonClient {
 export interface PyrightResolveDeps {
   /** Resolves pyright's package.json relative to this module. Throws if absent. */
   resolvePackageJson: () => string;
+  readFile: (path: string) => string;
   exists: (path: string) => boolean;
   realpath: (path: string) => string;
   pathEnv: string;
+  /** Node binary used to run pyright's JS entry point. */
+  execPath: string;
   /** Path flavour (posix/win32); defaults to the host's. Injectable so both are testable anywhere. */
   path?: PlatformPath;
 }
 
 const defaultResolveDeps = (): PyrightResolveDeps => ({
   resolvePackageJson: () => createRequire(import.meta.url).resolve('pyright/package.json'),
+  readFile: (p) => readFileSync(p, 'utf-8'),
   exists: existsSync,
   realpath: realpathSync,
   pathEnv: process.env.PATH ?? '',
+  execPath: process.execPath,
 });
 
-/** Resolves the pyright-langserver binary. Order: PindeX's own pyright
+/** Resolves how to launch pyright-langserver. Order: PindeX's own pyright
  *  install (independent of cwd) -> absolute PATH entries outside the project.
+ *
+ *  The bundled package is started as `node <bin entry>` rather than through
+ *  node_modules/.bin: on Windows that shim is a shell script (plus a .cmd), and
+ *  neither is spawnable without `shell: true`. For the same reason the PATH
+ *  lookup on Windows only accepts a real executable (pip's pyright-langserver.exe).
  *
  *  SECURITY: binaries living inside the indexed project (node_modules/.bin,
  *  relative PATH entries such as "." or symlinks into the repo) are never
@@ -308,15 +345,21 @@ const defaultResolveDeps = (): PyrightResolveDeps => ({
 export function resolvePyrightLangserver(
   projectRoot: string,
   deps: PyrightResolveDeps = defaultResolveDeps(),
-): string | null {
+): PyrightLaunch | null {
   const { resolve, join, dirname, delimiter, isAbsolute, sep } = deps.path ?? nodePath;
   const bin = 'pyright-langserver';
   try {
     const pkgJson = deps.resolvePackageJson();
-    // <nodeModules>/pyright/package.json -> <nodeModules>/.bin/pyright-langserver
-    const candidate = join(dirname(dirname(pkgJson)), '.bin', bin);
-    if (deps.exists(candidate)) return candidate;
-  } catch { /* package not installed */ }
+    const pkgDir = dirname(pkgJson);
+    const entry = (JSON.parse(deps.readFile(pkgJson)) as { bin?: Record<string, unknown> }).bin?.[bin];
+    if (typeof entry === 'string') {
+      const script = resolve(pkgDir, entry);
+      // The bin entry must stay inside the pyright package.
+      if (script.startsWith(pkgDir + sep) && deps.exists(script)) {
+        return { command: deps.execPath, args: [script] };
+      }
+    }
+  } catch { /* package not installed or unreadable */ }
 
   let rootReal: string;
   try {
@@ -328,7 +371,7 @@ export function resolvePyrightLangserver(
 
   for (const dir of deps.pathEnv.split(delimiter)) {
     if (!dir || !isAbsolute(dir)) continue;
-    const candidate = join(dir, bin);
+    const candidate = join(dir, sep === '\\' ? `${bin}.exe` : bin);
     if (!deps.exists(candidate)) continue;
     let real: string;
     try {
@@ -337,7 +380,7 @@ export function resolvePyrightLangserver(
       continue;
     }
     if (real === rootReal || real.startsWith(rootPrefix)) continue;
-    return candidate;
+    return { command: candidate, args: [] };
   }
   return null;
 }

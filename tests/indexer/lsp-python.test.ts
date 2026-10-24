@@ -69,6 +69,8 @@ function createFakeSubprocess() {
   return proc;
 }
 
+const FAKE_LAUNCH = { command: '/fake/pyright-langserver', args: [] };
+
 /** Encode a JSON-RPC message the way LSP expects it on stdout. */
 function encodeLspMessage(obj: unknown): Buffer {
   const json = JSON.stringify(obj);
@@ -88,7 +90,7 @@ describe('LspPythonClient — handshake', () => {
       projectRoot: '/tmp/fake',
       enabled: true,
       _spawn: spawnMock as never,
-      _resolveServerPath: () => '/fake/pyright-langserver',
+      _resolveServerPath: () => FAKE_LAUNCH,
     } as never);
 
     const startPromise = client.start();
@@ -126,7 +128,7 @@ describe('LspPythonClient — handshake', () => {
       projectRoot: '/tmp/fake',
       enabled: true,
       _spawn: (() => fake) as never,
-      _resolveServerPath: () => '/fake/pyright-langserver',
+      _resolveServerPath: () => FAKE_LAUNCH,
     } as never);
 
     const startPromise = client.start();
@@ -144,7 +146,7 @@ describe('LspPythonClient — handshake', () => {
       _spawn: (() => {
         throw new Error('spawn ENOENT');
       }) as never,
-      _resolveServerPath: () => '/fake/pyright-langserver',
+      _resolveServerPath: () => FAKE_LAUNCH,
     } as never);
 
     await client.start();
@@ -158,7 +160,7 @@ describe('LspPythonClient — handshake', () => {
       enabled: true,
       timeoutMs: 50,
       _spawn: (() => fake) as never,
-      _resolveServerPath: () => '/fake/pyright-langserver',
+      _resolveServerPath: () => FAKE_LAUNCH,
     } as never);
 
     await client.start();
@@ -182,7 +184,7 @@ describe('LspPythonClient — getDocumentSymbols', () => {
       projectRoot: '/tmp/fake',
       enabled: true,
       _spawn: (() => fake) as never,
-      _resolveServerPath: () => '/fake/pyright-langserver',
+      _resolveServerPath: () => FAKE_LAUNCH,
     } as never);
     const startPromise = client.start();
     await new Promise((r) => setImmediate(r));
@@ -241,7 +243,7 @@ describe('LspPythonClient — getDocumentSymbols', () => {
       enabled: true,
       timeoutMs: 50,
       _spawn: (() => fake) as never,
-      _resolveServerPath: () => '/fake/pyright-langserver',
+      _resolveServerPath: () => FAKE_LAUNCH,
     } as never);
     const startPromise = client.start();
     await new Promise((r) => setImmediate(r));
@@ -299,7 +301,7 @@ describe('LspPythonClient — crash recovery', () => {
       projectRoot: '/tmp/fake',
       enabled: true,
       _spawn: spawnMock,
-      _resolveServerPath: () => '/fake/pyright-langserver',
+      _resolveServerPath: () => FAKE_LAUNCH,
     } as never);
 
     // First start: success.
@@ -343,7 +345,7 @@ describe('LspPythonClient — crash recovery', () => {
       projectRoot: '/tmp/fake',
       enabled: true,
       _spawn: spawnMock,
-      _resolveServerPath: () => '/fake/pyright-langserver',
+      _resolveServerPath: () => FAKE_LAUNCH,
     } as never);
 
     // First start: success.
@@ -382,7 +384,7 @@ describe('LspPythonClient — robustness', () => {
         fakes.push(f);
         return f as never;
       }) as never,
-      _resolveServerPath: () => '/fake/pyright-langserver',
+      _resolveServerPath: () => FAKE_LAUNCH,
     } as never);
 
     const s1 = client.start();
@@ -405,6 +407,25 @@ describe('LspPythonClient — robustness', () => {
     await client.close();
   });
 
+  it('fails cleanly when the subprocess emits an async spawn error (e.g. ENOENT)', async () => {
+    const fake = createFakeSubprocess();
+    const client = new LspPythonClient({
+      projectRoot: '/tmp/fake',
+      enabled: true,
+      timeoutMs: 5000,
+      _spawn: (() => fake) as never,
+      _resolveServerPath: () => FAKE_LAUNCH,
+    } as never);
+    const startPromise = client.start();
+    const err = Object.assign(new Error('spawn /fake/pyright-langserver ENOENT'), { code: 'ENOENT' });
+    // Without an 'error' listener this emit would throw synchronously.
+    expect(() => fake.emit('error', err)).not.toThrow();
+    await startPromise;
+    expect(client.state).toBe('failed');
+    expect(await client.getDocumentSymbols('a.py', 'x = 1')).toBeNull();
+    await client.close();
+  });
+
   it('sends didClose when documentSymbol times out', async () => {
     const fake = createFakeSubprocess();
     const client = new LspPythonClient({
@@ -412,7 +433,7 @@ describe('LspPythonClient — robustness', () => {
       enabled: true,
       timeoutMs: 50,
       _spawn: (() => fake) as never,
-      _resolveServerPath: () => '/fake/pyright-langserver',
+      _resolveServerPath: () => FAKE_LAUNCH,
     } as never);
     const startPromise = client.start();
     await new Promise((r) => setImmediate(r));
@@ -433,27 +454,62 @@ describe('LspPythonClient — robustness', () => {
 describe('resolvePyrightLangserver', () => {
   const noPkg = () => { throw new Error('MODULE_NOT_FOUND'); };
   const identity = (p: string) => p;
+  const NODE = '/opt/node/bin/node';
+  const pkgJson = JSON.stringify({ bin: { 'pyright-langserver': 'langserver.index.js' } });
 
-  it('prefers the pyright package resolved from this module over cwd', () => {
+  it('launches the pyright package resolved from this module via node, never via a .bin shim', () => {
     const calls: string[] = [];
     const result = resolvePyrightLangserver('/proj', {
       resolvePackageJson: () => '/pkg/node_modules/pyright/package.json',
-      exists: (p) => { calls.push(p); return p === '/pkg/node_modules/.bin/pyright-langserver'; },
+      readFile: () => pkgJson,
+      exists: (p) => { calls.push(p); return p === '/pkg/node_modules/pyright/langserver.index.js'; },
       path: posix,
       realpath: identity,
       pathEnv: '',
+      execPath: NODE,
     });
-    expect(result).toBe('/pkg/node_modules/.bin/pyright-langserver');
+    expect(result).toEqual({ command: NODE, args: ['/pkg/node_modules/pyright/langserver.index.js'] });
     expect(calls.some((c) => c.startsWith('/proj'))).toBe(false);
+  });
+
+  it('win32: launches the bundled package via node (the .bin shim is not spawnable without a shell)', () => {
+    const result = resolvePyrightLangserver('C:\\proj', {
+      resolvePackageJson: () => 'C:\\pindex\\node_modules\\pyright\\package.json',
+      readFile: () => pkgJson,
+      exists: (p) => p === 'C:\\pindex\\node_modules\\pyright\\langserver.index.js',
+      path: win32,
+      realpath: identity,
+      pathEnv: '',
+      execPath: 'C:\\node\\node.exe',
+    });
+    expect(result).toEqual({
+      command: 'C:\\node\\node.exe',
+      args: ['C:\\pindex\\node_modules\\pyright\\langserver.index.js'],
+    });
+  });
+
+  it('falls back to PATH when the package has no usable pyright-langserver bin entry', () => {
+    const result = resolvePyrightLangserver('/proj', {
+      resolvePackageJson: () => '/pkg/node_modules/pyright/package.json',
+      readFile: () => JSON.stringify({ bin: { pyright: 'index.js', 'pyright-langserver': '../../escape.js' } }),
+      exists: (p) => p === '/usr/local/bin/pyright-langserver' || p === '/pkg/node_modules/escape.js',
+      path: posix,
+      realpath: identity,
+      pathEnv: '/usr/local/bin',
+      execPath: NODE,
+    });
+    expect(result).toEqual({ command: '/usr/local/bin/pyright-langserver', args: [] });
   });
 
   it('never uses <projectRoot>/node_modules/.bin', () => {
     const result = resolvePyrightLangserver('/proj', {
       resolvePackageJson: noPkg,
+      readFile: noPkg,
       exists: (p) => p === '/proj/node_modules/.bin/pyright-langserver',
       path: posix,
       realpath: identity,
       pathEnv: '',
+      execPath: NODE,
     });
     expect(result).toBeNull();
   });
@@ -461,10 +517,12 @@ describe('resolvePyrightLangserver', () => {
   it('ignores relative PATH entries', () => {
     const result = resolvePyrightLangserver('/proj', {
       resolvePackageJson: noPkg,
+      readFile: noPkg,
       exists: () => true,
       path: posix,
       realpath: identity,
       pathEnv: ['.', 'node_modules/.bin'].join(':'),
+      execPath: NODE,
     });
     expect(result).toBeNull();
   });
@@ -472,10 +530,12 @@ describe('resolvePyrightLangserver', () => {
   it('ignores absolute PATH entries inside projectRoot (incl. via symlink)', () => {
     const result = resolvePyrightLangserver('/proj', {
       resolvePackageJson: noPkg,
+      readFile: noPkg,
       exists: () => true,
       path: posix,
       realpath: (p) => (p === '/link/pyright-langserver' ? '/proj/evil/pyright-langserver' : p),
       pathEnv: ['/proj/node_modules/.bin', '/link'].join(':'),
+      execPath: NODE,
     });
     expect(result).toBeNull();
   });
@@ -483,55 +543,78 @@ describe('resolvePyrightLangserver', () => {
   it('does not treat a sibling directory sharing the root prefix as inside', () => {
     const result = resolvePyrightLangserver('/proj', {
       resolvePackageJson: noPkg,
+      readFile: noPkg,
       exists: (p) => p === '/project-other/bin/pyright-langserver',
       path: posix,
       realpath: identity,
       pathEnv: '/project-other/bin',
+      execPath: NODE,
     });
-    expect(result).toBe('/project-other/bin/pyright-langserver');
+    expect(result).toEqual({ command: '/project-other/bin/pyright-langserver', args: [] });
   });
 
   it('uses an absolute PATH entry outside projectRoot', () => {
     const result = resolvePyrightLangserver('/proj', {
       resolvePackageJson: noPkg,
+      readFile: noPkg,
       exists: (p) => p === '/usr/local/bin/pyright-langserver',
       path: posix,
       realpath: identity,
       pathEnv: ['/usr/bin', '/usr/local/bin'].join(':'),
+      execPath: NODE,
     });
-    expect(result).toBe('/usr/local/bin/pyright-langserver');
+    expect(result).toEqual({ command: '/usr/local/bin/pyright-langserver', args: [] });
   });
 
   it('returns null when nothing is found', () => {
     expect(
       resolvePyrightLangserver('/proj', {
         resolvePackageJson: noPkg,
+        readFile: noPkg,
         exists: () => false,
         path: posix,
         realpath: identity,
         pathEnv: '/usr/bin',
+        execPath: NODE,
       }),
     ).toBeNull();
   });
 
-  it('win32: uses ";"-separated absolute PATH entries outside projectRoot', () => {
+  it('win32: uses a directly spawnable .exe from ";"-separated absolute PATH entries outside projectRoot', () => {
     const result = resolvePyrightLangserver('C:\\proj', {
       resolvePackageJson: noPkg,
-      exists: (p) => p === 'C:\\tools\\bin\\pyright-langserver',
+      readFile: noPkg,
+      exists: (p) => p === 'C:\\tools\\bin\\pyright-langserver.exe',
       path: win32,
       realpath: identity,
       pathEnv: ['C:\\proj\\node_modules\\.bin', 'C:\\tools\\bin'].join(';'),
+      execPath: 'C:\\node\\node.exe',
     });
-    expect(result).toBe('C:\\tools\\bin\\pyright-langserver');
+    expect(result).toEqual({ command: 'C:\\tools\\bin\\pyright-langserver.exe', args: [] });
+  });
+
+  it('win32: ignores extensionless npm shims on PATH (not spawnable without a shell)', () => {
+    const result = resolvePyrightLangserver('C:\\proj', {
+      resolvePackageJson: noPkg,
+      readFile: noPkg,
+      exists: (p) => p === 'C:\\npm\\pyright-langserver',
+      path: win32,
+      realpath: identity,
+      pathEnv: 'C:\\npm',
+      execPath: 'C:\\node\\node.exe',
+    });
+    expect(result).toBeNull();
   });
 
   it('win32: ignores entries inside projectRoot and does not split on the drive colon', () => {
     const result = resolvePyrightLangserver('C:\\proj', {
       resolvePackageJson: noPkg,
+      readFile: noPkg,
       exists: () => true,
       path: win32,
       realpath: identity,
       pathEnv: 'C:\\proj\\node_modules\\.bin',
+      execPath: 'C:\\node\\node.exe',
     });
     expect(result).toBeNull();
   });
