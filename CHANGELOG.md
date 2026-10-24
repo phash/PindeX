@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Security updates for production dependencies: `body-parser` 1.20.9 / 2.4.0 (GHSA-27r3-jxmh-p828, DoS via trailing bytes after a compressed body) and `zod` 4.6.7 (GHSA-mrhx-c7xc-m3w5, memory exhaustion on oversized constrained collections).
+
 ## 1.8.0 — 2026-10-22
 
 User-visible changes from the 2026-10-20 review-fix and call-graph branches.
